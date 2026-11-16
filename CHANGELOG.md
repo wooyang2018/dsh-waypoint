@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Offer the remote host's models inside the composer model menu for mirrored
+  Sessions. The native rows are untouched; a host group is appended so a model
+  the remote alone serves (`deepseek-v4-pro`, for example) can be selected
+  directly instead of falling back to the remote default.
+
 - Add an "Open remote Web UI" action to each connected host in Settings, so the
   remote DSH Web UI (for installing remote plugins and similar) opens in a
   browser tab already signed in through the SSH tunnel.

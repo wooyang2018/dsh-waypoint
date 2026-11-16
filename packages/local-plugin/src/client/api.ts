@@ -18,6 +18,7 @@ import {
   HOST_API_PATH,
   type HostApiPayloads,
   type HostApiValues,
+  type MirrorTarget,
   type RemoteHostsState,
   type SessionsResult,
   type ValidatedTarget,
@@ -62,6 +63,13 @@ export interface HostsApi {
   readonly sessions: (hostId: string, workspaceId?: string) => Promise<SessionsResult>
   readonly webUrl: (hostId: string) => Promise<WebUrlResult>
   readonly modelCatalog: (hostId: string) => Promise<ModelCatalogResult>
+  readonly sessionMirror: (localSessionId: string) => Promise<MirrorTarget>
+  readonly setSessionModel: (input: {
+    localSessionId: string
+    provider: string
+    model: string
+    reasoningEffort?: string
+  }) => Promise<AcceptedResult>
   readonly snapshot: (hostId: string, sessionId: string, limit?: number) => Promise<SessionSnapshot>
   readonly createSession: (hostId: string, input: { workspaceId?: string; cwd?: string; agentPreset?: string }) => Promise<HostCreateSessionResult>
   readonly startBlankSession: (hostId: string, input: { localWorkspaceId?: string; workspaceId?: string; agentPreset?: string }) => Promise<{ localSessionId: string }>
@@ -99,6 +107,8 @@ export function createHostsApi(ctx: Context): HostsApi {
     }),
     webUrl: hostId => call('host/web-url', { hostId }),
     modelCatalog: hostId => call('host/model-catalog', { hostId }),
+    sessionMirror: localSessionId => call('host/session/mirror', { localSessionId }),
+    setSessionModel: input => call('host/session/model', input),
     snapshot: (hostId, sessionId, limit) => call('host/session', {
       hostId,
       sessionId,

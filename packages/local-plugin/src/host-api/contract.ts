@@ -50,6 +50,8 @@ export type HostApiEndpoint =
   | 'host/session/cancel'
   | 'host/web-url'
   | 'host/model-catalog'
+  | 'host/session/mirror'
+  | 'host/session/model'
   | 'host/files/list'
   | 'host/files/read'
   | 'host/files/stat'
@@ -110,6 +112,18 @@ export interface WebUrlResult {
   readonly url: string
 }
 
+/**
+ * The remote host behind one local Session, or null for an ordinary Session.
+ *
+ * The composer's model menu uses this to decide whether to offer that host's
+ * model catalog alongside the local providers.
+ */
+export type MirrorTarget = {
+  readonly hostId: string
+  readonly hostLabel: string
+  readonly remoteSessionId: string
+} | null
+
 /** One request body. */
 export interface HostApiRequest {
   readonly endpoint: HostApiEndpoint
@@ -169,6 +183,13 @@ export interface HostApiPayloads {
   'host/session/cancel': { hostId: string; sessionId: string }
   'host/web-url': { hostId: string }
   'host/model-catalog': { hostId: string }
+  'host/session/mirror': { localSessionId: string }
+  'host/session/model': {
+    localSessionId: string
+    provider: string
+    model: string
+    reasoningEffort?: string
+  }
   'host/files/list': { sessionId: string; path: string }
   'host/files/read': { sessionId: string; path: string; offset?: number; limit?: number }
   'host/files/stat': { sessionId: string; path: string }
@@ -201,6 +222,8 @@ export interface HostApiValues {
   'host/session/cancel': AcceptedResult
   'host/web-url': WebUrlResult
   'host/model-catalog': ModelCatalogResult
+  'host/session/mirror': MirrorTarget
+  'host/session/model': AcceptedResult
   'host/files/list': MirrorFileResult
   'host/files/read': MirrorFileResult
   'host/files/stat': MirrorFileResult
