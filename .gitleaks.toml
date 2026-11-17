@@ -1,0 +1,21 @@
+# gitleaks configuration.
+#
+# The repository has no real credentials to detect: the plugin never stores an
+# upstream key, and the remote agent mints its bearer token at runtime. What the
+# default rules do flag is a test fixture — a fixed 16-character placeholder used
+# to prove a token is never echoed into a HostView.
+#
+# This file only adds an allowlist entry; the default rule set stays intact.
+# The match is deliberately narrow (the exact placeholder, in the two test files
+# that use it), so a real secret pasted into a test still fails the scan.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Host-registry test fixture: a fixed placeholder token, not a credential."
+paths = [
+  '''packages/local-plugin/test/host-discovery\.test\.ts''',
+  '''packages/local-plugin/test/local\.test\.ts''',
+]
+stopwords = ["0123456789abcdef"]
