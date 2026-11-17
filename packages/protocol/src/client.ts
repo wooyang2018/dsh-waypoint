@@ -41,7 +41,6 @@ import type {
   CreateWorkspaceRequest,
   HostInfo,
   ListSessionsResult,
-  ListWorkspacesResult,
   ModelCatalogResult,
   RemoteSessionEvent,
   RemoteSessionSummary,
@@ -77,6 +76,7 @@ import {
   isHostInfoValue,
   isListSessionsResult,
   isListWorkspacesResult,
+  isRecord,
   isRemoteWorkspace,
   isSessionSnapshot,
   isSessionStreamFrame,
@@ -92,6 +92,7 @@ import {
   isRemoteTerminalInfo,
   isRemoteTerminalListResult,
 } from './validation.ts'
+import { isProtocolErrorCode } from './errors.ts'
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   HEADER_HOST_ID,
@@ -119,21 +120,12 @@ export interface RemoteAgentClientOptions {
 type Guard<T> = (value: unknown) => value is T
 
 /** Strip a trailing slash and reject an unparsable base URL. */
-export function normalizeBaseUrl(baseUrl: string): string {
+function normalizeBaseUrl(baseUrl: string): string {
   const url = new URL(baseUrl)
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new TypeError(`remote agent base URL must be http(s), got ${url.protocol}`)
   }
   return url.origin
-}
-
-/** Reject non-loopback URLs; the local plugin only talks to an SSH tunnel. */
-export function assertLoopbackBaseUrl(baseUrl: string): void {
-  const host = new URL(baseUrl).hostname
-  const normalized = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host
-  if (normalized !== '127.0.0.1' && normalized !== 'localhost' && normalized !== '::1') {
-    throw new TypeError(`remote agent URL must target loopback, got ${host}`)
-  }
 }
 
 /** Combine an optional caller signal with a timeout for one fetch. */
@@ -517,7 +509,7 @@ export class RemoteAgentClient {
 
     if (isApiFailure(envelope)) {
       throw new RemoteProtocolError({
-        code: isCode(envelope.error.code) ? envelope.error.code : 'internal',
+        code: isProtocolErrorCode(envelope.error.code) ? envelope.error.code : 'internal',
         message: envelope.error.message,
         retryable: envelope.error.retryable,
         details: isDetails(envelope.error.details) ? envelope.error.details : undefined,
@@ -555,7 +547,7 @@ export class RemoteAgentClient {
     const body: unknown = await response.json().catch(() => undefined)
     if (isApiFailure(body)) {
       throw new RemoteProtocolError({
-        code: isCode(body.error.code) ? body.error.code : 'internal',
+        code: isProtocolErrorCode(body.error.code) ? body.error.code : 'internal',
         message: body.error.message,
         retryable: body.error.retryable,
         details: isDetails(body.error.details) ? body.error.details : undefined,
@@ -580,24 +572,8 @@ export class RemoteAgentClient {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 function isDetails(value: unknown): value is Record<string, unknown> {
   return isRecord(value)
-}
-
-const KNOWN_CODES = new Set([
-  'protocol/version-mismatch', 'auth/missing', 'auth/invalid', 'auth/forbidden',
-  'request/invalid', 'request/too-large', 'route/not-found', 'workspace/not-found',
-  'session/not-found', 'session/not-live', 'session/model-unavailable', 'agent/not-ready',
-  'workspace-file/not-found', 'workspace-file/not-regular-file', 'workspace-file/not-text',
-  'directory/unreadable', 'terminal/unavailable', 'terminal/error', 'internal',
-])
-
-function isCode(value: string): value is import('./errors.ts').ProtocolErrorCode {
-  return KNOWN_CODES.has(value)
 }
 
 export { isApiFailure }

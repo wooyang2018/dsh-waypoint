@@ -309,8 +309,3 @@ export function runRemoteScript(
     child.stdin.end(script)
   })
 }
-
-/** Quote a remote path for the fixed commands the installer sends. */
-export function quoteRemote(value: string): string {
-  return `'${value.replace(/'/gu, `'\\''`)}'`
-}

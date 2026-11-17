@@ -21,7 +21,6 @@ import { npmInvocation } from './npm.ts'
 import type { InstallerOptions } from './options.ts'
 import {
   parseTarget,
-  quoteRemote,
   runRemote,
   runRemoteScript,
   uploadFile,
@@ -94,7 +93,9 @@ export async function packAgent(): Promise<string> {
 
 /** Print the bootstrap script without touching the host. */
 export function commandPlan(options: InstallerOptions): string {
-  const target = requireTarget(options)
+  // Validate the target first: an unusable destination must fail here, not in
+  // the generated script the operator pastes into a remote shell.
+  requireTarget(options)
   return fromOptions(options, plannedTarballName())
 }
 

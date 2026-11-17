@@ -7,13 +7,11 @@
 export {
   AGENT_API_PREFIX,
   DEFAULT_REQUEST_TIMEOUT_MS,
-  DEFAULT_STREAM_HEARTBEAT_MS,
   HEADER_AGENT_VERSION,
   HEADER_HOST_ID,
   HEADER_PROTOCOL_VERSION,
   HEADER_REQUEST_ID,
   HEADER_SERVER_PROTOCOL_VERSION,
-  LOCAL_API_PREFIX,
   MAX_SUPPORTED_PROTOCOL_VERSION,
   MIN_SUPPORTED_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
@@ -27,12 +25,9 @@ export type {
   RemoteFileBytes,
   RemoteFileEntry,
   RemoteFileListing,
-  RemoteFileRequest,
   RemoteFileStat,
   RemoteFileText,
   RemoteFileWatchFrame,
-  RemoteByteReadRequest,
-  RemoteTextReadRequest,
   RemoteDirectoryEntry,
   RemoteDirectoryListing,
 } from './files.ts'
@@ -55,7 +50,6 @@ export type {
   CreateSessionResult,
   CreateWorkspaceRequest,
   ApprovalOutcome,
-  RemoteApprovalAnswer,
   RemoteApprovalFrame,
   RemoteApprovalRequest,
   RemoteAssistantFrame,
@@ -99,16 +93,13 @@ export type { AgentDiscoveryState } from './discovery.ts'
 export {
   PROTOCOL_ERROR_CODES,
   RemoteProtocolError,
-  asProtocolError,
-  fail,
   httpStatusForCode,
-  isProtocolErrorCode,
   isRetryableCode,
 } from './errors.ts'
 export type { ProtocolErrorCode, RemoteProtocolErrorInit } from './errors.ts'
 export { isRemoteAssistantFrame } from './types.ts'
 
-export { EventCursor, cursorAfter, isCursor, parseCursorQuery } from './cursor.ts'
+export { EventCursor, isCursor, parseCursorQuery } from './cursor.ts'
 export type { CursorAcceptance } from './cursor.ts'
 
 export {
@@ -135,8 +126,6 @@ export { parseSseStream } from './sse.ts'
 export type { SseMessage } from './sse.ts'
 
 export {
-  asApiEnvelope,
-  failureToUnknown,
   isAcceptedResult,
   isApiFailure,
   isCreateSessionResult,
@@ -162,9 +151,5 @@ export {
   isRemoteTerminalListResult,
 } from './validation.ts'
 
-export {
-  RemoteAgentClient,
-  assertLoopbackBaseUrl,
-  normalizeBaseUrl,
-} from './client.ts'
+export { RemoteAgentClient } from './client.ts'
 export type { RemoteAgentClientOptions } from './client.ts'

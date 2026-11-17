@@ -89,7 +89,7 @@ export function installWorkspaceAddMenu(ctx: Context, api: HostsApi, t: Translat
       }
       event.preventDefault()
       event.stopImmediatePropagation()
-      void openCreateDialog({ ctx, api, t }, button)
+      void openCreateDialog({ ctx, api, t })
     }
     document.addEventListener('click', onClick, true)
     return () => {
@@ -99,7 +99,7 @@ export function installWorkspaceAddMenu(ctx: Context, api: HostsApi, t: Translat
   }, 'dsh-remote: workspace add dialog')
 }
 
-async function openCreateDialog(flow: WorkspaceFlowContext, anchor: HTMLButtonElement): Promise<void> {
+async function openCreateDialog(flow: WorkspaceFlowContext): Promise<void> {
   closeTransient()
   const overlay = document.createElement('div')
   overlay.className = `${DIALOG_CLASS}-overlay`

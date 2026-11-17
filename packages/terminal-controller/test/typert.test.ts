@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 
-import { TYPERT as RAW } from '../lib/typert.host.js'
+import { ensureBuilt } from './ensure-built.ts'
+
+// `lib/typert.host.js` is a build artifact, not tracked source. Build it first
+// so running this file alone (or from an editor) works.
+ensureBuilt()
+const { TYPERT: RAW } = await import('../lib/typert.host.js')
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
   readonly name: string

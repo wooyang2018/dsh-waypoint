@@ -9,7 +9,6 @@
  */
 
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isValidToken, mintToken } from './auth.ts'
 import { stateDirectory } from './config.ts'
@@ -142,9 +141,4 @@ export function withListener(
 /** Build the final state value when the plugin unloads. */
 export function withStopped(state: AgentState, now = new Date().toISOString()): AgentState {
   return { ...state, port: null, url: null, updatedAt: now, stoppedAt: now }
-}
-
-/** Ensure the state directory exists; useful for installer diagnostics. */
-export async function ensureStateDirectory(file: string): Promise<void> {
-  await mkdir(dirname(file), { recursive: true, mode: 0o700 })
 }

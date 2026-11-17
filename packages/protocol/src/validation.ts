@@ -11,7 +11,6 @@
 
 import type {
   AcceptedResult,
-  ApiEnvelope,
   ApiFailure,
   ApiSuccess,
   CreateSessionResult,
@@ -21,7 +20,6 @@ import type {
   ModelCatalogResult,
   RemoteApprovalFrame,
   RemoteApprovalRequest,
-  RemoteFailure,
   RemoteSessionEvent,
   RemoteSessionSummary,
   RemoteWorkspace,
@@ -145,18 +143,6 @@ export function isApiFailure(value: unknown): value is ApiFailure {
     && isString(error.code)
     && isString(error.message)
     && typeof error.retryable === 'boolean'
-}
-
-/** Parse a JSON value as an envelope, returning undefined when unrecognized. */
-export function asApiEnvelope<T>(value: unknown, guard?: (data: unknown) => data is T): ApiEnvelope<T> | undefined {
-  if (isApiSuccess(value, guard)) return value
-  if (isApiFailure(value)) return value
-  return undefined
-}
-
-/** Convert a wire failure to the local error shape without importing the class. */
-export function failureToUnknown(failure: RemoteFailure): RemoteFailure {
-  return failure
 }
 
 /** Guard used by the client for `health` / `host`. */

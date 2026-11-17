@@ -9,9 +9,6 @@ import { createRequire } from 'node:module'
 /** Keep in sync with package.json; a unit test enforces it. */
 export const AGENT_VERSION = '0.2.12'
 
-/** Plugin row name (also the bundle patch id). */
-export const AGENT_NAME = '@goldenpigeon/dsh-remote-agent'
-
 /** Resolve the DSH runtime version without failing plugin startup. */
 export function resolveDshVersion(): string {
   // The installer knows exactly which version it put in the global prefix, and

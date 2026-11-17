@@ -11,7 +11,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
-  AGENT_ROUTES,
   HEADER_AGENT_VERSION,
   HEADER_HOST_ID,
   HEADER_PROTOCOL_VERSION,

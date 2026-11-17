@@ -66,8 +66,3 @@ export function parseCursorQuery(value: string | null | undefined, fallback = 0)
   if (!isCursor(parsed)) throw new RangeError(`invalid cursor: ${JSON.stringify(value)}`)
   return parsed
 }
-
-/** Compute the cursor that follows one event. */
-export function cursorAfter(event: Pick<RemoteSessionEvent, 'seq'>): number {
-  return event.seq + 1
-}

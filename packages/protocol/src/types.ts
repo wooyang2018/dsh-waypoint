@@ -89,12 +89,6 @@ export type RemoteApprovalFrame =
   | { readonly type: 'ready' }
   | { readonly type: 'request'; readonly request: RemoteApprovalRequest }
 
-/** One approval answer submitted to the remote agent. */
-export interface RemoteApprovalAnswer {
-  readonly id: string
-  readonly outcome: ApprovalOutcome
-}
-
 /** One workspace projected from `ctx.workspaceRegistry`. */
 export interface RemoteWorkspace {
   readonly workspaceId: string

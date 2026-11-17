@@ -20,7 +20,6 @@ import { listLocalDirectories } from '../remote/local-directory.ts'
 import {
   HOST_API_PATH,
   type HostApiEndpoint,
-  type HostApiPayloads,
   type HostApiRequest,
   type HostApiResult,
   type HostApiValues,

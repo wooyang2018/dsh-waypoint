@@ -93,7 +93,6 @@ export class RemoteAgentService {
   #state: AgentState
   readonly #approvalEvents = new EventEmitter()
   readonly #pendingApprovals = new Map<string, PendingApproval>()
-  readonly #approvalScopes = new Map<string, () => void>()
 
   private constructor(ctx: Context, config: ResolvedConfig, state: AgentState, token: string, dshVersion: string) {
     this.ctx = ctx

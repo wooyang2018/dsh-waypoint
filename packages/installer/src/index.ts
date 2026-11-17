@@ -34,7 +34,7 @@ export {
 export { HELP, parseArgs, parseGlobalPrefix, resolveScpBinary, UsageError } from './options.ts'
 export type { Command, InstallerOptions, StartMode } from './options.ts'
 export { npmInvocation } from './npm.ts'
-export type { NpmInvocation } from './npm.ts'
+export type { ToolInvocation } from './npm.ts'
 export { parseTarget, scpArgs, SshTargetError, uploadFile } from './ssh.ts'
 export type { ParsedTarget, ScpOptions, SshOptions } from './ssh.ts'
 export { provisionRemoteAgent } from './provision.ts'

@@ -21,9 +21,6 @@ export const MAX_SUPPORTED_PROTOCOL_VERSION = 1
 /** Base path of the API served by `dsh-remote-agent` on the remote DSH host. */
 export const AGENT_API_PREFIX = '/dsh-remote-agent/api/v1'
 
-/** Base path of the browser-facing API served by `dsh-remote-local-plugin`. */
-export const LOCAL_API_PREFIX = '/dsh-remote/api'
-
 /** Request header carrying the caller's protocol revision. */
 export const HEADER_PROTOCOL_VERSION = 'x-dsh-remote-protocol'
 
@@ -41,12 +38,6 @@ export const HEADER_REQUEST_ID = 'x-dsh-remote-request-id'
 
 /** Default per-request timeout for non-streaming agent calls. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
-
-/** Default interval between SSE heartbeats. */
-export const DEFAULT_STREAM_HEARTBEAT_MS = 15_000
-
-/** Maximum accepted JSON request body for the local management API. */
-export const MAX_CONTROL_BODY_BYTES = 64 * 1024
 
 /** Whether a peer protocol revision can be served by this implementation. */
 export function isProtocolSupported(version: number): boolean {

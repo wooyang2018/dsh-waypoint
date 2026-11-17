@@ -5,20 +5,9 @@
  * @module dsh-remote-local/remote/directory
  */
 
+import type { RemoteDirectoryListing } from '@dsh-remote/protocol'
 import { LocalError } from '../errors.ts'
 import type { RemoteHostsService } from '../service.ts'
-
-export interface RemoteDirectoryEntry {
-  readonly name: string
-  readonly path: string
-}
-
-export interface RemoteDirectoryListing {
-  readonly path: string
-  readonly parent: string
-  readonly entries: readonly RemoteDirectoryEntry[]
-  readonly truncated: boolean
-}
 
 /** List child directories of one remote path. */
 export async function listRemoteDirectories(

@@ -43,10 +43,23 @@ export class RemoteUiError extends Error {
   }
 }
 
-/** API surface injected into the Settings component. */
+/**
+ * API surface injected into the Settings component.
+ *
+ * This mirrors the host API one-to-one rather than exposing only what the
+ * current UI happens to call. Each endpoint keeps its wrapper even when the
+ * present Settings page does not reach it, so the browser side and
+ * `host-api/handler.ts` stay comparable line by line; a missing wrapper would
+ * make an implemented endpoint look unimplemented.
+ *
+ * Members are grouped by their actual consumer. `Settings page` is
+ * `RemoteDevelopmentPanel.tsx`; `Mirror UI` is the sidebar/workspace adapters
+ * (`routing.ts`, `workspace-add.ts`, `model-catalog-merge.ts`,
+ * `remote-files.ts`, `workspace-delete-copy.ts`).
+ */
 export interface HostsApi {
+  // --- Host registry (Settings page) ---
   readonly state: () => Promise<RemoteHostsState>
-  readonly validateTarget: (sshTarget: string) => Promise<ValidatedTarget>
   readonly discover: (refresh?: boolean) => Promise<SshDiscoveryResult>
   readonly addHost: (input: HostApiPayloads['host/add']) => Promise<HostView>
   readonly removeHost: (hostId: string) => Promise<void>
@@ -56,32 +69,53 @@ export interface HostsApi {
   readonly provision: (hostId: string) => Promise<HostView>
   readonly upgrade: (hostId: string) => Promise<HostView>
   readonly restart: (hostId: string) => Promise<HostView>
+  readonly webUrl: (hostId: string) => Promise<WebUrlResult>
+
+  // --- Workspaces (Settings page and the + menu) ---
   readonly workspaces: (hostId: string) => Promise<WorkspacesResult>
   readonly listDirectories: (hostId: string, path?: string) => Promise<{ path: string; parent: string; entries: readonly { name: string; path: string }[]; truncated: boolean }>
   readonly listLocalDirectories: (path?: string) => Promise<{ path: string; parent: string; entries: readonly { name: string; path: string }[]; truncated: boolean }>
   readonly createLocalWorkspace: (input: { path: string; title?: string }) => Promise<{ workspaceId: string }>
   readonly createWorkspace: (hostId: string, input: { path: string; title?: string }) => Promise<RemoteWorkspace>
-  readonly sessions: (hostId: string, workspaceId?: string) => Promise<SessionsResult>
-  readonly webUrl: (hostId: string) => Promise<WebUrlResult>
+
+  // --- Model catalog (Settings page and the composer model menu) ---
   readonly modelCatalog: (hostId: string) => Promise<ModelCatalogResult>
-  readonly sessionMirror: (localSessionId: string) => Promise<MirrorTarget>
   readonly setModelSource: (hostId: string, source: 'proxy' | 'direct') => Promise<HostView>
+  readonly sessionMirror: (localSessionId: string) => Promise<MirrorTarget>
   readonly setSessionModel: (input: {
     localSessionId: string
     provider: string
     model: string
     reasoningEffort?: string
   }) => Promise<AcceptedResult>
-  readonly snapshot: (hostId: string, sessionId: string, limit?: number) => Promise<SessionSnapshot>
-  readonly createSession: (hostId: string, input: { workspaceId?: string; cwd?: string; agentPreset?: string }) => Promise<HostCreateSessionResult>
+
+  // --- Session creation and navigation (mirror UI) ---
   readonly startBlankSession: (hostId: string, input: { localWorkspaceId?: string; workspaceId?: string; agentPreset?: string }) => Promise<{ localSessionId: string }>
   readonly claimOpenSession: (visibleSessionId?: string) => Promise<{ localSessionId?: string; sourceSessionId?: string }>
   readonly openSession: (sessionId: string) => void
+
+  // --- Remote files (mirror UI) ---
   readonly fileList: (sessionId: string, path: string, signal?: AbortSignal) => Promise<MirrorFileResult>
   readonly fileRead: (sessionId: string, path: string, offset?: number, limit?: number, signal?: AbortSignal) => Promise<MirrorFileResult>
   readonly fileStat: (sessionId: string, path: string, signal?: AbortSignal) => Promise<MirrorFileResult>
   readonly fileBytes: (sessionId: string, path: string, offset?: number, length?: number, signal?: AbortSignal) => Promise<MirrorFileResult>
+
+  // --- Endpoints with no UI caller yet ---
+  // Kept so the browser surface stays one-to-one with the implemented host
+  // endpoints. `host/session/create` is also exercised directly over HTTP by
+  // `test/workspace_removal.test.ts` and the Playwright suite, so the endpoint
+  // is a tested contract regardless of which wrapper calls it.
+  /** No caller: `target/validate` is reachable only through the HTTP route. */
+  readonly validateTarget: (sshTarget: string) => Promise<ValidatedTarget>
+  /** No caller: session listing is not shown in the current Settings page. */
+  readonly sessions: (hostId: string, workspaceId?: string) => Promise<SessionsResult>
+  /** No caller: the mirror reads transcripts through its own event stream. */
+  readonly snapshot: (hostId: string, sessionId: string, limit?: number) => Promise<SessionSnapshot>
+  /** No caller in the UI; the endpoint itself is covered by the removal tests. */
+  readonly createSession: (hostId: string, input: { workspaceId?: string; cwd?: string; agentPreset?: string }) => Promise<HostCreateSessionResult>
+  /** No caller: the mirror service and the `remote_session_prompt` tool reach the endpoint by other paths. */
   readonly prompt: (hostId: string, sessionId: string, text: string, mode?: PromptDeliveryMode, selection?: { provider: string; model: string; reasoningEffort?: string }) => Promise<AcceptedResult>
+  /** No caller: cancellation is issued by the mirror service, not the Settings page. */
   readonly cancel: (hostId: string, sessionId: string) => Promise<AcceptedResult>
 }
 

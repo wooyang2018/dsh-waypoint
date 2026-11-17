@@ -308,3 +308,55 @@ never logged or stored by the local plugin.
   Terminal and file traffic for the native UI is carried by the remote agent file/terminal API over the tunnel, not this
   HTTP protocol.
 - Adding another mutation verb requires a protocol revision and a re-review of this boundary.
+
+## Package surface: contract versus internals
+
+`@dsh-remote/protocol` is a workspace package, not a published one — the release workflow publishes
+only `dsh-remote-local-plugin` and `@goldenpigeon/dsh-remote-agent`, and `scripts/build-host.mjs`
+bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
+therefore carries two different kinds of export, and they should be read differently.
+
+**Import contract (60 symbols).** Consumed by another package through a named import. Changing or
+removing one of these is a cross-package change.
+
+- Version and headers: `PROTOCOL_VERSION`, `AGENT_API_PREFIX`, `HEADER_*`, `negotiateProtocol`,
+  `parseProtocolHeader`
+- Clients and cursors: `RemoteAgentClient`, `EventCursor`, `parseCursorQuery`
+- Discovery and routes: `isAgentDiscoveryState`, `isAgentLive`, `AgentDiscoveryState`,
+  `matchAgentRoute`, `sessionArchivePath`
+- Errors: `RemoteProtocolError`, `httpStatusForCode`
+- Wire types: `AgentCapability`, `HostInfo`, `JsonValue`, `ApiSuccess`, `ApiFailure`,
+  `AcceptedResult`, `ApprovalOutcome`, `RemoteApprovalFrame`, `RemoteApprovalRequest`,
+  `RemoteAssistantFrame`, `CreateSessionRequest`, `CreateSessionResult`, `CreateWorkspaceRequest`,
+  `PromptContentPart`, `PromptDeliveryMode`, `PromptSessionRequest`, `SelectModelRequest`,
+  `ModelCatalogResult`, `RemoteModel`, `RemoteModelFailure`, `RemoteModelGroup`,
+  `RemoteModelReasoning`, `ListSessionsResult`, `ListWorkspacesResult`, `RemoteSessionEvent`,
+  `RemoteSessionSummary`, `RemoteWorkspace`, `SessionSnapshot`, `SessionStreamFrame`, `WebUrlResult`
+  and the `RemoteFile*` / `RemoteDirectoryListing` / `RemoteTerminal*` request and result types.
+
+**Internal (65 symbols).** Exported from `index.ts` but imported by no other package. These exist
+because individual protocol modules need them from each other, or because they are re-exported for
+symmetry. Treat them as private: they carry no cross-package guarantee, and nothing outside
+`packages/protocol/src` should start importing them without promoting them to the contract above.
+A `*` marks a family listed both by the `is` guard name and the type it guards.
+
+- Guards: `isAcceptedResult`, `isApiFailure`, `isApiSuccess`, `isCreateSessionResult`,
+  `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`, `isModelCatalogResult`,
+  `isRecord`, `isRemoteWorkspace`, `isRemoteApprovalFrame`, `isRemoteAssistantFrame`,
+  `isSessionSnapshot`, `isSessionStreamFrame`, `isWebUrlResult`, `isRemoteDirectoryListing`,
+  `isRemoteFile*`, `isRemoteTerminal*`, `isCursor`, `isProtocolSupported`, `isRetryableCode`
+- Path builders: `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
+  `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionCancelPath`,
+  `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`, `terminal*Path`
+- Types and constants: `ApiEnvelope`, `JsonPrimitive`, `ProtocolErrorCode`,
+  `PROTOCOL_ERROR_CODES`, `ProtocolNegotiation`, `RemoteProtocolErrorInit`, `RemoteFailure`,
+  `CursorAcceptance`, `SseMessage`, `AgentRoute`, `DEFAULT_REQUEST_TIMEOUT_MS`,
+  `MIN_SUPPORTED_PROTOCOL_VERSION`, `MAX_SUPPORTED_PROTOCOL_VERSION`, `DISCOVERY_STATE_VERSION`,
+  `RemoteDirectoryEntry`, `RemoteTerminalListResult`, `RemoteTerminalShell`, `PromptImagePart`,
+  `RemoteSandboxMode`, `RemoteModelCatalog`, `RemoteReasoningEffort`, `SetSandboxModeRequest`,
+  `SessionSnapshotOptions`, `SessionStreamEndReason`, `RemoteAgentClientOptions`
+- Functions: `parseSseStream`
+
+`ApiEnvelope` and `isApiSuccess` are currently referenced by no package and no internal module. They
+are kept because `isApiSuccess` pairs with `isApiFailure`, which the client uses on every request;
+splitting a guard pair reads worse than one unused guard.

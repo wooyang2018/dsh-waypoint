@@ -13,7 +13,6 @@ import type { UiText } from '../messages.ts'
 import type {
   AcceptedResult,
   CreateSessionResult,
-  HostInfo,
   ModelCatalogResult,
   PromptDeliveryMode,
   RemoteSessionSummary,
@@ -234,9 +233,4 @@ export interface HostApiValues {
   'host/files/read': MirrorFileResult
   'host/files/stat': MirrorFileResult
   'host/files/bytes': MirrorFileResult
-}
-
-/** Informational type for the Settings page. */
-export interface HostSummary extends Pick<HostView, 'id' | 'label' | 'sshTarget' | 'phase'> {
-  readonly hostInfo: HostInfo | null
 }

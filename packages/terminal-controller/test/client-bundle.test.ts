@@ -2,6 +2,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 
+import { ensureBuilt } from './ensure-built.ts'
+
+// `lib/client.js` is a build artifact, not tracked source. Build it first so
+// running this file alone (or from an editor) works.
+ensureBuilt()
 const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
 
 describe('terminal-controller client bundle', () => {

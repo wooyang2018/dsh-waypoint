@@ -485,7 +485,6 @@ export class RemoteMirrorService {
   #approvalStreams = new Map<string, AbortController>()
   #mirrorsInFlight = new Map<string, Promise<MirrorRecord | undefined>>()
   #pendingBlanks = new Map<string, PendingBlankSession>()
-  #pendingDisposedOff: (() => void) | undefined
   #openSessions: Array<{ localSessionId: string; sourceSessionId?: string; expiresAt: number }> = []
   #promotions = new Map<string, PromotionState>()
   #blankInFlight = new Map<string, Promise<{ localSessionId: string }>>()
@@ -2853,22 +2852,6 @@ function promptParts(message: unknown): Array<{ type: 'text'; text: string } | {
     }
   }
   return parts
-}
-
-function contentText(message: unknown): string {
-  if (typeof message === 'string') return message
-  if (typeof message !== 'object' || message === null) return ''
-  const content = (message as { content?: unknown }).content
-  if (!Array.isArray(content)) return ''
-  const texts: string[] = []
-  for (const part of content) {
-    if (typeof part === 'string') texts.push(part)
-    else if (typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'text') {
-      const text = (part as { text?: unknown }).text
-      if (typeof text === 'string') texts.push(text)
-    }
-  }
-  return texts.join('\n').trim()
 }
 
 /** Whether the picker should stop offering a selection the remote refused. */

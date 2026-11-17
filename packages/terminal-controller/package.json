@@ -38,6 +38,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json",
     "test": "node scripts/build.mjs && node --import tsx --test test/*.test.ts"
   },
   "peerDependencies": {

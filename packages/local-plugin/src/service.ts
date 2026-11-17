@@ -25,7 +25,6 @@ import {
   isAgentLive,
   type HostInfo,
   type ListSessionsResult,
-  type ListWorkspacesResult,
   type ModelCatalogResult,
   type PromptDeliveryMode,
   type RemoteWorkspace,

@@ -36,7 +36,12 @@ export const PROTOCOL_ERROR_CODES = [
 /** Stable error code union. */
 export type ProtocolErrorCode = (typeof PROTOCOL_ERROR_CODES)[number]
 
-/** Whether a string is a recognized protocol error code. */
+/**
+ * Whether a string is a recognized protocol error code.
+ *
+ * The single source of truth for the code list; `client.ts` validates response
+ * codes through this instead of keeping its own copy of the set.
+ */
 export function isProtocolErrorCode(value: string): value is ProtocolErrorCode {
   return (PROTOCOL_ERROR_CODES as readonly string[]).includes(value)
 }
@@ -117,16 +122,4 @@ export class RemoteProtocolError extends Error {
       ...(this.details === undefined ? {} : { details: this.details as unknown as RemoteFailure['details'] }),
     }
   }
-}
-
-/** Convert an unknown thrown value into a protocol error without leaking internals. */
-export function asProtocolError(error: unknown, fallbackMessage = 'remote agent request failed'): RemoteProtocolError {
-  if (error instanceof RemoteProtocolError) return error
-  const message = error instanceof Error && error.message !== '' ? error.message : fallbackMessage
-  return new RemoteProtocolError({ code: 'internal', message, cause: error })
-}
-
-/** Throw a protocol error with a stable code. */
-export function fail(code: ProtocolErrorCode, message: string, details?: Record<string, unknown>): never {
-  throw new RemoteProtocolError({ code, message, details })
 }

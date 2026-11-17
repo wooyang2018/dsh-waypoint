@@ -58,23 +58,6 @@ export interface RemoteDirectoryListing {
   readonly truncated: boolean
 }
 
-/** Request for stat/list/read/bytes operations. */
-export interface RemoteFileRequest {
-  readonly path: string
-}
-
-/** Request for a text page. */
-export interface RemoteTextReadRequest extends RemoteFileRequest {
-  readonly offset?: number
-  readonly limit?: number
-}
-
-/** Request for a byte window. */
-export interface RemoteByteReadRequest extends RemoteFileRequest {
-  readonly offset?: number
-  readonly length?: number
-}
-
 /** One file/directory invalidation frame. */
 export type RemoteFileWatchFrame = {
   readonly kind: 'ready'

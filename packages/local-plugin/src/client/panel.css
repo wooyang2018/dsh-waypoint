@@ -199,11 +199,6 @@
   color: var(--dshr-danger);
 }
 
-.dshr-banner-info {
-  border-color: color-mix(in srgb, var(--dshr-accent) 35%, transparent);
-  background: color-mix(in srgb, var(--dshr-accent) 9%, transparent);
-}
-
 .dshr-host-error {
   margin: 0;
   color: var(--dshr-danger);
