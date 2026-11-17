@@ -15,7 +15,8 @@
     "verify": "pnpm build && pnpm test",
     "clean": "node scripts/clean.mjs",
     "release:plugin": "node scripts/release-plugin.mjs",
-    "test:e2e": "pnpm build && node scripts/package-agent.mjs && node scripts/release-plugin.mjs && playwright test"
+    "release:plugin:publish": "node scripts/release-plugin.mjs --release",
+    "test:e2e": "pnpm build && node scripts/package-agent.mjs && node scripts/test-e2e.mjs"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",

@@ -10,8 +10,18 @@ export const APP = '/Applications/DeepSeek Harness.app/Contents/Resources/runtim
 export const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 export const FAKE_SSH = join(ROOT, 'test/playwright/fake-ssh.mjs')
 const DSH_VERSION = process.env.DSH_REMOTE_E2E_DSH_VERSION ?? '0.2.2-rc.3'
-const LOCAL_PLUGIN = JSON.parse(readFileSync(join(ROOT, 'packages/local-plugin/package.json'), 'utf8')) as { version: string }
-export const PLUGIN_TARBALL = join(ROOT, `packages/local-plugin/dsh-remote-local-plugin-${LOCAL_PLUGIN.version}.tgz`)
+
+/**
+ * The tarball `pnpm test:e2e` just built.
+ *
+ * A development build carries a unique `-dev-<timestamp>` version, so the file
+ * name cannot be derived from the manifest. `test:e2e` writes the real path
+ * here; the manifest-derived name is only a fallback for a `--release` pack.
+ */
+export const PLUGIN_TARBALL = process.env.DSH_REMOTE_PLUGIN_TARBALL
+  ?? join(ROOT, `packages/local-plugin/dsh-remote-local-plugin-${
+    (JSON.parse(readFileSync(join(ROOT, 'packages/local-plugin/package.json'), 'utf8')) as { version: string }).version
+  }.tgz`)
 
 export interface E2EHostOptions {
   /** Queue fake remote state before the local DSH host starts (e.g. approvals). */
