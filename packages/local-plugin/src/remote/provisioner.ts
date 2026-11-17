@@ -85,7 +85,6 @@ export class RemoteProvisioner {
   ): Promise<void> {
     const tarball = findAgentTarball()
     const version = /dsh-remote-agent-(.+)\.tgz$/u.exec(tarball)?.[1]
-    const agentPackageSpec = agentPackageSpecFor(version)
     let baselinePid: number | undefined
     let baselineKnown = false
     try {
@@ -107,7 +106,6 @@ export class RemoteProvisioner {
       await provisionRemoteAgent({
         target: target.canonical,
         agentTarballPath: tarball,
-        ...agentPackageSpec === undefined ? {} : { agentPackageSpec },
         sshBinary: this.#config.sshBinary,
         scpBinary: resolveScpBinary(this.#config.sshBinary, this.#config.scpBinary),
         strictHostKeyChecking: this.#config.strictHostKeyChecking,
@@ -326,17 +324,19 @@ export function agentVersionTransition(
   return 'wait'
 }
 
-/** Whether the remote runtime is older than the bundled one (newer is not "outdated"). */
-export function agentVersionIsOlder(actual: string, expected: string | undefined): boolean {
-  if (expected === undefined) return false
+/**
+ * Whether the running agent is not the one this build ships.
+ *
+ * Compared for equality, not "older": a bundle can change behaviour while its
+ * version stays the same (a corrected `cordis.patch.yml` does exactly that), so
+ * "old is fine" is the assumption that let a stale agent keep running. Any
+ * difference means the profile has to be replaced.
+ */
+export function agentVersionDiffers(actual: string | undefined, expected: string | undefined): boolean {
+  if (expected === undefined || expected === '') return false
+  if (actual === undefined || actual === '') return true
   const comparison = compareVersions(actual, expected)
-  return comparison !== undefined && comparison < 0
-}
-
-/** Exact npm spec for a release build; prerelease/dev builds stay bundled. */
-export function agentPackageSpecFor(version: string | undefined): string | undefined {
-  if (version === undefined || version.includes('-')) return undefined
-  return `@goldenpigeon/dsh-remote-agent@${version}`
+  return comparison === undefined ? actual !== expected : comparison !== 0
 }
 
 function progressForLine(line: string): HostDetail | undefined {

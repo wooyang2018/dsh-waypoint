@@ -281,11 +281,19 @@ describe('bootstrap rendering', () => {
     assert.match(script, /node ready/)
   })
 
-  it('prefers the scoped npm agent and keeps the bundled fallback', () => {
-    const script = fromOptions({ ...parseArgs(baseArgs), agentPackageSpec: '@goldenpigeon/dsh-remote-agent@0.2.2' }, '/tmp/agent.tgz')
-    assert.match(script, /AGENT_NPM_SPEC='@goldenpigeon\/dsh-remote-agent@0\.2\.2'/)
-    assert.match(script, /plugin --profile "\$PROFILE" add "\$AGENT_NPM_SPEC"/)
-    assert.match(script, /npm agent unavailable; installing the bundled agent/)
+  it('installs the uploaded tarball and never a registry package', () => {
+    const script = fromOptions(parseArgs(baseArgs), '/tmp/agent.tgz')
+    // A registry install resolves by version. When that version is already in
+    // the profile, `dsh plugin add` replaces nothing — so a corrected bundle
+    // kept running old behaviour while every log line said "installed".
+    assert.doesNotMatch(script, /AGENT_NPM_SPEC/)
+    assert.doesNotMatch(script, /@goldenpigeon\/dsh-remote-agent@/)
+    assert.doesNotMatch(script, /installed agent from npm/)
+    assert.match(script, /plugin --profile "\$PROFILE" add "\$AGENT_TARBALL"/)
+    // No `remove` first: on this profile it hangs inside pnpm after rewriting
+    // the manifest. The upload path is timestamped, so re-adding it is a
+    // different spec and replaces the dependency on its own.
+    assert.doesNotMatch(script, /plugin --profile "\$PROFILE" remove/)
   })
 
   it('migrates legacy agent profile entries before installing', () => {

@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { InstallerError, installerErrorForExit } from '@dsh-remote/installer'
-import { agentPackageSpecFor, agentVersionIsOlder, agentVersionMatches, agentVersionTransition, installerCodeOf, installerUi, resolveRemoteDshVersion } from '../src/remote/provisioner.ts'
+import { agentVersionDiffers, agentVersionMatches, agentVersionTransition, installerCodeOf, installerUi, resolveRemoteDshVersion } from '../src/remote/provisioner.ts'
 
 describe('agent install target', () => {
-  it('uses npm only for stable releases', () => {
-    assert.equal(agentPackageSpecFor('0.2.10'), '@goldenpigeon/dsh-remote-agent@0.2.10')
-    assert.equal(agentPackageSpecFor('0.2.10-rc.1'), undefined)
-    assert.equal(agentPackageSpecFor(undefined), undefined)
+  it('never prefers a registry package over the bundled tarball', async () => {
+    // The registry copy can carry the same version as a locally built bundle
+    // while shipping different code (a stale `cordis.patch.yml`, for one), and
+    // `dsh plugin add <version>` then leaves the profile untouched. Only the
+    // uploaded tarball is used, so no npm-spec helper exists any more.
+    const module = await import('../src/remote/provisioner.ts')
+    assert.equal('agentPackageSpecFor' in module, false)
   })
 
   it('requires the installed agent to match the requested version', () => {
@@ -16,9 +19,20 @@ describe('agent install target', () => {
     assert.equal(agentVersionMatches('0.2.10-rc.1', '0.2.10'), false)
     assert.equal(agentVersionMatches('0.2.9', '0.2.10'), false)
     assert.equal(agentVersionMatches('0.2.9', undefined), true)
-    assert.equal(agentVersionIsOlder('0.2.9', '0.2.10'), true)
-    assert.equal(agentVersionIsOlder('0.2.10', '0.2.10'), false)
-    assert.equal(agentVersionIsOlder('0.2.11', '0.2.10'), false)
+  })
+
+  it('treats any version difference as needing a reinstall', () => {
+    // Equality, not ordering: a bundle can change behaviour without bumping its
+    // version, and "not older" is what let a stale agent keep running.
+    assert.equal(agentVersionDiffers('0.2.9', '0.2.10'), true)
+    assert.equal(agentVersionDiffers('0.2.11', '0.2.10'), true)
+    assert.equal(agentVersionDiffers('0.2.10', '0.2.10'), false)
+    assert.equal(agentVersionDiffers('v0.2.10+build.7', '0.2.10'), false)
+    assert.equal(agentVersionDiffers(undefined, '0.2.10'), true)
+    assert.equal(agentVersionDiffers('', '0.2.10'), true)
+    // Nothing to compare against means nothing to fix.
+    assert.equal(agentVersionDiffers('0.2.9', undefined), false)
+    assert.equal(agentVersionDiffers('0.2.9', ''), false)
   })
 
   it('waits for an old pid but fails on a newly started wrong-version agent', () => {

@@ -49,7 +49,7 @@ import {
   type ModelSource,
   type SshDiscoveryResult,
 } from './hosts/types.ts'
-import { RemoteProvisioner, agentVersionIsOlder, bundledAgentVersion } from './remote/provisioner.ts'
+import { RemoteProvisioner, agentVersionDiffers, bundledAgentVersion } from './remote/provisioner.ts'
 import { uiForErrorCode } from './messages.ts'
 import { scanSshConfig } from './ssh/config.ts'
 import { mergeAliasGroups } from './ssh/alias-groups.ts'
@@ -124,6 +124,8 @@ export class RemoteHostsService {
   #directModel: { readonly baseUrl: string; readonly apiKey: string } | undefined
   #directModelAttempted = false
   readonly #modelReconciled = new Set<string>()
+  /** Hosts already asked to replace a mismatched agent during this connect cycle. */
+  readonly #agentReconciled = new Set<string>()
   readonly #catalogs = new Map<string, { readonly at: number; readonly value: ModelCatalogResult }>()
   #discovery: { readonly at: number; readonly value: SshDiscoveryResult } | undefined
   #discoveryInFlight: Promise<SshDiscoveryResult> | undefined
@@ -940,6 +942,9 @@ export class RemoteHostsService {
       })
       this.#setRuntime(id, { ...this.#runtimeFor(id), detail: 'checkingAgent' })
       const health = await client.health()
+      if (await this.#reconcileAgentVersion(id, target, health, proxy, proxyToken, direct, tunnel)) {
+        return this.#doConnect(id)
+      }
       if (await this.#reconcileModelEnvironment(id, target, health, proxy, proxyToken, direct, tunnel)) {
         return this.#doConnect(id)
       }
@@ -948,6 +953,9 @@ export class RemoteHostsService {
       this.#setConnected(id, health)
       this.#startHealthTimer(id)
       this.#attempts.delete(id)
+      // A connected host is in step with this build; a later local update must
+      // be able to reconcile it again.
+      this.#agentReconciled.delete(id)
       return this.view(id)
     } catch (error) {
       await tunnel?.stop()
@@ -961,6 +969,53 @@ export class RemoteHostsService {
       this.#scheduleReconnect(id)
       throw failure
     }
+  }
+
+  /**
+   * Replace a remote agent that is not the one this build ships.
+   *
+   * Reinstalling only when the agent looks *older* missed the case that
+   * actually happened: a bundle whose behaviour changed while its version
+   * stayed the same, so the profile kept a stale `cordis.patch.yml` forever and
+   * the remote Web UI booted without the services it needs. Any difference now
+   * triggers one reinstall per connect attempt.
+   *
+   * @returns true when a reinstall happened, so the caller reconnects.
+   */
+  async #reconcileAgentVersion(
+    id: string,
+    target: ParsedSshTarget,
+    health: { readonly agentVersion?: string },
+    proxy: CredentialProxyAddress | undefined,
+    proxyToken: string | undefined,
+    direct: { readonly baseUrl: string; readonly apiKey: string } | undefined,
+    tunnel: Tunnel,
+  ): Promise<boolean> {
+    const expected = bundledAgentVersion()
+    if (!this.config.autoProvision) return false
+    if (!agentVersionDiffers(health.agentVersion, expected)) return false
+    // One attempt per connect cycle: #attempts already bounds reconnect loops,
+    // and repeating a failed reinstall on every health tick would spin forever.
+    if (this.#agentReconciled.has(id)) return false
+    this.#agentReconciled.add(id)
+    this.#setRuntime(id, { ...this.#runtimeFor(id), detail: 'agentInstalling' })
+    this.ctx.logger.warn(
+      'dsh-remote: remote agent for %s is %s, this build ships %s; reinstalling',
+      id,
+      health.agentVersion ?? 'unknown',
+      expected ?? 'unknown',
+    )
+    await tunnel.stop()
+    try {
+      await this.#provisioner.ensureInstalled(target, {
+        ...this.#modelEnvironment(proxy, proxyToken, direct),
+        onProgress: detail => this.#setRuntime(id, { ...this.#runtimeFor(id), detail }),
+      })
+    } catch (error) {
+      this.#agentReconciled.delete(id)
+      throw error
+    }
+    return true
   }
 
   async #reconcileModelEnvironment(
@@ -1290,7 +1345,9 @@ export class RemoteHostsService {
       dshUpdate: this.#dshUpdateFor(health),
       retry: null,
       agentOutdated: !health.capabilities.includes('file.watch')
-        || agentVersionIsOlder(health.agentVersion, bundledVersion),
+        // Any difference, not only an older version: a bundle can change
+        // behaviour while its version stays the same.
+        || agentVersionDiffers(health.agentVersion, bundledVersion),
       // Cleared on success. A connected host needs no progress sentence: the
       // phase shows in the list and the model-key source has its own line.
       detail: null,

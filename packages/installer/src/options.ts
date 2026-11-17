@@ -29,8 +29,6 @@ export interface InstallerOptions {
   readonly globalPrefix: string
   readonly start: StartMode
   readonly agentTarball: string | undefined
-  /** Exact npm spec for the remote agent, when the caller wants npm-first installation. */
-  readonly agentPackageSpec?: string
   readonly sshBinary: string
   /** scp binary used to upload the agent tarball; paired with {@link sshBinary}. */
   readonly scpBinary: string

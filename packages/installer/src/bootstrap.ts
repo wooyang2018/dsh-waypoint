@@ -30,8 +30,6 @@ export interface BootstrapOptions {
   readonly globalPrefix?: string
   readonly start: StartMode
   readonly agentTarball: string
-  /** Exact npm package spec for the remote agent, if it should be tried first. */
-  readonly agentPackageSpec?: string
   /** Remote DSH model endpoint; the local credential proxy URL when proxying. */
   readonly modelBaseUrl?: string
   /** Placeholder key for the local credential proxy; never the real key. */
@@ -210,7 +208,6 @@ DSH_VERSION=${shellLiteral(options.dshVersion)}
 PNPM_VERSION=${shellLiteral(options.pnpmVersion)}
 DSH_UPGRADE=${options.upgrade === true ? '1' : '0'}
 AGENT_TARBALL=${shellLiteral(options.agentTarball)}
-AGENT_NPM_SPEC=${options.agentPackageSpec === undefined ? "''" : shellLiteral(options.agentPackageSpec)}
 GLOBAL_PREFIX=${options.globalPrefix === undefined || options.globalPrefix.trim() === '' ? "''" : shellLiteral(options.globalPrefix.trim())}
 MODEL_BASE_URL=${options.modelBaseUrl === undefined ? "''" : shellLiteral(options.modelBaseUrl)}
 MODEL_API_KEY=${options.modelApiKey === undefined ? "''" : shellLiteral(options.modelApiKey)}
@@ -401,12 +398,14 @@ if [ "$LEGACY_CHANGED" -eq 1 ]; then
 fi
 
 echo "dsh-remote: adding plugin to profile $PROFILE"
-if [ -n "$AGENT_NPM_SPEC" ] && "$DSH_BIN" plugin --profile "$PROFILE" add "$AGENT_NPM_SPEC"; then
-  echo "dsh-remote: installed agent from npm"
-else
-  echo "dsh-remote: npm agent unavailable; installing the bundled agent" >&2
-  "$DSH_BIN" plugin --profile "$PROFILE" add "$AGENT_TARBALL"
-fi
+# The upload path carries this run's timestamp, so the dependency spec differs
+# on every provisioning and "dsh plugin add" cannot treat it as already met.
+#
+# Deliberately no "dsh plugin remove": on this profile it edits the manifest and
+# then hangs inside pnpm (observed 9+ minutes, no output, killed by timeout),
+# leaving a half-written manifest. Re-adding a different spec replaces the
+# dependency without ever needing the removal step.
+"$DSH_BIN" plugin --profile "$PROFILE" add "$AGENT_TARBALL"
 
 echo "dsh-remote: starting dsh web"
 ${startBlock}
@@ -489,7 +488,6 @@ export function fromOptions(options: InstallerOptions, agentTarball: string): st
     pnpmVersion: options.pnpmVersion,
     start: options.start,
     ...options.globalPrefix === undefined ? {} : { globalPrefix: options.globalPrefix },
-    ...options.agentPackageSpec === undefined ? {} : { agentPackageSpec: options.agentPackageSpec },
     agentTarball,
   })
 }
