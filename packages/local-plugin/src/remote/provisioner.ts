@@ -112,12 +112,10 @@ export class RemoteProvisioner {
         scpBinary: resolveScpBinary(this.#config.sshBinary, this.#config.scpBinary),
         strictHostKeyChecking: this.#config.strictHostKeyChecking,
         profile: 'web',
-        installDir: this.#config.remoteInstallDir,
+        globalPrefix: this.#config.remoteGlobalPrefix,
         dshHome: this.#config.remoteDshHome,
         dshVersion: resolveRemoteDshVersion(this.#config.remoteDshVersion, this.#localDshVersion, options.dshVersion),
         pnpmVersion: this.#config.remotePnpmVersion,
-        nodeVersion: this.#config.remoteNodeVersion,
-        autoInstallNode: this.#config.autoInstallNode,
         upgrade: options.upgrade === true,
         start: this.#config.remoteStart,
         timeoutMs: this.#config.provisionTimeoutMs,
@@ -242,11 +240,8 @@ const PROVISION_PROGRESS: readonly (readonly [string, HostDetail])[] = [
   ['agent package uploaded', 'uploaded'],
   ['preparing remote install', 'preparing'],
   ['install proxy configured', 'proxy'],
-  ['downloading node.js', 'nodeDownloading'],
-  ['installed node.js', 'nodeInstalled'],
   ['node ready', 'nodeReady'],
   ['installing pnpm@', 'pnpmInstalling'],
-  ['upgrading @deepseek-ai/dsh', 'dshUpdating'],
   ['installing @deepseek-ai/dsh@', 'dshInstalling'],
   ['adding plugin to profile', 'agentInstalling'],
   ['restarting systemd user unit', 'webStarting'],
@@ -273,7 +268,6 @@ const INSTALLER_CODES: ReadonlySet<string> = new Set<InstallerErrorCode>([
   'install/node-outdated',
   'install/npm-missing',
   'install/dsh-missing',
-  'install/node-install-failed',
   'install/profile-migrate-failed',
 ])
 
@@ -292,8 +286,6 @@ export function installerUi(error: unknown): UiText {
       return { key: 'error.agentInstallNodeOutdated', params: { required: MINIMUM_NODE_VERSION } }
     case 'install/npm-missing':
       return { key: 'error.agentInstallNoNpm' }
-    case 'install/node-install-failed':
-      return { key: 'error.agentInstallNodeDownloadFailed' }
     case 'install/dsh-missing':
       return { key: 'error.agentInstallDshMissing' }
     default:

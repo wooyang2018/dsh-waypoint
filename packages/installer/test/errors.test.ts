@@ -14,12 +14,9 @@ function scriptedExitCodes(): number[] {
   const script = renderBootstrapScript({
     profile: 'web',
     port: 0,
-    installDir: '/opt/dsh',
     dshHome: '/srv/dsh',
     dshVersion: '0.2.2-rc.3',
     pnpmVersion: '11.21.0',
-    nodeVersion: '22.19.0',
-    autoInstallNode: true,
     start: 'systemd',
     agentTarball: '/tmp/a.tgz',
   })

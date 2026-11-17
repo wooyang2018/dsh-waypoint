@@ -7,6 +7,7 @@
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import z from '@deepseek-ai/schemastery'
+import { parseGlobalPrefix, UsageError } from '@dsh-remote/installer'
 
 /** Raw plugin config. */
 export interface Config {
@@ -30,18 +31,15 @@ export interface Config {
   /** Provision DSH + dsh-remote-agent when discovery finds no agent. */
   readonly autoProvision?: boolean
   readonly remoteDshHome?: string
-  readonly remoteInstallDir?: string
+  /** npm global prefix that owns the remote `dsh`; empty asks `npm prefix -g`. */
+  readonly remoteGlobalPrefix?: string
   /** DSH version to install remotely; empty uses the local runtime version. */
   readonly remoteDshVersion?: string
   readonly remotePnpmVersion?: string
-  /** Node.js version installed into the remote install dir when none is usable. */
-  readonly remoteNodeVersion?: string
   /** Optional HTTP(S) proxy for remote provisioning; empty means auto-detect. */
   readonly remoteInstallProxy?: string
   /** Comma-separated proxy bypass list. */
   readonly remoteInstallNoProxy?: string
-  /** Download Node.js into the remote install dir when it is missing or too old. */
-  readonly autoInstallNode?: boolean
   /** `systemd`, `nohup`, or `none`. */
   readonly remoteStart?: string
   readonly provisionTimeoutMs?: number
@@ -79,13 +77,11 @@ export const Config: z<Config> = z.object({
   strictHostKeyChecking: z.string().default('accept-new'),
   autoProvision: z.boolean().default(true),
   remoteDshHome: z.string().default('~/.dsh'),
-  remoteInstallDir: z.string().default('~/.local/share/dsh-remote'),
+  remoteGlobalPrefix: z.string().default(''),
   remoteDshVersion: z.string().default(''),
   remotePnpmVersion: z.string().default('11.21.0'),
-  remoteNodeVersion: z.string().default('22.19.0'),
   remoteInstallProxy: z.string().default(''),
   remoteInstallNoProxy: z.string().default('127.0.0.1,localhost'),
-  autoInstallNode: z.boolean().default(true),
   remoteStart: z.string().default('systemd'),
   provisionTimeoutMs: z.number().min(60_000).max(1_800_000).default(600_000),
   credentialProxy: z.boolean().default(false),
@@ -119,14 +115,13 @@ export interface ResolvedConfig {
   readonly strictHostKeyChecking: 'yes' | 'no' | 'ask' | 'accept-new'
   readonly autoProvision: boolean
   readonly remoteDshHome: string
-  readonly remoteInstallDir: string
+  /** npm global prefix that owns the remote `dsh`; empty asks `npm prefix -g`. */
+  readonly remoteGlobalPrefix: string
   /** DSH version to install remotely; empty means the local runtime version. */
   readonly remoteDshVersion: string
   readonly remotePnpmVersion: string
-  readonly remoteNodeVersion: string
   readonly remoteInstallProxy: string
   readonly remoteInstallNoProxy: string
-  readonly autoInstallNode: boolean
   readonly remoteStart: RemoteStartMode
   readonly provisionTimeoutMs: number
   readonly credentialProxy: boolean
@@ -185,6 +180,16 @@ export function resolveConfig(config: Config = {}, env: NodeJS.ProcessEnv = proc
   if (remoteStart !== 'systemd' && remoteStart !== 'nohup' && remoteStart !== 'none') {
     throw new Error(`invalid remoteStart: ${JSON.stringify(remoteStart)}`)
   }
+  // The value reaches the remote shell, so it is validated by the same rule the
+  // installer CLI uses; two validators would drift into disagreeing about what
+  // an acceptable prefix is.
+  let remoteGlobalPrefix: string
+  try {
+    remoteGlobalPrefix = parseGlobalPrefix(config.remoteGlobalPrefix ?? '')
+  } catch (error) {
+    if (error instanceof UsageError) throw new Error(`remoteGlobalPrefix ${error.message}`)
+    throw error
+  }
   const remoteDshHome = config.remoteDshHome ?? '~/.dsh'
   const configuredStateFile = (config.remoteStateFile ?? '').trim()
   const configuredSshConfig = (config.sshConfigPath ?? '').trim()
@@ -204,13 +209,11 @@ export function resolveConfig(config: Config = {}, env: NodeJS.ProcessEnv = proc
     strictHostKeyChecking: strict,
     autoProvision: config.autoProvision ?? true,
     remoteDshHome,
-    remoteInstallDir: config.remoteInstallDir ?? '~/.local/share/dsh-remote',
+    remoteGlobalPrefix,
     remoteDshVersion: (config.remoteDshVersion ?? '').trim(),
     remotePnpmVersion: config.remotePnpmVersion ?? '11.21.0',
-    remoteNodeVersion: config.remoteNodeVersion ?? '22.19.0',
     remoteInstallProxy: config.remoteInstallProxy ?? '',
     remoteInstallNoProxy: config.remoteInstallNoProxy ?? '127.0.0.1,localhost',
-    autoInstallNode: config.autoInstallNode ?? true,
     remoteStart,
     provisionTimeoutMs: config.provisionTimeoutMs ?? 600_000,
     credentialProxy: config.credentialProxy ?? false,

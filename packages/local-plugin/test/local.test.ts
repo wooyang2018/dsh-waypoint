@@ -111,6 +111,16 @@ describe('config', () => {
     assert.equal(resolveConfig({}).remoteDshVersion, '')
     assert.equal(resolveConfig({ remoteDshVersion: ' 0.2.2-rc.2 ' }).remoteDshVersion, '0.2.2-rc.2')
   })
+
+  it('leaves the remote global prefix to npm unless one is configured', () => {
+    assert.equal(resolveConfig({}).remoteGlobalPrefix, '')
+    assert.equal(resolveConfig({ remoteGlobalPrefix: ' /opt/npm ' }).remoteGlobalPrefix, '/opt/npm')
+    assert.equal(resolveConfig({ remoteGlobalPrefix: '~/npm' }).remoteGlobalPrefix, '~/npm')
+    assert.equal(resolveConfig({ remoteGlobalPrefix: '$HOME/npm' }).remoteGlobalPrefix, '$HOME/npm')
+    // A value that is not a path would be pasted into the remote shell.
+    assert.throws(() => resolveConfig({ remoteGlobalPrefix: 'npm-global' }), /remoteGlobalPrefix/)
+    assert.throws(() => resolveConfig({ remoteGlobalPrefix: '/opt/npm;id' }), /remoteGlobalPrefix/)
+  })
 })
 
 describe('host store', () => {

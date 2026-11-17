@@ -18,12 +18,15 @@ export interface InstallerOptions {
   readonly target: string | undefined
   readonly profile: string
   readonly port: number
-  readonly installDir: string
   readonly dshHome: string
   readonly dshVersion: string
   readonly pnpmVersion: string
-  readonly nodeVersion: string
-  readonly autoInstallNode: boolean
+  /**
+   * npm global prefix that owns the remote `dsh` command.
+   *
+   * Empty asks npm (`npm prefix -g`); there is no second candidate location.
+   */
+  readonly globalPrefix: string
   readonly start: StartMode
   readonly agentTarball: string | undefined
   /** Exact npm spec for the remote agent, when the caller wants npm-first installation. */
@@ -52,12 +55,10 @@ export function parseArgs(argv: readonly string[]): InstallerOptions {
   let target: string | undefined
   let profile = 'web'
   let port = 0
-  let installDir = '$HOME/.local/share/dsh-remote'
   let dshHome = '$HOME/.dsh'
   let dshVersion = '0.2.2-rc.3'
   let pnpmVersion = '11.21.0'
-  let nodeVersion = '22.19.0'
-  let autoInstallNode = true
+  let globalPrefix = ''
   let start: StartMode = 'systemd'
   let agentTarball: string | undefined
   let sshBinary = 'ssh'
@@ -103,9 +104,6 @@ export function parseArgs(argv: readonly string[]): InstallerOptions {
       case '--port':
         port = parseInteger(value(), '--port', 0, 65_535)
         break
-      case '--install-dir':
-        installDir = value()
-        break
       case '--dsh-home':
         dshHome = value()
         break
@@ -115,11 +113,8 @@ export function parseArgs(argv: readonly string[]): InstallerOptions {
       case '--pnpm-version':
         pnpmVersion = value()
         break
-      case '--node-version':
-        nodeVersion = value()
-        break
-      case '--no-auto-install-node':
-        autoInstallNode = false
+      case '--global-prefix':
+        globalPrefix = parseGlobalPrefix(value())
         break
       case '--start':
         start = parseStart(value())
@@ -168,12 +163,10 @@ export function parseArgs(argv: readonly string[]): InstallerOptions {
     target,
     profile,
     port,
-    installDir,
     dshHome,
     dshVersion,
     pnpmVersion,
-    nodeVersion,
-    autoInstallNode,
+    globalPrefix,
     start,
     agentTarball,
     sshBinary,
@@ -212,6 +205,31 @@ function parseStart(raw: string): StartMode {
   throw new UsageError('--start must be systemd, nohup, or none')
 }
 
+/**
+ * Validate an npm global prefix.
+ *
+ * The value reaches the remote shell, so only a plain path expression is
+ * accepted: an absolute path, `~`, `~`/`$HOME` followed by a path. Quoting
+ * happens at render time as well, but a rejected value is a clearer failure
+ * than a silently mangled directory.
+ */
+export function parseGlobalPrefix(raw: string): string {
+  const value = raw.trim()
+  if (value === '') return ''
+  if (value === '~' || value === '$HOME') return value
+  const prefix = value.startsWith('~/') ? '~/' : value.startsWith('$HOME/') ? '$HOME/' : null
+  if (prefix === null && !value.startsWith('/')) {
+    throw new UsageError('--global-prefix must be an absolute path, ~/…, or $HOME/…')
+  }
+  const rest = prefix === null ? value : value.slice(prefix.length)
+  if (rest === '') throw new UsageError(`--global-prefix must name a directory: ${JSON.stringify(raw)}`)
+  if (!/^[A-Za-z0-9._\-/]+$/u.test(rest)) {
+    throw new UsageError(`--global-prefix contains characters a directory cannot have: ${JSON.stringify(raw)}`)
+  }
+  if (prefix !== null) return `${prefix}${rest}`
+  return value.replace(/\/+$/u, '') || '/'
+}
+
 function parseStrict(raw: string): InstallerOptions['strictHostKeyChecking'] {
   if (raw === 'yes' || raw === 'no' || raw === 'ask' || raw === 'accept-new') return raw
   throw new UsageError('--strict-host-key-checking must be yes, no, ask, or accept-new')
@@ -232,12 +250,10 @@ Options:
   --target, --host, -t     SSH destination (user@host[:port] or ssh config alias)
   --profile                Remote DSH profile (default: web)
   --port                   Remote DSH Web port, 0 lets the OS pick (default: 0)
-  --install-dir            Remote install root (default: $HOME/.local/share/dsh-remote)
   --dsh-home               Remote DSH home (default: $HOME/.dsh)
   --dsh-version            @deepseek-ai/dsh version (default: 0.2.2-rc.3)
-  --pnpm-version           pnpm version installed into --install-dir (default: 11.21.0)
-  --node-version           Node.js version to install when none is usable (default: 22.19.0)
-  --no-auto-install-node   Fail instead of downloading Node.js
+  --pnpm-version           pnpm version installed into the global prefix (default: 11.21.0)
+  --global-prefix          npm global prefix that owns the remote dsh (default: npm prefix -g)
   --start                  systemd | nohup | none (default: systemd)
   --no-start               Same as --start none
   --agent-tarball          Use an existing dsh-remote-agent .tgz
@@ -250,9 +266,12 @@ Options:
   --dry-run                Print the bootstrap script (same as plan)
   -h, --help               Show this help
 
-The remote host needs Node.js 22.19+ and npm. The installer installs pnpm and
-DSH into --install-dir when they are not already available, adds
-dsh-remote-agent to the chosen profile, and starts \`dsh web\` on 127.0.0.1.
+The remote host needs Node.js 22.19+ and npm, resolved through the account's
+own shell so nvm/fnm/Volta answer. The installer does not install Node.js: it
+verifies it and stops with an actionable message when it is missing or too old.
+It then installs pnpm and @deepseek-ai/dsh into the npm global prefix
+(npm prefix -g unless --global-prefix says otherwise), adds dsh-remote-agent to
+the chosen profile, and starts "dsh web" on 127.0.0.1 using that same dsh.
 
 Model credentials are configured by the local plugin, not by this CLI. Two
 modes exist:

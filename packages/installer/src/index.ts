@@ -24,12 +24,14 @@ export {
 export type { BootstrapExitCode, InstallerErrorCode } from './errors.ts'
 export {
   fromOptions,
+  globalPrefixPrelude,
+  nodePathPrelude,
   renderBootstrapScript,
   renderSystemdUnit,
   shellLiteral,
   shellPath,
 } from './bootstrap.ts'
-export { HELP, parseArgs, resolveScpBinary, UsageError } from './options.ts'
+export { HELP, parseArgs, parseGlobalPrefix, resolveScpBinary, UsageError } from './options.ts'
 export type { Command, InstallerOptions, StartMode } from './options.ts'
 export { npmInvocation } from './npm.ts'
 export type { NpmInvocation } from './npm.ts'

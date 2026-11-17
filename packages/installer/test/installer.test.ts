@@ -16,8 +16,6 @@ describe('installer options', () => {
     assert.equal(options.port, 0)
     assert.equal(options.start, 'systemd')
     assert.equal(options.dshVersion, '0.2.2-rc.3')
-    assert.equal(options.nodeVersion, '22.19.0')
-    assert.equal(options.autoInstallNode, true)
     assert.equal(options.strictHostKeyChecking, 'accept-new')
   })
 
@@ -37,7 +35,7 @@ describe('installer options', () => {
     assert.throws(() => parseArgs([...baseArgs, '--nope']), UsageError)
   })
 
-  it('documents the security model in help', () => {
+  it('docs the security model in help', () => {
     // Direct mode does write the key to the remote host, so help must not
     // claim the key is never copied; it has to name both modes instead.
     assert.doesNotMatch(HELP, /never copies model API keys/)
@@ -45,6 +43,20 @@ describe('installer options', () => {
     assert.match(HELP, /proxy/)
     assert.match(HELP, /DEEPSEEK_API_KEY/)
     assert.match(HELP, /127\.0\.0\.1/)
+  })
+
+  it('accepts a global prefix and refuses anything that is not a path', () => {
+    assert.equal(parseArgs(baseArgs).globalPrefix, '')
+    assert.equal(parseArgs([...baseArgs, '--global-prefix', '/opt/npm']).globalPrefix, '/opt/npm')
+    assert.equal(parseArgs([...baseArgs, '--global-prefix', '~/npm-global']).globalPrefix, '~/npm-global')
+    assert.equal(parseArgs([...baseArgs, '--global-prefix', '$HOME/npm-global']).globalPrefix, '$HOME/npm-global')
+    assert.equal(parseArgs([...baseArgs, '--global-prefix', '/opt/npm/']).globalPrefix, '/opt/npm')
+    // Anything else would reach the remote shell as an unvalidated word.
+    assert.throws(() => parseArgs([...baseArgs, '--global-prefix', 'npm-global']), UsageError)
+    assert.throws(() => parseArgs([...baseArgs, '--global-prefix', '~/*']), UsageError)
+    assert.throws(() => parseArgs([...baseArgs, '--global-prefix', '/opt/npm;rm']), UsageError)
+    assert.throws(() => parseArgs([...baseArgs, '--global-prefix', '~/']), UsageError)
+    assert.match(HELP, /--global-prefix/)
   })
 })
 
@@ -120,37 +132,38 @@ describe('scp binary pairing', () => {
 describe('bootstrap rendering', () => {
   const options = parseArgs(['plan', '--target', 'example-host', '--port', '8080'])
 
-  it('renders a systemd unit with runtime-expanded paths', () => {
+  it('renders a systemd unit that runs the global dsh', () => {
     const unit = renderSystemdUnit({
       profile: 'web',
       port: 8080,
-      installDir: '$HOME/.local/share/dsh-remote',
       dshHome: '$HOME/.dsh',
       dshVersion: '0.2.1-rc.2',
       pnpmVersion: '11.21.0',
-      nodeVersion: '22.19.0',
-      autoInstallNode: true,
       start: 'systemd',
       agentTarball: '/tmp/agent.tgz',
     })
     assert.match(unit, /Environment="DSH_HOME=\$DSH_HOME"/)
-    assert.match(unit, /PATH=.*:\$PATH/)
+    // The global prefix comes first, and the node bin dir follows because dsh
+    // runs under a `#!/usr/bin/env node` shebang.
+    assert.match(unit, /Environment="PATH=\$DSH_PREFIX\/bin:\$DSH_NODE_BIN_DIR:.*:\$PATH"/)
+    assert.match(unit, /Environment="DSH_REMOTE_DSH_VERSION=\$DSH_VERSION"/)
     assert.match(unit, /ExecStart="\$DSH_BIN" web --host 127\.0\.0\.1 --port \$PORT --no-open/)
   })
 
   it('renders proxy env only when configured', () => {
     const script = renderBootstrapScript({
-      profile: 'web', port: 0, installDir: '/opt/dsh', dshHome: '/srv/dsh',
-      dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', nodeVersion: '22.19.0', autoInstallNode: true, start: 'nohup',
+      profile: 'web', port: 0, dshHome: '/srv/dsh',
+      dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', start: 'nohup',
       agentTarball: '/tmp/a.tgz', modelBaseUrl: 'http://127.0.0.1:47821', modelApiKey: 'placeholder',
     })
-    assert.match(script, /DEEPSEEK_BASE_URL="\$MODEL_BASE_URL" DEEPSEEK_API_KEY="\$MODEL_API_KEY" nohup/)
+    assert.match(script, /DEEPSEEK_BASE_URL="\$MODEL_BASE_URL" DEEPSEEK_API_KEY="\$MODEL_API_KEY" DSH_REMOTE_DSH_VERSION=/)
+    assert.match(script, /nohup "\$DSH_BIN" web/)
   })
 
   it('exports a remote install proxy for bootstrap downloads', () => {
     const script = renderBootstrapScript({
-      profile: 'web', port: 0, installDir: '/opt/dsh', dshHome: '/srv/dsh',
-      dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', nodeVersion: '22.19.0', autoInstallNode: true, start: 'nohup',
+      profile: 'web', port: 0, dshHome: '/srv/dsh',
+      dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', start: 'nohup',
       agentTarball: '/tmp/a.tgz', proxyUrl: 'http://127.0.0.1:17890', noProxy: '127.0.0.1,localhost',
     })
     assert.match(script, /PROXY_URL='http:\/\/127\.0\.0\.1:17890'/)
@@ -161,8 +174,8 @@ describe('bootstrap rendering', () => {
 
   it('passes the runtime proxy into the systemd service environment', () => {
     const script = renderBootstrapScript({
-      profile: 'web', port: 0, installDir: '/opt/dsh', dshHome: '/srv/dsh',
-      dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', nodeVersion: '22.19.0', autoInstallNode: true, start: 'systemd',
+      profile: 'web', port: 0, dshHome: '/srv/dsh',
+      dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', start: 'systemd',
       agentTarball: '/tmp/a.tgz', proxyUrl: 'http://127.0.0.1:7891', noProxy: '127.0.0.1,localhost',
     })
     assert.match(script, /PROXY_ENV_LINES=/)
@@ -170,47 +183,102 @@ describe('bootstrap rendering', () => {
     assert.match(script, /\$\{PROXY_ENV_LINES\}/)
   })
 
-  it('stops the service and replaces DSH for a manual upgrade', () => {
+  it('stops the service and drops stale state before reinstalling', () => {
     const script = renderBootstrapScript({
-      profile: 'web', port: 0, installDir: '/opt/dsh', dshHome: '/srv/dsh',
-      dshVersion: '0.2.1-rc.3', pnpmVersion: '11.21.0', nodeVersion: '22.19.0',
-      autoInstallNode: true, upgrade: true, start: 'systemd', agentTarball: '/tmp/a.tgz',
+      profile: 'web', port: 0, dshHome: '/srv/dsh',
+      dshVersion: '0.2.1-rc.3', pnpmVersion: '11.21.0',
+      upgrade: true, start: 'systemd', agentTarball: '/tmp/a.tgz',
     })
     assert.match(script, /DSH_UPGRADE=1/)
     assert.match(script, /stopping the remote DSH service before upgrading/)
     assert.match(script, /systemctl --user stop dsh-remote-agent\.service/)
     assert.match(script, /rm -f "\$STATE_FILE"/)
-    assert.match(script, /if \[ "\$DSH_UPGRADE" -eq 1 \] \|\| \[ ! -x "\$DSH_BIN" \]; then/)
-    assert.match(script, /upgrading @deepseek-ai\/dsh to \$DSH_VERSION/)
-    assert.match(script, /npm install --prefix "\$INSTALL_DIR".*"@deepseek-ai\/dsh@\$DSH_VERSION"/)
   })
 
-  it('keeps a fresh install from replacing an existing DSH', () => {
-    const script = renderBootstrapScript({
-      profile: 'web', port: 0, installDir: '/opt/dsh', dshHome: '/srv/dsh',
-      dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', nodeVersion: '22.19.0',
-      autoInstallNode: true, start: 'nohup', agentTarball: '/tmp/a.tgz',
-    })
-    assert.match(script, /DSH_UPGRADE=0/)
-    assert.match(script, /if \[ "\$DSH_UPGRADE" -eq 1 \] \|\| \[ ! -x "\$DSH_BIN" \]; then/)
+  it('installs dsh and pnpm globally, unconditionally', () => {
+    // Every provisioning run pins both into the npm global prefix. There is no
+    // "already present" branch: a second location is exactly the divergence
+    // this change removes.
+    for (const script of [
+      renderBootstrapScript({
+        profile: 'web', port: 0, dshHome: '/srv/dsh',
+        dshVersion: '0.2.1-rc.3', pnpmVersion: '11.21.0',
+        upgrade: true, start: 'systemd', agentTarball: '/tmp/a.tgz',
+      }),
+      fromOptions(parseArgs(baseArgs), '/tmp/agent.tgz'),
+    ]) {
+      assert.match(script, /npm install --global --prefix "\$DSH_PREFIX".*"pnpm@\$PNPM_VERSION"/)
+      assert.match(script, /npm install --global --prefix "\$DSH_PREFIX".*"@deepseek-ai\/dsh@\$DSH_VERSION"/)
+      assert.match(script, /installing @deepseek-ai\/dsh@\$DSH_VERSION globally into \$DSH_PREFIX/)
+      // npm's own exit code (243 for EACCES) means nothing to an operator, so
+      // each install reports a documented cause instead.
+      assert.match(script, /if ! npm install --global --prefix "\$DSH_PREFIX"[^\n]*"pnpm@\$PNPM_VERSION"; then/)
+      assert.match(script, /if ! npm install --global --prefix "\$DSH_PREFIX"[^\n]*"@deepseek-ai\/dsh@\$DSH_VERSION"; then/)
+      assert.match(script, /point remoteGlobalPrefix at a directory you own/)
+      // No per-install-dir npm tree, and no conditional skip around pnpm.
+      assert.doesNotMatch(script, /npm install --prefix "\$INSTALL_DIR"/)
+      assert.doesNotMatch(script, /command -v pnpm/)
+      // The prefix has exactly one source: the option, or npm. A fallback
+      // location would put dsh somewhere the operator is not told about.
+      assert.doesNotMatch(script, /DSH_PREFIX=.*\.local/)
+      assert.doesNotMatch(script, /DSH_PREFIX=.*INSTALL_DIR/)
+    }
+  })
+
+  it('proves the install by running the command, not by inspecting paths', () => {
+    const script = fromOptions(parseArgs(baseArgs), '/tmp/agent.tgz')
+    // stdout only: a Node deprecation warning on stderr must not be mistaken
+    // for the version the check compares.
+    assert.match(script, /DSH_ACTUAL="\$\(PATH="\$DSH_NODE_BIN_DIR:\$PATH" "\$DSH_BIN" -V 2>\/dev\/null \| tail -n 1 \|\| true\)"/)
+    assert.match(script, /\[ "\$DSH_ACTUAL" != "\$DSH_VERSION" \]/)
+    assert.match(script, /exit 24/)
+    assert.match(script, /dsh-remote: dsh command is \$DSH_BIN/)
+    assert.match(script, /export PATH=\\"\$DSH_PREFIX\/bin:/)
+  })
+
+  it('installs the bundled agent where it was uploaded', () => {
+    const script = fromOptions(parseArgs(baseArgs), '/tmp/agent.tgz')
+    // The tarball is used in place; no second copy under INSTALL_DIR.
+    assert.doesNotMatch(script, /AGENT_ARTIFACT/)
+    assert.match(script, /plugin --profile "\$PROFILE" add "\$AGENT_TARBALL"/)
+    // No migration of a previous nested install: that layout is gone.
+    assert.doesNotMatch(script, /rm -rf -- "\$INSTALL_DIR\/node_modules"/)
+    assert.doesNotMatch(script, /Earlier releases nested DSH/)
+  })
+
+  it('never edits the remote dotfiles', () => {
+    assert.doesNotMatch(fromOptions(parseArgs(baseArgs), '/tmp/a.tgz'), /bashrc|zshrc|profile\.d|config\.fish/u)
   })
 
   it('renders the bootstrap script and never embeds a token', () => {
     const script = fromOptions(options, '/tmp/agent.tgz')
     assert.match(script, /set -euo pipefail/)
-    assert.match(script, /AUTO_INSTALL_NODE=1/)
     assert.match(script, /umask 077/)
     assert.match(script, /chmod 600 "\$UNIT_DIR\/dsh-remote-agent\.service"/)
-    assert.match(script, /NODE_VERSION='22\.19\.0'/)
-    assert.match(script, /install_node\(\)/)
-    assert.match(script, /SHASUMS256\.txt/)
-    assert.match(script, /--strip-components=1/)
-    assert.match(script, /npm install --prefix "\$INSTALL_DIR"/)
-    assert.match(script, /cp -f "\$AGENT_TARBALL" "\$AGENT_ARTIFACT"/)
-    assert.match(script, /plugin --profile "\$PROFILE" add "\$AGENT_ARTIFACT"/)
+    assert.match(script, /npm install --global --prefix "\$DSH_PREFIX"/)
+    assert.match(script, /plugin --profile "\$PROFILE" add "\$AGENT_TARBALL"/)
     assert.match(script, /systemd/)
     assert.doesNotMatch(script, /token/i)
     assert.match(script, /remote-agent\/agent\.json/)
+  })
+
+  it('checks Node.js instead of installing it', () => {
+    const script = fromOptions(parseArgs(baseArgs), '/tmp/agent.tgz')
+    // The script must never download or unpack a runtime: choosing a Node
+    // version is the operator's decision, and a second one is how a host ends
+    // up with two runtimes fighting over one command.
+    assert.doesNotMatch(script, /install_node/)
+    assert.doesNotMatch(script, /nodejs\.org/)
+    assert.doesNotMatch(script, /SHASUMS256/)
+    assert.doesNotMatch(script, /AUTO_INSTALL_NODE/)
+    assert.doesNotMatch(script, /--strip-components/)
+    assert.doesNotMatch(script, /NODE_VERSION/)
+    // Detection stays, with actionable wording.
+    assert.match(script, /command -v node/)
+    assert.match(script, /Node\.js was not found through this account's shell/)
+    assert.match(script, /exit 21/)
+    assert.match(script, /exit 22/)
+    assert.match(script, /node ready/)
   })
 
   it('prefers the scoped npm agent and keeps the bundled fallback', () => {
@@ -231,6 +299,8 @@ describe('bootstrap rendering', () => {
   it('supports nohup and none start modes', () => {
     const nohup = fromOptions(parseArgs(['plan', '--target', 'example-host', '--start', 'nohup']), '/tmp/agent.tgz')
     assert.match(nohup, /nohup "\$DSH_BIN" web/)
+    // The nohup path needs node on PATH for dsh's `#!/usr/bin/env node` shebang.
+    assert.match(nohup, /PATH="\$DSH_PREFIX\/bin:\$DSH_NODE_BIN_DIR:\$PATH"/)
     assert.doesNotMatch(nohup, /DEEPSEEK_BASE_URL=/)
     const none = fromOptions(parseArgs(['plan', '--target', 'example-host', '--start', 'none']), '/tmp/agent.tgz')
     assert.match(none, /start mode none/)
@@ -249,12 +319,9 @@ describe('bootstrap rendering', () => {
     const script = renderBootstrapScript({
       profile: 'remote',
       port: 9090,
-      installDir: '/opt/dsh',
       dshHome: '/srv/dsh-home',
       dshVersion: '0.2.1-rc.2',
       pnpmVersion: '11.21.0',
-      nodeVersion: '22.19.0',
-      autoInstallNode: true,
       start: 'systemd',
       agentTarball: '/tmp/agent.tgz',
     })
@@ -282,12 +349,9 @@ describe('bootstrap rendering', () => {
     assert.match(renderBootstrapScript({
       profile: 'web',
       port: 7731,
-      installDir: '/opt/dsh',
       dshHome: '/srv/dsh',
       dshVersion: '0.2.1-rc.2',
       pnpmVersion: '11.21.0',
-      nodeVersion: '22.19.0',
-      autoInstallNode: true,
       start: 'nohup',
       agentTarball: '/tmp/a.tgz',
     }), /PORT='7731'/)

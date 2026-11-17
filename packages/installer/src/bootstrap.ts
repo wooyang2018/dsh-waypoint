@@ -15,14 +15,19 @@ import type { InstallerOptions, StartMode } from './options.ts'
 export interface BootstrapOptions {
   readonly profile: string
   readonly port: number
-  readonly installDir: string
   readonly dshHome: string
   readonly dshVersion: string
   readonly pnpmVersion: string
-  readonly nodeVersion: string
-  readonly autoInstallNode: boolean
-  /** Replace an existing DSH installation instead of only installing when missing. */
+  /** Stop the running service and drop its state before reinstalling. */
   readonly upgrade?: boolean
+  /**
+   * npm global prefix that owns the remote `dsh` command.
+   *
+   * Empty means "ask npm": `npm prefix -g` is the only other source. There is
+   * deliberately no fallback location — an unwritable prefix must fail loudly
+   * instead of installing DSH somewhere the operator will not find later.
+   */
+  readonly globalPrefix?: string
   readonly start: StartMode
   readonly agentTarball: string
   /** Exact npm package spec for the remote agent, if it should be tried first. */
@@ -66,10 +71,12 @@ export function renderSystemdUnit(options: BootstrapOptions): string {
     '[Service]',
     'Type=simple',
     'Environment="DSH_HOME=$DSH_HOME"',
-    // $PATH is expanded by the bootstrap shell after nodePathPrelude(), so the
-    // systemd unit sees the discovered nvm/Volta/fnm Node bin directory too.
-    'Environment="PATH=$INSTALL_DIR/node/bin:$INSTALL_DIR/node_modules/.bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
+    // $PATH is expanded by the bootstrap shell after nodePathPrelude() and
+    // globalPrefixPrelude(), so the unit sees the discovered nvm/Volta/fnm Node
+    // bin directory and the npm global prefix that owns `dsh`.
+    'Environment="PATH=$DSH_PREFIX/bin:$DSH_NODE_BIN_DIR:/usr/local/bin:/usr/bin:/bin:$PATH"',
     '${PROXY_ENV_LINES}',
+    'Environment="DSH_REMOTE_DSH_VERSION=$DSH_VERSION"',
     ...options.modelBaseUrl === undefined ? [] : ['Environment="DEEPSEEK_BASE_URL=$MODEL_BASE_URL"'],
     ...options.modelApiKey === undefined ? [] : ['Environment="DEEPSEEK_API_KEY=$MODEL_API_KEY"'],
     'ExecStart="$DSH_BIN" web --host 127.0.0.1 --port $PORT --no-open',
@@ -83,9 +90,62 @@ export function renderSystemdUnit(options: BootstrapOptions): string {
   ].join('\n')
 }
 
-/** Shell prelude that finds an existing non-interactive Node installation. */
+/**
+ * Shell prelude that adopts the Node.js the account's own shell resolves.
+ *
+ * A non-interactive SSH command sees a different `node` than the operator does
+ * whenever a version manager is involved: nvm, fnm and Volta all prepend their
+ * bin directory from a startup file that only interactive/logged-in shells
+ * read. A bare `/usr/bin/node` may exist and still be the wrong one — on such a
+ * host the installer would pick the system Node, compute a system-wide npm
+ * prefix, and install `dsh` somewhere the operator's shell never looks.
+ *
+ * So the account's real shell is asked first, interactively, and its answer
+ * wins. The candidate walk below is only a fallback for hosts where no shell
+ * profile defines a Node.js at all.
+ *
+ * Not `export PATH` unconditionally: a shell that answers nothing must not
+ * leave a half-built PATH behind.
+ */
 export function nodePathPrelude(): string {
-  return `if ! command -v node >/dev/null 2>&1; then
+  return `find_login_shell() {
+  LOGIN_SHELL="\${SHELL:-}"
+  if [ -z "$LOGIN_SHELL" ] || [ ! -x "$LOGIN_SHELL" ]; then
+    if command -v getent >/dev/null 2>&1; then
+      LOGIN_SHELL="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7)"
+    fi
+  fi
+  case "$LOGIN_SHELL" in
+    */bash|*/zsh|*/sh|*/dash|*/ksh) : ;;
+    *) LOGIN_SHELL=/bin/sh ;;
+  esac
+}
+
+# Ask the operator's shell what it would run. \`-lic\` (login + interactive) is
+# what actually reads nvm/fnm/Volta blocks; \`-lc\` alone misses zsh setups.
+login_shell_node() {
+  LOGIN_NODE=""
+  if [ -x "$LOGIN_SHELL" ]; then
+    LOGIN_NODE="$(timeout 10 env -i HOME="$HOME" PATH="$PATH" TERM=dumb \\
+      "$LOGIN_SHELL" -lic 'command -v node' 2>/dev/null | tail -n 1 || true)"
+    if [ -z "$LOGIN_NODE" ]; then
+      LOGIN_NODE="$(timeout 10 env -i HOME="$HOME" PATH="$PATH" TERM=dumb \\
+        "$LOGIN_SHELL" -lc 'command -v node' 2>/dev/null | tail -n 1 || true)"
+    fi
+  fi
+  case "$LOGIN_NODE" in
+    /*/node) [ -x "$LOGIN_NODE" ] && PATH="$(dirname "$LOGIN_NODE"):$PATH" ;;
+  esac
+}
+
+if command -v timeout >/dev/null 2>&1; then :; else
+  # BusyBox-less hosts may lack timeout; run without the guard rather than fail.
+  timeout() { shift; "$@"; }
+fi
+find_login_shell
+login_shell_node
+
+if ! command -v node >/dev/null 2>&1; then
   for candidate in \\
     "$HOME/.volta/bin" \\
     "$HOME/.local/share/fnm" \\
@@ -103,102 +163,37 @@ export function nodePathPrelude(): string {
   # would abort this script before the Node auto-install step runs.
   NODE_BIN_DIR="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1 || true)"
   if [ -n "$NODE_BIN_DIR" ]; then PATH="$NODE_BIN_DIR:$PATH"; fi
-  if ! command -v node >/dev/null 2>&1; then
-    LOGIN_SHELL="\${SHELL:-}"
-    if command -v getent >/dev/null 2>&1; then
-      LOGIN_SHELL="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7)"
-    fi
-    case "$LOGIN_SHELL" in
-      */bash|*/zsh|*/sh|*/dash|*/ksh)
-        NODE_BIN="$(env -i HOME="$HOME" PATH="$PATH" "$LOGIN_SHELL" -lc 'command -v node' 2>/dev/null | tail -n 1 || true)"
-        if [ -n "$NODE_BIN" ] && [ -x "$NODE_BIN" ]; then PATH="$(dirname "$NODE_BIN"):$PATH"; fi
-        ;;
-    esac
+  if ! command -v node >/dev/null 2>&1 && [ -x "$LOGIN_SHELL" ]; then
+    login_shell_node
   fi
-  export PATH
-fi`
+fi
+export PATH`
 }
 
-/** Shell function that installs the pinned official Node.js tarball without root. */
-export function nodeInstallFunction(): string {
-  return `install_node() {
-  case "$(uname -s)" in
-    Linux) NODE_OS=linux ;;
-    Darwin) NODE_OS=darwin ;;
-    *) echo "dsh-remote: unsupported OS for automatic Node.js install: $(uname -s)" >&2; return 1 ;;
-  esac
-  case "$(uname -m)" in
-    x86_64|amd64) NODE_ARCH=x64 ;;
-    aarch64|arm64) NODE_ARCH=arm64 ;;
-    armv7l) NODE_ARCH=armv7l ;;
-    *) echo "dsh-remote: unsupported architecture for automatic Node.js install: $(uname -m)" >&2; return 1 ;;
-  esac
-
-  NODE_INSTALL_ROOT="$INSTALL_DIR/node"
-  NODE_DOWNLOAD="$INSTALL_DIR/.node-download.$$"
-  NODE_ARCHIVE="node-v$NODE_VERSION-$NODE_OS-$NODE_ARCH.tar.gz"
-  NODE_URL="https://nodejs.org/dist/v$NODE_VERSION"
-  rm -rf "$NODE_DOWNLOAD"
-  mkdir -p "$NODE_DOWNLOAD"
-  echo "dsh-remote: downloading Node.js $NODE_VERSION ($NODE_OS-$NODE_ARCH)"
-  if command -v curl >/dev/null 2>&1; then
-    if ! curl -fsSL --retry 3 "$NODE_URL/SHASUMS256.txt" -o "$NODE_DOWNLOAD/SHASUMS256.txt" \\
-      || ! curl -fsSL --retry 3 "$NODE_URL/$NODE_ARCHIVE" -o "$NODE_DOWNLOAD/$NODE_ARCHIVE"; then
-      echo "dsh-remote: could not download Node.js from $NODE_URL" >&2
-      rm -rf "$NODE_DOWNLOAD"
-      return 1
-    fi
-  elif command -v wget >/dev/null 2>&1; then
-    if ! wget -q -O "$NODE_DOWNLOAD/SHASUMS256.txt" "$NODE_URL/SHASUMS256.txt" \\
-      || ! wget -q -O "$NODE_DOWNLOAD/$NODE_ARCHIVE" "$NODE_URL/$NODE_ARCHIVE"; then
-      echo "dsh-remote: could not download Node.js from $NODE_URL" >&2
-      rm -rf "$NODE_DOWNLOAD"
-      return 1
-    fi
-  else
-    echo "dsh-remote: curl or wget is required to install Node.js automatically" >&2
-    rm -rf "$NODE_DOWNLOAD"
-    return 1
-  fi
-
-  EXPECTED="$(awk -v name="$NODE_ARCHIVE" '$2 == name { print $1; exit }' "$NODE_DOWNLOAD/SHASUMS256.txt")"
-  if [ -z "$EXPECTED" ]; then
-    echo "dsh-remote: Node.js checksum is missing from SHASUMS256.txt" >&2
-    rm -rf "$NODE_DOWNLOAD"
-    return 1
-  fi
-  if command -v sha256sum >/dev/null 2>&1; then
-    ACTUAL="$(sha256sum "$NODE_DOWNLOAD/$NODE_ARCHIVE" | awk '{ print $1 }')"
-  elif command -v shasum >/dev/null 2>&1; then
-    ACTUAL="$(shasum -a 256 "$NODE_DOWNLOAD/$NODE_ARCHIVE" | awk '{ print $1 }')"
-  else
-    echo "dsh-remote: sha256sum or shasum is required to verify Node.js" >&2
-    rm -rf "$NODE_DOWNLOAD"
-    return 1
-  fi
-  if [ "$EXPECTED" != "$ACTUAL" ]; then
-    echo "dsh-remote: Node.js checksum mismatch" >&2
-    rm -rf "$NODE_DOWNLOAD"
-    return 1
-  fi
-  if ! command -v tar >/dev/null 2>&1; then
-    echo "dsh-remote: tar is required to install Node.js automatically" >&2
-    rm -rf "$NODE_DOWNLOAD"
-    return 1
-  fi
-
-  rm -rf "$NODE_INSTALL_ROOT"
-  mkdir -p "$NODE_INSTALL_ROOT"
-  if ! tar -xzf "$NODE_DOWNLOAD/$NODE_ARCHIVE" -C "$NODE_INSTALL_ROOT" --strip-components=1; then
-    echo "dsh-remote: could not extract Node.js" >&2
-    rm -rf "$NODE_DOWNLOAD" "$NODE_INSTALL_ROOT"
-    return 1
-  fi
-  rm -rf "$NODE_DOWNLOAD"
-  PATH="$NODE_INSTALL_ROOT/bin:$PATH"
-  export PATH
-  echo "dsh-remote: installed Node.js $NODE_VERSION at $NODE_INSTALL_ROOT"
-}`
+/**
+ * Shell prelude that pins the npm global prefix which owns the `dsh` command.
+ *
+ * There is exactly one rule: an explicit option wins, otherwise npm answers.
+ * A second candidate location would install DSH somewhere the operator will
+ * not look, and the symlink that "worked" once would silently diverge from the
+ * command they type later.
+ *
+ * Runs after {@link nodePathPrelude} because `npm prefix -g` needs node/npm.
+ */
+export function globalPrefixPrelude(configured?: string): string {
+  const trimmed = configured?.trim() ?? ''
+  const resolve = trimmed === ''
+    ? `PREFIX_OUTPUT="$(npm prefix -g 2>/dev/null | tr -d '\\r' | tail -n 1 || true)"
+if [ -z "$PREFIX_OUTPUT" ]; then
+  echo "dsh-remote: could not read the npm global prefix; 'npm prefix -g' returned nothing" >&2
+  exit 24
+fi
+DSH_PREFIX="$PREFIX_OUTPUT"`
+    : `DSH_PREFIX=${shellPath(trimmed)}`
+  return `${resolve}
+DSH_BIN="$DSH_PREFIX/bin/dsh"
+DSH_NODE_BIN_DIR="$(dirname "$(command -v node)")"
+export DSH_PREFIX DSH_BIN DSH_NODE_BIN_DIR`
 }
 
 /** Render the complete bootstrap script. */
@@ -208,19 +203,15 @@ export function renderBootstrapScript(options: BootstrapOptions): string {
 # dsh-remote installer bootstrap — generated, no secrets embedded.
 set -euo pipefail
 
-INSTALL_DIR=${shellPath(options.installDir)}
 DSH_HOME=${shellPath(options.dshHome)}
 PROFILE=${shellLiteral(options.profile)}
 PORT=${shellLiteral(String(options.port))}
 DSH_VERSION=${shellLiteral(options.dshVersion)}
 PNPM_VERSION=${shellLiteral(options.pnpmVersion)}
-NODE_VERSION=${shellLiteral(options.nodeVersion)}
-AUTO_INSTALL_NODE=${options.autoInstallNode ? '1' : '0'}
 DSH_UPGRADE=${options.upgrade === true ? '1' : '0'}
 AGENT_TARBALL=${shellLiteral(options.agentTarball)}
 AGENT_NPM_SPEC=${options.agentPackageSpec === undefined ? "''" : shellLiteral(options.agentPackageSpec)}
-AGENT_ARTIFACT_DIR="$INSTALL_DIR/artifacts"
-AGENT_ARTIFACT="$AGENT_ARTIFACT_DIR/$(basename "$AGENT_TARBALL")"
+GLOBAL_PREFIX=${options.globalPrefix === undefined || options.globalPrefix.trim() === '' ? "''" : shellLiteral(options.globalPrefix.trim())}
 MODEL_BASE_URL=${options.modelBaseUrl === undefined ? "''" : shellLiteral(options.modelBaseUrl)}
 MODEL_API_KEY=${options.modelApiKey === undefined ? "''" : shellLiteral(options.modelApiKey)}
 PROXY_URL=${options.proxyUrl === undefined ? "''" : shellLiteral(options.proxyUrl)}
@@ -229,7 +220,7 @@ STATE_FILE="$DSH_HOME/remote-agent/agent.json"
 WAIT_FOR_STATE=${options.start === 'none' ? 0 : 1}
 
 export DSH_HOME
-mkdir -p "$INSTALL_DIR" "$DSH_HOME/remote-agent"
+mkdir -p "$DSH_HOME/remote-agent"
 echo "dsh-remote: preparing remote install"
 if [ -z "$PROXY_URL" ]; then
   # Reuse a proxy already configured by the account's actual login shell.
@@ -297,16 +288,13 @@ fi
 
 ${nodePathPrelude()}
 
-${nodeInstallFunction()}
-if ! command -v node >/dev/null 2>&1 \
-  || ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)' >/dev/null 2>&1 \
-  || ! command -v npm >/dev/null 2>&1; then
-  if [ "$AUTO_INSTALL_NODE" -eq 1 ]; then
-    install_node || exit 25
-  fi
-fi
+# Node.js is a prerequisite, never something this script installs. Downloading
+# and unpacking a runtime is the kind of change an operator should make
+# deliberately, and a silently chosen version is exactly what leaves two
+# runtimes fighting over one command.
 if ! command -v node >/dev/null 2>&1; then
-  echo "dsh-remote: Node.js is required but not on PATH; rerun with automatic Node.js installation enabled" >&2
+  echo "dsh-remote: Node.js was not found through this account's shell." >&2
+  echo "dsh-remote: install Node.js 22.19+ (nvm/fnm/Volta are all detected) and retry." >&2
   exit 21
 fi
 if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)'; then
@@ -317,13 +305,13 @@ if ! command -v npm >/dev/null 2>&1; then
   echo "dsh-remote: npm is required; install a Node.js distribution that includes npm" >&2
   exit 23
 fi
-echo "dsh-remote: node ready"
+echo "dsh-remote: node ready ($(node --version))"
 
-export PATH="$INSTALL_DIR/node_modules/.bin:$PATH"
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "dsh-remote: installing pnpm@$PNPM_VERSION into $INSTALL_DIR"
-  npm install --prefix "$INSTALL_DIR" --no-audit --no-fund "pnpm@$PNPM_VERSION"
-fi
+# Everything below installs exactly once, globally. There is no per-case
+# branch: an unwritable prefix must fail here instead of quietly landing the
+# command somewhere the operator will not find it later.
+${globalPrefixPrelude(options.globalPrefix?.trim())}
+export PATH="$DSH_PREFIX/bin:$PATH"
 
 if [ "$DSH_UPGRADE" -eq 1 ]; then
   echo "dsh-remote: stopping the remote DSH service before upgrading"
@@ -339,19 +327,36 @@ if [ "$DSH_UPGRADE" -eq 1 ]; then
   rm -f "$STATE_FILE"
 fi
 
-DSH_BIN="$INSTALL_DIR/node_modules/.bin/dsh"
-if [ "$DSH_UPGRADE" -eq 1 ] || [ ! -x "$DSH_BIN" ]; then
-  if [ "$DSH_UPGRADE" -eq 1 ]; then
-    echo "dsh-remote: upgrading @deepseek-ai/dsh to $DSH_VERSION into $INSTALL_DIR"
-  else
-    echo "dsh-remote: installing @deepseek-ai/dsh@$DSH_VERSION into $INSTALL_DIR"
-  fi
-  npm install --prefix "$INSTALL_DIR" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
-fi
-if [ ! -x "$DSH_BIN" ]; then
-  echo "dsh-remote: dsh installation did not produce $DSH_BIN" >&2
+echo "dsh-remote: installing pnpm@$PNPM_VERSION globally into $DSH_PREFIX"
+if ! npm install --global --prefix "$DSH_PREFIX" --no-audit --no-fund "pnpm@$PNPM_VERSION"; then
+  echo "dsh-remote: npm could not install pnpm into $DSH_PREFIX" >&2
+  echo "dsh-remote: point remoteGlobalPrefix at a directory you own (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
   exit 24
 fi
+
+echo "dsh-remote: installing @deepseek-ai/dsh@$DSH_VERSION globally into $DSH_PREFIX"
+if ! npm install --global --prefix "$DSH_PREFIX" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"; then
+  echo "dsh-remote: npm could not install @deepseek-ai/dsh into $DSH_PREFIX" >&2
+  echo "dsh-remote: point remoteGlobalPrefix at a directory you own (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
+  exit 24
+fi
+
+# The only sound proof of a usable install is the command answering with the
+# version that was just requested. Two real causes are worth naming: dsh runs
+# under a "#!/usr/bin/env node" shebang, and its manifest requires a newer
+# Node.js than the shell prelude's minimum.
+# Only stdout is compared: a Node.js deprecation warning on stderr would
+# otherwise become the "last line" and be reported as a version mismatch.
+DSH_ACTUAL="$(PATH="$DSH_NODE_BIN_DIR:$PATH" "$DSH_BIN" -V 2>/dev/null | tail -n 1 || true)"
+if [ "$DSH_ACTUAL" != "$DSH_VERSION" ]; then
+  echo "dsh-remote: $DSH_BIN did not report $DSH_VERSION (got: \${DSH_ACTUAL:-no output})" >&2
+  echo "dsh-remote: check that node is on PATH for this account and that it satisfies the @deepseek-ai/dsh engines range (found $(node --version 2>/dev/null || echo none))" >&2
+  # Echo whatever the command actually printed, so the cause is visible once.
+  PATH="$DSH_NODE_BIN_DIR:$PATH" "$DSH_BIN" -V || true
+  exit 24
+fi
+echo "dsh-remote: dsh command is $DSH_BIN"
+echo "dsh-remote: to run dsh in your own shell: export PATH=\\"$DSH_PREFIX/bin:\\$PATH\\""
 
 PROFILE_DIR="$DSH_HOME/profiles/$PROFILE"
 LEGACY_CHANGED=0
@@ -396,13 +401,11 @@ if [ "$LEGACY_CHANGED" -eq 1 ]; then
 fi
 
 echo "dsh-remote: adding plugin to profile $PROFILE"
-mkdir -p "$AGENT_ARTIFACT_DIR"
-cp -f "$AGENT_TARBALL" "$AGENT_ARTIFACT"
 if [ -n "$AGENT_NPM_SPEC" ] && "$DSH_BIN" plugin --profile "$PROFILE" add "$AGENT_NPM_SPEC"; then
   echo "dsh-remote: installed agent from npm"
 else
   echo "dsh-remote: npm agent unavailable; installing the bundled agent" >&2
-  "$DSH_BIN" plugin --profile "$PROFILE" add "$AGENT_ARTIFACT"
+  "$DSH_BIN" plugin --profile "$PROFILE" add "$AGENT_TARBALL"
 fi
 
 echo "dsh-remote: starting dsh web"
@@ -468,7 +471,10 @@ function renderNohup(options: BootstrapOptions): string {
   kill "$(cat "$DSH_HOME/remote-agent/web.pid")" 2>/dev/null || true
 fi
 echo "dsh-remote: starting dsh web under nohup"
-${modelEnv}nohup "$DSH_BIN" web --host 127.0.0.1 --port "$PORT" --no-open > "$DSH_HOME/remote-agent/web.log" 2>&1 &
+# $DSH_NODE_BIN_DIR is explicit because dsh runs under a "#!/usr/bin/env node"
+# shebang, and a non-login SSH session need not have that directory on PATH.
+${modelEnv}DSH_REMOTE_DSH_VERSION="$DSH_VERSION" PATH="$DSH_PREFIX/bin:$DSH_NODE_BIN_DIR:$PATH" \\
+  nohup "$DSH_BIN" web --host 127.0.0.1 --port "$PORT" --no-open > "$DSH_HOME/remote-agent/web.log" 2>&1 &
 echo $! > "$DSH_HOME/remote-agent/web.pid"
 echo "dsh-remote: started dsh web under nohup (pid $(cat "$DSH_HOME/remote-agent/web.pid"))"`
 }
@@ -478,13 +484,11 @@ export function fromOptions(options: InstallerOptions, agentTarball: string): st
   return renderBootstrapScript({
     profile: options.profile,
     port: options.port,
-    installDir: options.installDir,
     dshHome: options.dshHome,
     dshVersion: options.dshVersion,
     pnpmVersion: options.pnpmVersion,
-    nodeVersion: options.nodeVersion,
-    autoInstallNode: options.autoInstallNode,
     start: options.start,
+    ...options.globalPrefix === undefined ? {} : { globalPrefix: options.globalPrefix },
     ...options.agentPackageSpec === undefined ? {} : { agentPackageSpec: options.agentPackageSpec },
     agentTarball,
   })

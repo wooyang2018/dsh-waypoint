@@ -34,12 +34,11 @@ export interface ProvisionRemoteOptions {
    * published state file instead, so two hosts never collide on a fixed port.
    */
   readonly port?: number
-  readonly installDir: string
   readonly dshHome: string
   readonly dshVersion: string
   readonly pnpmVersion: string
-  readonly nodeVersion: string
-  readonly autoInstallNode: boolean
+  /** npm global prefix that owns the remote `dsh`; empty asks `npm prefix -g`. */
+  readonly globalPrefix?: string
   /** Replace the installed DSH runtime instead of only installing when missing. */
   readonly upgrade?: boolean
   readonly start: StartMode
@@ -80,12 +79,10 @@ export async function provisionRemoteAgent(options: ProvisionRemoteOptions): Pro
   const script = renderBootstrapScript({
     profile: options.profile,
     port: options.port ?? 0,
-    installDir: options.installDir,
     dshHome: options.dshHome,
     dshVersion: options.dshVersion,
     pnpmVersion: options.pnpmVersion,
-    nodeVersion: options.nodeVersion,
-    autoInstallNode: options.autoInstallNode,
+    ...options.globalPrefix === undefined ? {} : { globalPrefix: options.globalPrefix },
     upgrade: options.upgrade === true,
     start: options.start,
     agentTarball: remoteTarball,

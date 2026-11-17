@@ -20,8 +20,10 @@ range is permissive for installation only; it is not a support guarantee.
 
 - Durable host registry at `$DSH_HOME/remote/hosts.json` (mode `0600`).
 - SSH discovery of the remote agent's private state file.
-- **Plugin-owned provisioning**: uploads the bundled `dsh-remote-agent` tarball, installs pnpm/DSH
-  when missing, starts remote `dsh web`, waits for it, and connects. No separate installer command.
+- **Plugin-owned provisioning**: uploads the bundled `dsh-remote-agent` tarball, installs `pnpm` and
+  `@deepseek-ai/dsh` globally into the remote npm prefix (`npm prefix -g` unless `remoteGlobalPrefix`
+  says otherwise), starts remote `dsh web` from that same command, waits for it, and connects. No
+  separate installer command, and no second `dsh` on the remote machine.
 - One loopback SSH tunnel per host, health checks, exponential backoff, manual reconnect.
 - Default direct key mode: the resolved local key is copied into the remote service environment.
 - Optional reverse SSH forward and **local model credential proxy** for key-local deployments.
@@ -32,7 +34,8 @@ range is permissive for installation only; it is not a support guarantee.
   `uiWorkspace.openSession` — not a popup.
 - Sidebar **+** menu to create a workspace locally (native flow) or on a connected remote host.
 - Agent-backed remote workspace file listing/preview over the SSH tunnel.
-- Automatic remote Node.js discovery/install (nvm, Volta, fnm, Bun, asdf, mise, Nix, Homebrew, login shell; verified Node tarball fallback).
+- Remote Node.js discovery through the account's shell (nvm, Volta, fnm, Bun, asdf, mise, Nix,
+  Homebrew). Detection only: the plugin never installs a runtime, and refuses to proceed without one.
 - Chinese / English client copy follows the DSH locale service.
 - Remote agent PTY terminals for mirror Sessions over the SSH tunnel; local Sessions keep the local terminal.
 - Remote approval questions bridged into the normal local approval UI.
@@ -85,16 +88,19 @@ finishes.
 
 ## Boundaries
 
-- The remote browser UI is intentionally not exposed by default; the remote API-remotes carrier is
-  disabled so approvals reach the native local UI.
+- The remote browser UI stays available: the remote agent keeps the `dsh-api-remotes` carrier enabled
+  and its approval bridge registers with `prepend`, so mirrored approvals still reach the native local
+  UI. Open the remote Web UI from the host card when you need it.
 - Sessions over `mirrorMaxEvents` are not mirrored.
 - On plugin restart, old mirrors are archived and recreated.
 
 ## Tools
 
 `remote_hosts_list`, `remote_host_add`, `remote_host_connect`, `remote_host_provision`,
-`remote_workspace_add`, `remote_workspaces_list`, `remote_session_create`, `remote_sessions_list`,
-`remote_session_prompt`, `remote_session_snapshot`, `remote_session_cancel`.
+`remote_host_restart`, `remote_workspace_add`, `remote_workspaces_list`, `remote_session_create`,
+`remote_sessions_list`, `remote_session_prompt`, `remote_session_snapshot`, `remote_session_cancel`.
+`remote_host_add`, `remote_host_connect`, `remote_host_provision`, and `remote_host_restart` ask for
+approval before running.
 
 ## Configuration
 

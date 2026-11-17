@@ -30,7 +30,9 @@
         # One-click remote provisioning.
         autoProvision: true
         remoteDshHome: ~/.dsh
-        remoteInstallDir: ~/.local/share/dsh-remote
+        # Global npm prefix that owns the remote `dsh` command.
+        # Empty means `npm prefix -g`; there is no fallback location.
+        remoteGlobalPrefix: ''
         # Empty means use the local DSH runtime version.
         remoteDshVersion: ''
         remotePnpmVersion: 11.21.0

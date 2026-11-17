@@ -81,7 +81,6 @@ describe('installer failure surfacing', () => {
     assert.equal(keyFor(22), 'error.agentInstallNodeOutdated')
     assert.equal(keyFor(23), 'error.agentInstallNoNpm')
     assert.equal(keyFor(24), 'error.agentInstallDshMissing')
-    assert.equal(keyFor(25), 'error.agentInstallNodeDownloadFailed')
   })
 
   it('keeps the generic message for anything unmapped', () => {

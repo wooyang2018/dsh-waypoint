@@ -14,11 +14,18 @@ node packages/installer/lib/cli.js pack
 
 The bootstrap script:
 
-1. finds Node.js (including nvm/Volta/fnm/Bun installations) and checks 22.19+;
-2. installs pnpm and the pinned `@deepseek-ai/dsh` into `--install-dir` when missing;
-3. adds the agent tarball to the chosen remote profile;
-4. starts `dsh web` on `127.0.0.1` using a systemd user unit or `nohup`;
-5. waits for the agent state file and prints the port.
+1. detects Node.js through the account's own shell (nvm/Volta/fnm/Bun/asdf/mise/Nix/Homebrew), checks
+   22.19+, and **never installs one**: a missing or too-old runtime stops with `exit 21`/`exit 22`;
+2. resolves the npm global prefix (`--global-prefix`, else `npm prefix -g`) and installs `pnpm` and the
+   pinned `@deepseek-ai/dsh` into it, on every run;
+3. proves the install by running `dsh -V` and comparing it with the requested version;
+4. adds the agent tarball to the chosen remote profile;
+5. starts `dsh web` on `127.0.0.1` using that same global `dsh`, via a systemd user unit or `nohup`;
+6. waits for the agent state file and prints the port.
+
+There is no fallback prefix: an unwritable `npm prefix -g` fails the install with npm's own error rather
+than placing `dsh` where the operator will not look. Nothing is installed outside that prefix and the
+remote profile.
 
 The installer itself never resolves credentials. The local plugin owns that decision and has two
 modes:

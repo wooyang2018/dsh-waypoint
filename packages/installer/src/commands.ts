@@ -130,18 +130,64 @@ export async function commandInstall(options: InstallerOptions): Promise<string>
 export async function commandDoctor(options: InstallerOptions): Promise<string> {
   const target = requireTarget(options)
   const statePath = remoteStatePath(options)
+  const prefix = (options.globalPrefix ?? '').trim()
+  // Same single rule the bootstrap uses, minus the failure: doctor only reports.
+  const resolvePrefix = prefix === ''
+    ? `DSH_PREFIX="$(npm prefix -g 2>/dev/null | tr -d '\\r' | tail -n 1 || true)"`
+    : `DSH_PREFIX=${shellPath(prefix)}`
   const script = `set -u
 ${nodePathPrelude()}
 echo "host=$(hostname 2>/dev/null || true)"
 echo "home=$HOME"
 echo "node=$(command -v node 2>/dev/null || true)"
 echo "node_version=$(node --version 2>/dev/null || true)"
+echo "node_ok=$([ -n "$(command -v node 2>/dev/null)" ] && node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>22||(a===22&&b>=19)?0:1)' 2>/dev/null && echo yes || echo no)"
 echo "npm=$(command -v npm 2>/dev/null || true)"
 echo "pnpm=$(command -v pnpm 2>/dev/null || true)"
-echo "dsh=$(command -v dsh 2>/dev/null || true)"
 echo "systemctl=$(command -v systemctl 2>/dev/null || true)"
-echo "install_dir_present=$(test -d ${shellPath(options.installDir)} && echo yes || echo no)"
 echo "agent_state=$(test -s ${statePath} && echo present || echo missing)"
+# npm owns the prefix; doctor reports it and never creates it.
+echo "npm_prefix_g=$(npm prefix -g 2>/dev/null | tr -d '\\r' | tail -n 1 || true)"
+${resolvePrefix}
+NODE_DIR="$(dirname "$(command -v node 2>/dev/null || echo /nonexistent/node)")"
+echo "global_prefix=$DSH_PREFIX"
+# npm writes into <prefix>/lib/node_modules and <prefix>/bin, not the prefix
+# root, so the root's own mode says nothing. Report the two real targets, and
+# fall back to the prefix only when neither exists yet.
+GLOBAL_MODULES="$DSH_PREFIX/lib/node_modules"
+GLOBAL_BIN="$DSH_PREFIX/bin"
+if [ -d "$GLOBAL_MODULES" ]; then
+  MODULES_WRITABLE="$(test -w "$GLOBAL_MODULES" && echo yes || echo no)"
+else
+  MODULES_WRITABLE="$(test -w "$DSH_PREFIX" && echo yes || echo no)"
+fi
+if [ -d "$GLOBAL_BIN" ]; then
+  BIN_WRITABLE="$(test -w "$GLOBAL_BIN" && echo yes || echo no)"
+else
+  BIN_WRITABLE="$(test -w "$DSH_PREFIX" && echo yes || echo no)"
+fi
+echo "global_modules=$GLOBAL_MODULES"
+echo "global_modules_writable=$MODULES_WRITABLE"
+echo "global_bin_writable=$BIN_WRITABLE"
+echo "global_dsh=$(test -x "$DSH_PREFIX/bin/dsh" && echo yes || echo missing)"
+# dsh runs under a "#!/usr/bin/env node" shebang, so its PATH needs node.
+echo "global_dsh_version=$(PATH="$NODE_DIR:$PATH" "$DSH_PREFIX/bin/dsh" -V 2>/dev/null | tail -n 1 || true)"
+# Whether the operator can type \`dsh\` in their own login shell. This resolves
+# the command, not the directory: a prefix whose bin dir sits on PATH but holds
+# no dsh must not read as usable.
+LOGIN_SHELL="\${SHELL:-}"
+if [ -z "$LOGIN_SHELL" ] || [ ! -x "$LOGIN_SHELL" ]; then LOGIN_SHELL=/bin/sh; fi
+LOGIN_DSH="$(timeout 5 "$LOGIN_SHELL" -lc 'command -v dsh' 2>/dev/null | tail -n 1 || true)"
+echo "login_path_has_dsh=$([ -n "$LOGIN_DSH" ] && echo yes || echo no)"
+echo "login_dsh=$LOGIN_DSH"
+# Two DSH web processes for one DSH home overwrite each other's state file.
+# The pattern is assembled at run time so this script's own text never contains
+# it: doctor is delivered as the remote command line, so a literal pattern would
+# make pgrep count the diagnostic itself.
+WEB_WORD='web'
+DSH_WORD='dsh'
+COUNT_PATTERN="$DSH_WORD $WEB_WORD"
+echo "dsh_web_processes=$(pgrep -fc "$COUNT_PATTERN" 2>/dev/null || echo 0)"
 `
   const result = await runRemote(target, script, sshOptions(options))
   return result.stdout

@@ -18,10 +18,8 @@ export type InstallerErrorCode =
   | 'install/node-outdated'
   /** Node.js is present but the distribution ships no npm. */
   | 'install/npm-missing'
-  /** `npm install @deepseek-ai/dsh` ran but produced no executable. */
+  /** `npm install @deepseek-ai/dsh` ran but produced no working `dsh`. */
   | 'install/dsh-missing'
-  /** The automatic Node.js download/extract/verify step failed. */
-  | 'install/node-install-failed'
   /** A legacy `dsh-remote-agent` profile entry could not be migrated. */
   | 'install/profile-migrate-failed'
 
@@ -58,12 +56,7 @@ export const BOOTSTRAP_EXIT_CODES: readonly BootstrapExitCode[] = [
   {
     code: 24,
     installerCode: 'install/dsh-missing',
-    message: 'installing @deepseek-ai/dsh produced no executable',
-  },
-  {
-    code: 25,
-    installerCode: 'install/node-install-failed',
-    message: 'automatic Node.js installation failed',
+    message: 'installing @deepseek-ai/dsh into the npm global prefix did not produce a working `dsh` command',
   },
   {
     code: 26,

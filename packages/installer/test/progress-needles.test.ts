@@ -14,11 +14,8 @@ import { renderBootstrapScript } from '../src/bootstrap.ts'
 const NEEDLES = [
   'preparing remote install',
   'install proxy configured',
-  'downloading node.js',
-  'installed node.js',
   'node ready',
   'installing pnpm@',
-  'upgrading @deepseek-ai/dsh',
   'installing @deepseek-ai/dsh@',
   'adding plugin to profile',
   'restarting systemd user unit',
@@ -39,12 +36,9 @@ function render(start: 'systemd' | 'nohup', upgrade: boolean): string {
   return renderBootstrapScript({
     profile: 'web',
     port: 0,
-    installDir: '$HOME/.local/share/dsh-remote',
     dshHome: '$HOME/.dsh',
     dshVersion: '0.2.2-rc.3',
     pnpmVersion: '11.21.0',
-    nodeVersion: '22.19.0',
-    autoInstallNode: true,
     upgrade,
     start,
     agentTarball: '/tmp/a.tgz',
@@ -67,8 +61,13 @@ describe('provision progress needles', () => {
     })
   }
 
-  it('still prints the upgrade line the progress card looks for', () => {
-    const script = render('systemd', true)
-    assert.match(script, /upgrading @deepseek-ai\/dsh to \$DSH_VERSION/u)
+  it('prints the global install line the progress card looks for', () => {
+    // Fresh and upgrade runs take the same path now, so both card states read
+    // the same output: there is no "upgrading" variant to match any more.
+    for (const upgrade of [false, true]) {
+      const script = render('systemd', upgrade)
+      assert.match(script, /installing @deepseek-ai\/dsh@\$DSH_VERSION globally into \$DSH_PREFIX/u)
+      assert.doesNotMatch(script, /upgrading @deepseek-ai\/dsh/u)
+    }
   })
 })
