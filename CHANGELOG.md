@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Stamp local plugin builds with a unique `<version>-dev-<timestamp>` prerelease.
+  A package manager keys an install on the dependency version and the recorded
+  tarball integrity, so rebuilding at a constant version and path left the
+  profile's already-unpacked files in place: the plugin reported as installed
+  while still running the previous code. `scripts/release-plugin.mjs --release`
+  keeps the manifest version for publishing, and development builds now delete
+  each other instead of accumulating.
+- Stamp the packed remote agent with a unique prerelease version by default, in
+  the manifest and in the bundle's `AGENT_VERSION` together, so the runtime
+  reports the version it actually ships. `--release` keeps the manifest version.
+- Align the remote agent on connect instead of only flagging it. A connected
+  host whose agent version differs from the bundled one is now re-provisioned
+  automatically; previously only an *older* agent was marked in the UI, so a
+  bundle that changed behaviour without a version bump was never corrected.
+- Stop calling `dsh plugin remove` during provisioning. On a profile with many
+  plugins it rewrote the manifest and then hung inside pnpm for minutes with no
+  output, leaving `package.json` half-written. Re-adding a different spec
+  replaces the dependency without it.
+- Install only the uploaded agent tarball on the remote, never a registry
+  package. `dsh plugin add <version>` resolves against the version recorded in
+  the remote profile, so when the published `0.2.12` differed from the local
+  build while keeping the same version number, the profile already satisfied the
+  request: nothing was replaced, and a stale `cordis.patch.yml` kept disabling
+  `dsh-api-remotes`, so the remote Web UI booted with `Failed to load plugins`
+  while every install log reported success. The timestamped upload path makes
+  each run's spec distinct, so the dependency really is replaced.
 - Install the remote `dsh` and `pnpm` into the npm global prefix instead of a
   private `$remoteInstallDir/node_modules`, so the `dsh` the plugin starts and
   the `dsh` an operator types are one file at one version. The prefix is

@@ -47,10 +47,13 @@ Never create test workspaces or sessions in the primary `~/.dsh` profile. See
 For a release bundle:
 
 ```sh
-node scripts/release-plugin.mjs
+node scripts/release-plugin.mjs --release
 ```
 
-The resulting tarball includes the terminal-controller fork as a bundled dependency.
+The resulting tarball includes the terminal-controller fork as a bundled dependency. Drop `--release`
+to get a unique `<version>-dev-<timestamp>` build for local iteration: package managers key an install
+on version plus tarball integrity, so a repeated local version silently keeps the files already
+unpacked in a profile.
 
 ## Issues before pull requests
 

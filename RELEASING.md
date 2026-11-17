@@ -11,12 +11,20 @@
 ```sh
 pnpm install --frozen-lockfile
 pnpm -r build
-node scripts/release-plugin.mjs
+node scripts/release-plugin.mjs --release
 ```
 
 `release-plugin.mjs` creates one package tarball. The terminal-controller fork is copied into
 `node_modules/dsh-remote-terminal-controller` and declared as a bundled dependency, so DSH users only
 install `dsh-remote-local-plugin`.
+
+**`--release` matters here.** Without it the packer stamps a unique
+`<version>-dev-<timestamp>-<rand>` prerelease, which is what you want while iterating: a package
+manager keys an install on the version and tarball integrity, so a constant local version makes
+`pnpm add` conclude nothing changed and leave the previously unpacked files in place — the plugin
+looks installed but still runs the old code. Publish only from a `--release` pack, whose version is
+exactly the manifest's. Development builds also prune each other, since every run produces a new
+file name.
 
 ## Publish automatically
 

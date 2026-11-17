@@ -73,6 +73,47 @@ That form works on Windows too, where `VAR=1 command` is not understood by the s
 `scripts/build-host.mjs` still honours `DSH_REMOTE_HOST_ENTRY`, `DSH_REMOTE_HOST_OUT` and
 `DSH_REMOTE_CLI` for callers that set them; an explicit argument wins.
 
+## Installing a local build into a profile
+
+```sh
+node scripts/package-agent.mjs             # remote agent, 0.2.12-dev-<timestamp>-<rand>.tgz
+node scripts/release-plugin.mjs            # 0.8.21-dev-<timestamp>-<rand>.tgz
+node scripts/release-plugin.mjs --release  # 0.8.21.tgz, for publishing
+```
+
+Both packers stamp a unique prerelease version by default, and both accept `--release` to keep the
+manifest version. `pnpm add file:….tgz` and `dsh plugin add ….tgz` key their decision on the
+dependency version and the recorded tarball integrity: with a constant local version, a rebuilt
+tarball at the same path leaves the profile's already-unpacked files untouched, so the plugin — or the
+remote agent inside a remote profile — looks installed while still running the previous code. A new
+version string per build makes the replacement unconditional. Development builds also delete older
+`-dev-` tarballs, since each run produces a new name.
+
+The agent case is the more confusing one, because a stale agent `cordis.patch.yml` changes behaviour
+without any error: re-provisioning re-adds the same `0.2.12` and the old patch keeps disabling
+`dsh-api-remotes`, so the remote Web UI boots with `Failed to load plugins`. Stamping the version is
+what makes a fixed patch actually reach the remote profile.
+
+Remote provisioning installs the uploaded tarball and never a registry package. A registry install
+resolves by version, so when the published `0.2.12` differs from the local build while sharing its
+version number, the profile already satisfies the request and nothing is replaced. The upload path
+carries a timestamp, which makes each run's dependency spec distinct and forces the replacement.
+
+There is deliberately no `dsh plugin remove` step. On a profile carrying many plugins it edits the
+manifest and then hangs inside pnpm (observed: nine minutes, no output, killed by timeout), leaving
+`package.json` half-written. Re-adding a different spec replaces the dependency on its own.
+
+The tarball path is printed on stdout and nothing else, because `scripts/install-local.sh` and
+`scripts/test-sandbox.sh` consume it as `TARBALL="$(node scripts/release-plugin.mjs)"`. Progress goes
+to stderr.
+
+Two profile details matter when installing by hand:
+
+- `dsh plugin --profile desktop …` is refused (`managed exclusively by the Electron application`), so
+  a local build goes into that profile with `pnpm add` from inside `$DSH_HOME/profiles/desktop`.
+- `pnpm add` records the dependency but does **not** add the package to `dsh.profile.bundles`. Add it
+  there too, or DSH will not load the bundle.
+
 ## npm and pnpm on Windows
 
 On Windows, the `npm` and `pnpm` names on `PATH` are `.cmd` shims. `child_process` cannot spawn them
