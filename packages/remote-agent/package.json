@@ -38,7 +38,7 @@
   },
   "devDependencies": {
     "@dsh-remote/protocol": "workspace:*",
-    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.3",
     "@deepseek-ai/cordis": "4.1.0"
   },
   "peerDependencies": {

@@ -10,7 +10,7 @@ Run the installer; it can install while DSH Desktop is open. Restart the app aft
 host and client bundles:
 
 ```sh
-cd /path/to/dsh-remote/dsh-remote
+cd /path/to/dsh-remote
 ./scripts/install-local.sh
 ```
 
@@ -33,10 +33,25 @@ config alias), and click **保存并连接**.
 The plugin:
 
 1. reads `<remoteDshHome>/remote-agent/agent.json` over SSH;
-2. if no agent is present and `autoProvision` is true, uploads its bundled agent, installs pnpm/DSH
-   when missing, adds the agent to the remote `web` profile, and starts `dsh web` on `127.0.0.1`;
+2. if no agent is present and `autoProvision` is true, uploads its bundled agent, installs `pnpm` and
+   `@deepseek-ai/dsh` **globally** into the npm prefix (`remoteGlobalPrefix`, else `npm prefix -g`),
+   adds the agent to the remote `web` profile, and starts that same `dsh` for `dsh web` on `127.0.0.1`;
 3. waits for the state file and opens the loopback tunnel;
 4. starts the local credential proxy and adds the reverse SSH forward when a local key resolves.
+
+Both npm installs run on every provisioning, so the remote `dsh` is always the version this run asked
+for. The prefix is never relocated: if npm cannot write it, the install fails with npm's own error.
+
+Node.js is resolved through the account's own shell, not the bare SSH command. Version managers
+(nvm, fnm, Volta) prepend their bin directory from a startup file that only logged-in/interactive
+shells read, so a host with both a system Node.js and a version-managed one would otherwise have the
+installer adopt the system Node — and compute a system-wide npm prefix alongside it. `doctor` shows
+the resulting `node` and `global_prefix` so this is visible before an install.
+
+Node.js is only detected, never installed. A missing or too-old runtime ends provisioning with
+`exit 21`/`exit 22` and a message naming what to install; the host card surfaces it. This keeps the
+choice of runtime with the operator and prevents the installer from leaving a second Node.js on a
+machine that already had one.
 
 The host card shows `安装中 → 正在连接 → 已连接`. If it fails, fix SSH and click **重新安装**.
 
@@ -91,24 +106,33 @@ two supported flows: hidden-at-creation for backend tests and visible-then-hidde
 
 ## Model credentials
 
-Default direct mode:
+The source is chosen **per host** in **Settings → 远程开发**, on the host card under **模型 Key 来源**.
+The collapsed row states the live result as **Local proxy**, **Remote direct**, or **Remote default**.
+`credentialProxy` is only a profile-wide seed for hosts that have never chosen.
+
+Direct mode (**远端直连**):
 
 - local plugin resolves `DEEPSEEK_API_KEY` from the local DSH credential store;
 - provisioning writes `DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic` and the real key into the
   remote `dsh web` systemd/nohup environment;
 - the remote DSH calls DeepSeek directly; the key is present on the remote host.
 
-Use direct mode on a trusted remote account. It is the default (`credentialProxy: false`,
-`copyModelKey: true`).
+Use direct mode on a trusted remote account. A host with no explicit choice inherits
+`credentialProxy: false` / `copyModelKey: true`, which seeds direct.
 
-Optional proxy mode:
+Proxy mode (**本地 Key 代理**):
 
-- remote DSH starts with `DEEPSEEK_BASE_URL=http://127.0.0.1:47821` and a placeholder key;
+- remote DSH starts with `DEEPSEEK_BASE_URL=http://127.0.0.1:47821` and a per-host placeholder token;
 - the tunnel adds `-R 127.0.0.1:47821:127.0.0.1:<local-proxy-port>`;
-- the local proxy injects the real key and forwards to `credentialProxyUpstream`.
+- the local proxy validates that token, injects the real key, and forwards to
+  `credentialProxyUpstream`.
 
-Set `credentialProxy: true` to use it. If no local key resolves, configure remote credentials or copy
-a key into the remote environment manually.
+Switch a host to proxy in that card, or seed new hosts with `credentialProxy: true`. The proxy is one
+loopback server that validates a per-host token, so several hosts can share it while each keeps its
+own source; a direct host never receives the proxy token and a proxy host never receives the key.
+Switching a host's source restarts its remote DSH. If no local key resolves, the plugin still
+connects and the row reads **Remote default**: configure remote credentials or copy a key into the
+remote environment manually.
 
 ## Native mirror rules
 
@@ -134,6 +158,8 @@ Local plugin profile override:
   config:
     stateDir: ''                    # $DSH_HOME/remote
     sshBinary: ssh
+    scpBinary: ''                   # empty pairs scp with sshBinary
+    sshConfigPath: ''               # empty means ~/.ssh/config
     remoteStateFile: ''             # <remoteDshHome>/remote-agent/agent.json
     probeTimeoutMs: 10000
     connectTimeoutMs: 15000
@@ -144,19 +170,19 @@ Local plugin profile override:
 
     autoProvision: true
     remoteDshHome: ~/.dsh
-    remoteInstallDir: ~/.local/share/dsh-remote
-    # remoteDshVersion: 0.2.2-rc.2  # pin a remote DSH version; omit to follow the local one
+    # npm global prefix owning pnpm and dsh; empty asks `npm prefix -g`.
+    remoteGlobalPrefix: ''
+    # remoteDshVersion: 0.2.2-rc.3  # pin a remote DSH version; omit to follow the local one
     remotePnpmVersion: 11.21.0
-    remoteNodeVersion: 22.19.0
-    autoInstallNode: true
     remoteStart: systemd            # systemd | nohup | none
     provisionTimeoutMs: 600000
 
+    # Profile-wide seed for hosts that never chose; a per-host choice wins.
     credentialProxy: false
     copyModelKey: true
     remoteModelBaseUrl: https://api.deepseek.com/anthropic
 
-    # Optional proxy mode:
+    # Proxy mode endpoint (seed via credentialProxy, or per host in Settings):
     credentialProxyUpstream: https://api.deepseek.com/anthropic
     credentialProxyRemotePort: 47821
     modelCredentialRef: DEEPSEEK_API_KEY
@@ -186,7 +212,18 @@ node packages/installer/lib/cli.js plan --target user@host
 node packages/installer/lib/cli.js doctor --target user@host
 node packages/installer/lib/cli.js discover --target user@host
 node packages/installer/lib/cli.js install --target user@host --start nohup
+node packages/installer/lib/cli.js install --target user@host --global-prefix ~/npm-global
 ```
+
+`doctor` reports the node and prefix it resolves (through the account's login shell, so nvm/fnm/Volta
+answer), whether npm can write the two paths it actually writes (`global_modules_writable` for
+`<prefix>/lib/node_modules`, `global_bin_writable` for `<prefix>/bin`), the installed `dsh` version read
+by running `dsh -V`, whether your login shell can find that command (`login_path_has_dsh`), and how
+many `dsh web` processes are running.
+
+`global_modules_writable=yes` with `global_bin_writable=no` is the awkward case: npm installs the
+package but cannot create `<prefix>/bin/dsh`, which is exactly the prefix to override with
+`remoteGlobalPrefix`.
 
 The normal plugin flow calls the same provisioning library.
 
@@ -197,6 +234,15 @@ The normal plugin flow calls the same provisioning library.
 - Remote DSH: when the host card reports that the remote runtime is older than the local one,
   click **Update remote DSH**. The host remains usable while the update is pending; the plugin
   replaces the runtime, restarts the remote service, and reconnects.
+- Restart without reinstalling: **重启远端 DSH** (agent tool `remote_host_restart`) restarts the
+  installer-owned systemd user unit, waits for the state file, and reconnects. It preserves installed
+  remote plugins and does not overwrite the remote profile. Only a `systemd` deployment has that unit;
+  a `nohup` deployment uses **重新安装** or a manual restart instead.
+- New hosts follow the local DSH version unless `remoteDshVersion` pins one. An existing host is never
+  upgraded automatically.
+- Because `dsh` lives in the npm global prefix, anything that replaces it takes effect on the next
+  restart: a manual `npm i -g @deepseek-ai/dsh@…` runs that version until the next provisioning pins the
+  target version again.
 - If a remote restart changes the port, click **重新发现**.
 
 ## Troubleshooting
@@ -208,11 +254,15 @@ The normal plugin flow calls the same provisioning library.
 | `remote agent state file was not found` | Auto-provision disabled or remote start failed | Click **重新安装**; inspect `$DSH_HOME/remote-agent/web.log` |
 | `does not accept POST` | Remote agent older than local plugin | Click **重新安装** |
 | Remote workspace not in sidebar | Not added yet or sync pending | Use **Workspaces + → 远程新建工作区…**, or add it in **工作区** |
-| Native session has no reply | No local key copied and remote has no credentials | Check **模型代理**; configure remote credentials |
+| Native session has no reply | No local key copied and remote has no credentials | Check **模型 Key 来源**; either switch the host to **本地 Key 代理** or configure credentials on the remote DSH |
 | `DeepSeek Messages request failed (404)` | Proxy upstream points at the wrong provider root/path | Set `credentialProxyUpstream: https://api.deepseek.com/anthropic`; the fixed proxy preserves the `/anthropic` prefix and tolerates it already being on the request path; reinstall the local plugin |
 | Approval appears locally but remote tool still fails | The decision was delivered but the tool failed remotely | Inspect the remote tool result |
 | Duplicate native session after restart | Old mirror archive failed | Archive the old session in the sidebar; new mirrors use fresh IDs |
 | Tunnel drops after sleep | SSH reset | Plugin reconnects; or click **连接** / **重新发现** |
+| Install fails while naming the npm global prefix | npm cannot write `<prefix>/lib/node_modules` or `<prefix>/bin` for this account, or `npm prefix -g` printed nothing | Set `remoteGlobalPrefix` to a directory you own (e.g. `~/npm-global`) and retry. There is deliberately no fallback install location. `doctor` distinguishes the two write targets |
+| `dsh` missing in the operator's own shell | The global prefix is not on that shell's `PATH` | Add the `export PATH=…` line the install log printed to that shell's startup file yourself; the installer never edits them |
+| Remote DSH stops starting after a Node.js version switch | nvm/Volta moved the global prefix, so the unit's baked-in `dsh` path is gone | Click **重新安装**; `doctor` shows `global_dsh` and `login_path_has_dsh` |
+| Agent port jumps / host reconnects repeatedly | Two `dsh web` processes writing one `agent.json` | Keep one per `DSH_HOME`; `doctor` reports `dsh_web_processes` |
 
 ### Logs
 

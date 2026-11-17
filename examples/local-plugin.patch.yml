@@ -1,11 +1,18 @@
 # Example: local plugin profile patch
 #
 # The bundle already inserts the row; this patch can override defaults.
+# Every key the plugin's schema accepts appears below, in schema order.
+# `remoteDshVersion` is shown commented out because an empty value means
+# "follow the local DSH version", which is the default.
 - id: dsh-remote-local
   config:
     stateDir: ~/.dsh/remote
-    remoteStateFile: ''
     sshBinary: ssh
+    # Empty pairs scp with sshBinary.
+    scpBinary: ''
+    # Empty means ~/.ssh/config.
+    sshConfigPath: ''
+    remoteStateFile: ''
     probeTimeoutMs: 10000
     connectTimeoutMs: 15000
     healthIntervalMs: 15000
@@ -15,19 +22,24 @@
 
     autoProvision: true
     remoteDshHome: ~/.dsh
-    remoteInstallDir: ~/.local/share/dsh-remote
-    # remoteDshVersion: 0.2.2-rc.2  # pin a remote DSH version; omit to follow the local DSH version
+    # Global npm prefix that owns the remote `dsh` command.
+    # Empty means `npm prefix -g`; there is no fallback location.
+    remoteGlobalPrefix: ''
+    # remoteDshVersion: 0.2.2-rc.3  # pin a remote DSH version; omit to follow the local DSH version
     remotePnpmVersion: 11.21.0
-    remoteStart: systemd
-    provisionTimeoutMs: 600000
+    # Node.js is detected through the account's own shell, never installed here.
     remoteInstallProxy: ''
     remoteInstallNoProxy: 127.0.0.1,localhost
+    remoteStart: systemd
+    provisionTimeoutMs: 600000
 
+    # Profile-wide seed for hosts that never chose a model key source.
+    # A per-host choice made in Settings wins over these two.
     credentialProxy: false
     copyModelKey: true
     remoteModelBaseUrl: https://api.deepseek.com/anthropic
 
-    # Optional proxy mode:
+    # Proxy-mode endpoint used when a host (or the seed above) selects proxy:
     credentialProxyUpstream: https://api.deepseek.com/anthropic
     credentialProxyRemotePort: 47821
     modelCredentialRef: DEEPSEEK_API_KEY

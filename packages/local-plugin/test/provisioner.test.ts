@@ -45,7 +45,7 @@ describe('remote DSH version selection', () => {
   })
 
   it('falls back when the local runtime version is unknown', () => {
-    assert.equal(resolveRemoteDshVersion('', undefined), '0.2.2-rc.2')
+    assert.equal(resolveRemoteDshVersion('', undefined), '0.2.2-rc.3')
   })
 })
 

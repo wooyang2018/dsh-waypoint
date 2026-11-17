@@ -8,10 +8,14 @@
 ## Why this protocol exists
 
 The design document left the choice between reusing DSH's `/api/remote.mux` and adding an envelope
-open. ADR-001 records the decision: the implementation uses a small agent-owned JSON/SSE protocol because its
-hosts are independent processes that may run different DSH versions, and Typert descriptors are
-generated from a Host TypeScript program at build time. The local browser↔Host link still uses DSH
-Connection's authenticated `/api` transport.
+open. The implementation chose a small agent-owned JSON/SSE protocol because its hosts are independent
+processes that may run different DSH versions, and Typert descriptors are generated from a Host
+TypeScript program at build time, so shipping that generator for a third-party package is more complex
+than a versioned JSON contract. The local browser↔Host link still uses DSH Connection's authenticated
+`/api` transport.
+
+Revisit `/api/remote.mux` if the remote agent ever needs Host business methods, uplink streams, or
+cross-host multiplexing.
 
 ## Endpoint base
 

@@ -48,7 +48,10 @@
 | 远端 Session 在普通 Conversation UI 中打开 | 可用 |
 | UI 跟随 DSH 语言（中文 / 英文） | 可用 |
 | Prompt、停止、转录、工具卡片、usage | 可用 |
-| 默认远端直连 key，或可选的本地 key proxy | 可用 |
+| 按主机选择模型 Key 来源（本地代理或远端直连） | 可用 |
+| 远端模型目录，并出现在镜像 Session 的模型菜单里 | 可用 |
+| 不重新安装、只重启远端 DSH | 可用（`systemd` 部署；`nohup` 部署用重新安装） |
+| 经隧道打开远端 DSH Web UI | 可用 |
 | 远端文件树和文件预览 | 可用（经 SSH 隧道的 agent API） |
 | 每个 Session 的远端终端 | 可用（本地 Session 用本地 PTY；远端 Session 用经 SSH 隧道的远端 agent PTY） |
 | 主机/工作区/Session 的 Agent 工具 | 可用 |
@@ -82,7 +85,7 @@ dsh-remote-local-plugin@0.8.21
 开发时克隆仓库并运行安装脚本：
 
 ```sh
-cd /path/to/dsh-remote/dsh-remote
+cd /path/to/dsh-remote
 pnpm install
 pnpm -r build
 ./scripts/install-local.sh
@@ -100,13 +103,43 @@ pnpm -r build
 ## 使用
 
 1. 在 **Settings → Remote development** 输入 SSH 目标（例如 `my-host`），点击 **Save and connect**。
-2. 首次连接时，插件会发现或安装远端 agent，启动远端 `dsh web`，建立 loopback 隧道，并把解析到的模型 key 写入远端环境。主机卡片会显示 **Installing → Connected** 和 **Model credentials: Remote direct**。
+2. 首次连接时，插件会发现或安装远端 agent，启动远端 `dsh web`，建立 loopback 隧道，并应用一个模型 Key 来源：按默认种子，它会把解析到的模型 key 写入远端环境。主机卡片会显示 **Installing → Connected**，行内状态为 **Remote direct**；如果希望 key 留在本机，可在卡片上把 **模型 Key 来源** 切换到 **本地 Key 代理**。
 3. 在侧边栏 **Workspaces** 标题栏点击 **+**。新建工作区弹窗可以选择 **This computer** 或已连接的 **Remote device**，再点 **Add** 选择源目录。本机目录使用系统原生目录选择器；远端目录使用只读 SSH 浏览器。
 4. 创建流程会创建远端 Session、在本地建立镜像，并在**普通 Conversation UI** 中打开。工作区行的 **New session** 使用同一个远端目录。
 5. 在普通输入框中输入。远端 DSH 执行本轮任务，本地转录实时更新；工具调用、usage、停止和多轮 follow-up 都与本地 Session 一致。
 6. **Workspace files** 和 **New terminal** 面板跟随当前 Session：本地 Session 使用本机，远端镜像 Session 使用远端工作区。
 
 Settings 页面只负责主机和工作区管理，会话本身不是弹窗。
+
+## 移除本地镜像工作区
+
+从本地侧边栏移除一个镜像工作区会暂停它的本地同步。远端工作区、文件、正在运行的会话，以及本地缓存的历史都会保留。目录刷新、重连和插件重启都不会把这个行加回来。
+
+要恢复，用 **添加工作区** 再次选择同一台远端设备和目录。插件会恢复已有的本地历史，并从远端日志补齐（受配置的快照窗口限制）。从已移除的工作区创建会话必须先做这次显式添加；仅在远端目录里发现它不会恢复同步。
+
+## 测试 / CI 工作区可见性
+
+测试隔离由测试 DSH home 里的一个测试专用清单控制，不是 Settings 选项，也不是 agent 工具：
+
+```text
+$DSH_HOME/remote/test-visibility.json
+```
+
+```json
+{"hiddenPaths": ["/tmp/dsh-remote-tests"], "hiddenWorkspaceIds": ["remote-workspace-id"]}
+```
+
+`hiddenPaths` 在创建工作区时就阻止本地注册。`hiddenWorkspaceIds` 在测试跑完之后隐藏一个已经可见的测试工作区；本地镜像会话会被归档而不是删除，移除该条目后恢复。详见 [docs/testing.md](docs/testing.md)。
+
+## 开发与测试
+
+面向 agent 的测试说明在 [AGENTS.md](AGENTS.md)。UI / 集成工作请使用隔离环境：
+
+```sh
+./scripts/test-sandbox.sh
+```
+
+测试工作区可见性见 [docs/testing.md](docs/testing.md)。
 
 ## 原生 Session 的实现方式
 
@@ -122,21 +155,14 @@ Settings 页面只负责主机和工作区管理，会话本身不是弹窗。
 
 ## 模型凭据
 
-**默认：远端直连 key。** 插件从本地 DSH 凭据存储读取 `DEEPSEEK_API_KEY`，写入远端 `dsh web` 环境，并设置：
+**来源按主机选择。** 每张主机卡片上有 **模型 Key 来源** 开关，两个取值（**本地 Key 代理** / **远端直连**）；收起时的行内状态显示实际生效的结果：**Local proxy**、**Remote direct** 或 **Remote default**：
 
-```text
-DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic
-```
+- **本地 Key 代理** —— key 只留在本机。远端 DSH 获得 `DEEPSEEK_BASE_URL=http://127.0.0.1:47821` 和一个占位 key；SSH 隧道增加 `-R 127.0.0.1:47821:127.0.0.1:<local-proxy-port>`；本地代理校验每个主机独立的 proxy token，注入真实 key，再转发到 `credentialProxyUpstream`。
+- **远端直连** —— 插件从本地 DSH 凭据存储读取 `DEEPSEEK_API_KEY`，写入远端 `dsh web` 环境（systemd unit 或 `nohup` 环境），并设置 `DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic`。远端主机直接调用 DeepSeek。
 
-远端 agent 直接调用 DeepSeek。
+切换某台主机的来源会重启它的远端 DSH。profile 级 `credentialProxy` 现在只给从未选择过的主机做种子：`false` 种子为“远端直连”，`true` 种子为“本地 Key 代理”；已经选过的主机保持自己的选择。
 
-**可选：本地代理。** 设置 `credentialProxy: true` 可以把 key 留在本地：
-
-- 远端 DSH 获得 `DEEPSEEK_BASE_URL=http://127.0.0.1:47821` 和一个占位 key；
-- SSH 隧道增加 `-R 127.0.0.1:47821:127.0.0.1:<local-proxy-port>`；
-- 本地代理校验每个主机独立的 proxy token，注入真实 key，再转发到 `credentialProxyUpstream`。
-
-如果本地没有可解析的 key，插件仍会安装并连接；此时需要配置远端 DSH 自己的凭据。主机卡片会显示 **Model credentials: Local proxy / Remote direct / Remote default**。
+如果本地没有可解析的 key，插件仍会安装并连接；此时需要配置远端 DSH 自己的凭据。该行会显示 **Remote default**，表示插件没有提供 key、远端使用自己的凭据。
 
 ## Agent 工具
 
@@ -146,6 +172,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic
 | `remote_host_add` | 添加 SSH 主机并开始安装 |
 | `remote_host_connect` | 连接/重连/刷新 |
 | `remote_host_provision` | 强制重新安装/重启并重连 |
+| `remote_host_restart` | 只重启远端 DSH 服务，不重新安装 |
 | `remote_workspace_add` | 注册远端目录 |
 | `remote_workspaces_list` | 列出远端 workspace |
 | `remote_session_create` | 创建远端 Session |
@@ -154,15 +181,15 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic
 | `remote_session_snapshot` | 读取一页转录 |
 | `remote_session_cancel` | 取消当前 turn |
 
-主机写操作（`remote_host_add`、`remote_host_connect`、`remote_host_provision`）会走 DSH approval UI；`remote_host_add` 默认不自动连接。
+主机写操作（`remote_host_add`、`remote_host_connect`、`remote_host_provision`、`remote_host_restart`）会走 DSH approval UI：它们可能发起 SSH 连接，直连模式下安装还会把本机模型 key 写入远端服务环境。`remote_host_restart` 依赖安装器创建的 systemd user unit；`nohup` 部署请改用**重新安装**或手动重启。`remote_host_add` 默认不自动连接。
 
 ## 环境要求
 
 **本地：** 官方 [DSH Desktop](https://github.com/deepseek-ai/deepseek-harness)，或同核心版本的 DSH Web；需要可通过 key 或 ssh-agent 免交互认证的 `ssh`。只有官方 Desktop 客户端是经过验证的 GUI 目标。
 
-**远端：** Linux 或 macOS，带 SSH server。优先使用 [Node.js 22.19+](https://nodejs.org/en/download)，会从 PATH、nvm、Volta、fnm、Bun、asdf、mise、Nix、Homebrew 和登录 shell 中查找。找不到可用 Node.js 时，安装器会把官方 Node.js tarball 下载到 `remoteInstallDir`，校验 SHA-256 后解压使用，不需要 root。
+**远端：** Linux 或 macOS，带 SSH server，且**已装好** [Node.js 22.19+](https://nodejs.org/en/download)。Node.js 通过该账号自己的 shell 探测，所以 PATH、nvm、Volta、fnm、Bun、asdf、mise、Nix、Homebrew 都会被识别。安装器**不会**下载或安装 Node.js：选哪个运行时版本是你的决定，机器上多一份正是两个运行时争抢同一个命令的起因。找不到或版本过低时，安装会停下并说明该装什么。不支持 Windows 远端。
 
-自动安装 Node.js 需要远端有 `curl` 或 `wget`、`tar`，以及 `sha256sum` 或 `shasum`。不支持 Windows 远端。
+`pnpm` 和 `@deepseek-ai/dsh` 一律**全局安装**到 `npm prefix -g` 给出的前缀，因此插件启动的 `dsh` 和你自己敲的 `dsh` 是同一个文件、同一个版本。想换前缀就设 `remoteGlobalPrefix`，没有兜底位置——把 `dsh` 悄悄装到别处才是这次要去掉的分歧。如果该前缀不在你登录 shell 的 `PATH` 上，安装日志会打印唯一一行 `export PATH=…` 让人自行加入；安装器从不改你的 shell 启动文件。前缀不可写时安装会带着 npm 原始错误失败，而不是改装到别处。注意 npm 写的是 `<prefix>/lib/node_modules` 和 `<prefix>/bin`，两者可以一个可写一个不可写，这正是要跑 `dsh-remote-install doctor` 的原因。
 
 如果远端需要代理，把 `remoteInstallProxy` 设为**从远端能访问的**代理 URL，例如端口转发后暴露在远端的 `http://127.0.0.1:17890`。安装流程会为 bootstrap 导出 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `npm_config_*`。留空时会使用该账号真实的登录 shell（bash、zsh、fish 等）及其登录/交互启动文件读取 `HTTPS_PROXY` / `HTTP_PROXY`。同一个代理也会写入远端 systemd unit（或由 `nohup` 进程继承），因此远端模型请求也会走代理，而不只是安装阶段。
 
@@ -183,14 +210,13 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic
   config:
     autoProvision: true
     remoteDshHome: ~/.dsh
-    remoteInstallDir: ~/.local/share/dsh-remote
-    # remoteDshVersion: 0.2.2-rc.2  # 固定远端 DSH 版本；省略则跟随本机 DSH 版本
+    # pnpm 与 @deepseek-ai/dsh 的全局安装前缀；留空则用 `npm prefix -g`
+    remoteGlobalPrefix: ''
+    # remoteDshVersion: 0.2.2-rc.3  # 固定远端 DSH 版本；省略则跟随本机 DSH 版本
     remotePnpmVersion: 11.21.0
-    remoteNodeVersion: 22.19.0
     # 远端可访问的代理；留空则读取远端登录 shell 的环境变量
     remoteInstallProxy: ''
     remoteInstallNoProxy: 127.0.0.1,localhost
-    autoInstallNode: true
     remoteStart: systemd          # systemd | nohup | none
     credentialProxy: false
     copyModelKey: true
@@ -221,7 +247,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic
 
 ## 已知限制
 
-- 默认不提供完整的远端 DSH 浏览器 UI。远端会关闭 Remote-Event carrier，让审批 waterfall 到达本地原生 UI；这是让普通会话中的 **Allow once / Reject** 可用的取舍。
+- 完整的远端 DSH 浏览器 UI 是诊断入口，不是主流程。远端 agent 保持 `dsh-api-remotes` 启用，该界面照常启动；审批桥以 `prepend` 注册，镜像审批仍会到达本地原生 UI。需要远端浏览器时（例如安装远端插件），用主机卡片上的 **打开远端 Web UI**。
 - 本地 workspace anchor 只是元数据句柄。文件列表、预览和终端会路由到远端；远端 diff 和部分高级文件操作仍使用原生 Session 的工具结果。
 - 超过 `mirrorMaxEvents` 的远端 Session 不会镜像；可以调大限制，或直接在远端打开。
 - 不支持 Windows 远端，也不支持 relay/NAT 穿透。
@@ -230,15 +256,20 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic
 
 | 现象 | 处理 |
 |---|---|
-| **Installing** 一直不结束 / `Waiting for remote dsh web…` | 检查 `ssh -o BatchMode=yes my-host true`；安装器会查找 nvm/Volta/fnm，并在需要时自动下载 Node.js。如果主机无法访问 nodejs.org 或缺少校验工具，手动安装 [Node.js 22.19+](https://nodejs.org/en/download)，或使用 `remoteStart: nohup`，然后点 **Reinstall** |
+| **Installing** 一直不结束 / `Waiting for remote dsh web…` | 检查 `ssh -o BatchMode=yes my-host true`。安装器通过你的 shell 探测 Node.js（nvm/Volta/fnm），从不自行安装；缺失或版本过低会直接停下并说明原因。装好 [Node.js 22.19+](https://nodejs.org/en/download) 或改用 `remoteStart: nohup`，然后点 **Reinstall** |
+| 安装报“Node.js 未找到” | 你的登录 shell 没有暴露 `node`。在该账号的交互式 shell 下装好（nvm/fnm/Volta 均可），确认 `bash -lic 'command -v node'` 能输出路径，再点 **Reinstall** |
 | `does not accept POST` | 远端 agent 太旧；点 **Reinstall** |
 | 侧边栏没有远端 workspace | 用 **Workspaces +** 创建，或到 Settings → Remote development → Workspaces 查看 |
-| 原生 Session 没有回复 | 检查 **Model credentials**；配置远端凭据 |
+| 原生 Session 没有回复 | 检查主机行的 **Local proxy / Remote direct / Remote default** 状态；配置远端凭据，或改为本地 Key 代理 |
 | `DeepSeek Messages request failed (404)` | Proxy upstream 必须是 `https://api.deepseek.com/anthropic`；重新安装插件并重连 |
 | 本地出现审批，但远端工具仍失败 | 本地决定已经发出；检查远端工具结果 |
 | 本地终端打开本地 shell | 本地 Session 的预期行为；远端 Session 使用 `Remote · <dir>` 终端 |
 | 远端终端打开本地 zsh | terminal-controller fork 未生效；重新运行 `./scripts/install-local.sh` |
 | 远端重启后端口变化 | 点 **Rediscover** |
+| 安装报 npm 全局前缀相关错误 | npm 无法写入该账号的 `<prefix>/lib/node_modules` 或 `<prefix>/bin`，或 `npm prefix -g` 输出为空。把 `remoteGlobalPrefix` 指向一个你自己拥有的目录（如 `~/npm-global`）后重试 |
+| 装完了自己的 shell 里找不到 `dsh` | 安装日志打印了要加到 shell 启动文件的那行 `export PATH=…`；安装器不会代你修改这些文件 |
+| 切换 Node.js 版本后远端 DSH 起不来 | nvm/Volta 切版本会连 npm 全局前缀一起搬走，服务里烘焙的 `dsh` 路径随之失效。点 **Reinstall**；`dsh-remote-install doctor --target …` 会报 `global_dsh` 与 `login_path_has_dsh` |
+| 远端 agent 端口乱跳 / 主机反复断连 | 有两个 `dsh web` 在写同一个 `agent.json`。每个 `DSH_HOME` 只跑一个；`doctor` 会报 `dsh_web_processes` |
 
 远端日志：
 
@@ -261,9 +292,9 @@ pnpm verify
 - [Wire protocol](docs/protocol.md)
 - [Operations guide](docs/operations.md)
 - [Development](docs/development.md)
-- [ADR-001](docs/decisions/ADR-001-protocol-envelope.md)
 - [Design document copy](docs/remote-development-design.md)
 - [Testing](docs/testing.md)
+- [Adapting to a new DSH release](docs/adapting-to-dsh-releases.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)

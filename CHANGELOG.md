@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+- Install the remote `dsh` and `pnpm` into the npm global prefix instead of a
+  private `$remoteInstallDir/node_modules`, so the `dsh` the plugin starts and
+  the `dsh` an operator types are one file at one version. The prefix is
+  `remoteGlobalPrefix` when set and `npm prefix -g` otherwise; there is no
+  fallback location, because a silently relocated command is the divergence
+  this removes. Both installs now run on every provisioning run and the result
+  is verified by executing `dsh -V` rather than by inspecting paths. A prefix
+  that is not on the login shell's `PATH` gets one printed `export PATH=…` line
+  — no shell startup file is edited. An existing global `dsh` at the prefix is
+  replaced with the requested version.
+- Resolve Node.js through the account's own shell before choosing that prefix.
+  A non-interactive SSH command does not read the startup files that nvm, fnm
+  and Volta use, so a host with both a system Node.js and a version-managed one
+  had the installer pick the system Node and compute a system-wide prefix —
+  installing `dsh` where the operator's shell would never find it. The login
+  shell is now asked first (login + interactive, falling back to login only), so
+  `npm prefix -g` answers what the operator actually sees.
+- Stop installing Node.js on the remote. It is now detected through the
+  account's own shell (nvm/fnm/Volta included) and only verified; a missing or
+  too-old runtime fails provisioning with an explicit message. Downloading a
+  runtime silently picked a version the operator never chose, and left a second
+  Node.js on hosts that already had one. `remoteNodeVersion`,
+  `autoInstallNode`, and `remoteInstallDir` are removed with it.
+- Report the remote DSH version from the installer (`DSH_REMOTE_DSH_VERSION`),
+  so "Update remote DSH" compares real versions instead of `unknown`.
+- `dsh-remote-install doctor` reports the npm global prefix it would use, which
+  of npm's two write targets are usable (`lib/node_modules` and `bin`), the
+  `dsh` version that prefix yields, whether the login shell can find that
+  command, and how many `dsh web` processes are running (two for one `DSH_HOME`
+  overwrite each other's state file).
+- Default `dsh-remote-install --dsh-version` to `0.2.2-rc.3`, matching the
+  tested desktop and remote runtime.
+- Move the committed dependency baseline to DSH `0.2.2-rc.3`: every
+  `overrides` and `minimumReleaseAgeExclude` entry in `pnpm-workspace.yaml`, plus
+  the regenerated `pnpm-lock.yaml`, so a fresh clone installs the same release
+  CI tests instead of the previous one. The `engines.dsh` range already covered
+  rc.3 and is unchanged.
+- Run CI against `0.2.2-rc.3` instead of the stale `0.2.2-rc.2` baseline: one
+  `verify` job installs the committed lockfile, re-pins every installed DSH
+  package and peer to the workflow's `DSH_TARGET` with
+  `scripts/select_dsh_version.mjs`, asserts the resolved version, and then
+  builds, typechecks, tests, and packages. Bumping a DSH release means changing
+  that one value. The run uploads both installable tarballs, the plugin bundle
+  and the standalone remote agent, as a `dsh-remote-<DSH_TARGET>` artifact.
 - Rebuild the Settings panel as a host list instead of nested cards. Each
   machine is one summary row with its details behind it, the rare and
   destructive actions move into an overflow menu, and every colour now comes

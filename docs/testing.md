@@ -51,7 +51,27 @@ The mirror fixture uses real Cordis contexts and scope disposal with in-memory r
 
 The client tests render the built Settings component with React's test renderer. They keep a workspace request pending while host polling rerenders the component, then exercise completion, failure, reopening the host, and creating a workspace while an older listing is pending. A request limit makes a reintroduced render loop fail instead of hanging the suite.
 
-CI retains the frozen rc.2 development baseline and runs a second job with all installed DSH dependencies and peers pinned to rc.3. Neither job installs into a user's DSH profile or calls a model provider. Changes to the mirror's Agent interface must pass both targets.
+CI runs one job, `verify`, against the current target in the workflow's `DSH_TARGET` environment value:
+
+1. `pnpm install --frozen-lockfile` — the committed lockfile must install cleanly. This is what a fresh
+   clone gets, and it is currently pinned to the same `0.2.2-rc.3` release as `DSH_TARGET`.
+2. `node scripts/select_dsh_version.mjs "$DSH_TARGET"` — re-pin every installed DSH package and peer.
+   The script discovers packages through `pnpm list`, so it needs step 1's tree first.
+3. `pnpm install --no-frozen-lockfile` — resolve the re-pinned tree; deliberately outside the lockfile.
+4. Assert the resolved `@deepseek-ai/dsh-session` version equals `DSH_TARGET`, so an override that
+   silently failed does not pass the job against the wrong tree.
+5. `pnpm -r build`, `pnpm -r typecheck`, `pnpm -r test`, secret scan, and the installable bundle.
+6. Upload both tarballs as the `dsh-remote-<DSH_TARGET>` artifact: the plugin bundle and the standalone
+   remote-agent bundle, kept for 30 days. The target version is in the artifact name, so a run against
+   a newer DSH release is distinguishable from the committed lockfile's tree.
+
+Bumping a DSH release means changing `DSH_TARGET` and moving the committed baseline (see
+[adapting-to-dsh-releases.md](adapting-to-dsh-releases.md)); there is no separate baseline job, and the
+artifact name follows the value automatically.
+The job installs into no DSH profile and calls no model provider. The Playwright suite is not part of
+CI: `test/playwright` defaults to DSH `0.2.2-rc.3` through `DSH_REMOTE_E2E_DSH_VERSION` and runs
+locally; see [test/playwright/README.md](../test/playwright/README.md). Changes to the mirror's Agent
+interface must pass CI and the Playwright suite locally.
 
 ### Local workspace removal regressions
 

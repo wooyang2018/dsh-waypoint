@@ -7,8 +7,8 @@
  * artifact in place: it swaps the module id and replaces only the apply
  * function with the Session-routing construction.
  *
- * The transform targets the 0.2.2-rc.2 artifact shape and refuses older stock
- * clients, which lack the watch/roster face the current UI calls.
+ * The transform targets the 0.2.2 artifact shape (verified on rc.2 and rc.3) and
+ * refuses a stock client that lacks the watch/roster face the current UI calls.
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -23,13 +23,13 @@ const stockPackage = require.resolve(STOCK_ID + '/package.json')
 const stockPath = join(dirname(stockPackage), 'lib', 'client.js')
 const stock = await readFile(stockPath, 'utf8')
 
-// The rc.2 loader artifact is minified to one line: id:`...`,factory:require=>{...}
+// The 0.2.2 loader artifact is minified to one line: id:`...`,factory:require=>{...}
 const idPattern = new RegExp('id:\\s*`' + STOCK_ID + '`')
 if (!idPattern.test(stock)) throw new Error('stock client module id marker not found')
 const applyPattern = /function apply\(ctx\)\s*\{\s*new ClientTerminals\(ctx,\s*ctx\.remote\.terminal\)\s*\}/
 if (!applyPattern.test(stock)) throw new Error('stock ClientTerminals apply function not found')
 for (const method of ['watch(', 'boundTerminal(', 'isRepresented(']) {
-  if (!stock.includes(method)) throw new Error('stock client does not expose the 0.2.2-rc.2 terminal face (' + method + ')')
+  if (!stock.includes(method)) throw new Error('stock client does not expose the 0.2.2 terminal face (' + method + '); the artifact shape changed, so re-derive this transform')
 }
 
 const routing = await readFile(join(here, '..', 'src', 'client', 'routing.js'), 'utf8')

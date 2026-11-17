@@ -24,8 +24,15 @@ import type { ParsedSshTarget } from '../ssh/target.ts'
 /** Progress callback shown in the host card. */
 export type ProvisionProgress = (code: HostDetail) => void
 
-/** Last-resort remote DSH version when neither config nor the local runtime supplies one. */
-const FALLBACK_REMOTE_DSH_VERSION = '0.2.2-rc.2'
+/**
+ * Last-resort remote DSH version when neither config nor the local runtime
+ * supplies one.
+ *
+ * Reached only when `resolveLocalDshVersion()` cannot read this process's DSH
+ * version, so it tracks the newest supported release rather than a development
+ * baseline.
+ */
+const FALLBACK_REMOTE_DSH_VERSION = '0.2.2-rc.3'
 
 /**
  * Resolve the DSH version to install on a remote host.

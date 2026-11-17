@@ -7,11 +7,14 @@ This repository is intended to be public on GitHub.
 - Preserve the existing commit author identity; do not rewrite history or authors.
 - Keep test hostnames, personal paths, tokens, and screenshots out of committed files.
 - Local logs, screenshots, and test state may contain real values; only staged content matters.
-- Do not bump the version for test-only tooling or documentation. The current release is 0.8.14.
+- Do not bump the version for test-only tooling or documentation. The current release is 0.8.21.
 - In CHANGELOG entries, link the related issue or PR and thank external contributors with `@handle`.
 - When releasing a new version, update the pinned install version in `README.md`, `README.zh.md`, and `packages/local-plugin/README.md`.
+- Do not commit generated `lib/` output, tarballs, local DSH state, or credentials.
 
 ## Verification commands
+
+Run these before claiming a change works:
 
 ```sh
 pnpm install
@@ -20,60 +23,54 @@ pnpm test
 pnpm build
 ```
 
-## Integration / UI tests
+`pnpm typecheck` runs `scripts/check-workspace-libs.mjs` first and fails when a package's built
+`lib/` is older than its `src`. The fix is `pnpm build`, not editing the check: packages reference
+each other through `main`/`types`, so a consumer's typecheck reads the stale bundle and reports a
+misleading "no exported member" error.
 
-Never test against the user's primary DSH profile or production remote `~/.dsh`.
+## Tests
 
-Use an isolated local test home:
+Never test against the user's primary DSH profile or a production remote `~/.dsh`. Use the isolated
+environment, which builds and installs into a fresh temporary `DSH_HOME` and prints its URL:
 
 ```sh
 ./scripts/test-sandbox.sh
 ```
 
-The script builds and installs the plugin into a fresh temporary `DSH_HOME`, starts a separate
-`dsh web`, and prints its URL. It does not touch the desktop profile.
+For a real remote test, point a second profile at throwaway directories under `/tmp` and use
+`remoteStart: nohup`; never create test workspaces in a production remote home.
 
-For a real remote test, use a separate remote profile too:
+Keep test workspaces (and their sessions) out of the sidebar with the test-only manifest at
+`$DSH_HOME/remote/test-visibility.json`. Hide them rather than deleting them, so the data stays
+available for review. The manifest format, when to hide at creation versus after the run, and the
+focused mirror regression checks are in [docs/testing.md](docs/testing.md).
 
-```yaml
-- id: dsh-remote-local
-  config:
-    remoteDshHome: /tmp/dsh-remote-test-remote
-    remoteInstallDir: /tmp/dsh-remote-test-install
-    remoteStateFile: /tmp/dsh-remote-test-remote/remote-agent/agent.json
-    remoteStart: nohup
-```
+CI runs two things worth knowing about: a `verify` job that builds, typechecks, and tests against the
+DSH version in `.github/workflows/ci.yml` → `DSH_TARGET`, and no Playwright job. The Playwright suite
+(`pnpm test:e2e`) runs locally only. See [docs/testing.md](docs/testing.md) for the job's exact steps.
 
-Never create test workspaces in the production remote home.
+## Adapting to a new DSH release
 
-## Test workspace visibility
+The repository pins one tested DSH release; nothing upgrades automatically. The full checklist —
+verifying the npm release is complete, proving the terminal-controller regex transform still matches
+the stock artifact, the four places an exact version is written, what each compatibility failure
+means, and the baseline-move traps — lives in
+[docs/adapting-to-dsh-releases.md](docs/adapting-to-dsh-releases.md).
 
-Visibility is controlled by a test-only manifest in the test DSH home:
+Two things are easy to get wrong and worth stating here:
 
-```text
-$DSH_HOME/remote/test-visibility.json
-```
+- `scripts/select_dsh_version.mjs` rewrites `overrides` **only**, and rebuilds that list from the
+  installed tree, so running it can add or drop entries. Bump versions in place when moving the
+  committed baseline.
+- `pnpm install --lockfile-only` reports `Already up to date` and leaves old versions in the lockfile.
+  Delete `pnpm-lock.yaml` before regenerating, then confirm the new version is actually present.
 
-```json
-{
-  "hiddenPaths": ["/tmp/dsh-remote-tests"],
-  "hiddenWorkspaceIds": ["remote-workspace-id"]
-}
-```
+## Documentation map
 
-This manifest is not a Settings UI option and not an agent tool. The local plugin reads it during
-mirror sync.
+README.md lists every document. The ones an agent reaches for while working in
+this repository:
 
-### Choose based on the test
-
-- **Backend/API/protocol tests**: write the path under `hiddenPaths` *before* creating the remote
-  workspace. The remote workspace exists, but no local workspace or mirror session is registered.
-- **UI/end-to-end tests**: create the workspace normally so it is visible, run the test, then add its
-  remote workspace id (or exact path) to the manifest. The plugin archives local mirror sessions and
-  removes the sidebar row. Remote data and local session logs are retained for later review.
-- To review later, remove the manifest entry; the next sync restores the local mirror from the remote
-  log.
-
-Do not delete test workspaces just to clean the sidebar. Hide them, and preserve the data.
-
-See [docs/testing.md](docs/testing.md) for the full workflow.
+- `docs/adapting-to-dsh-releases.md` — moving to a new DSH release.
+- `docs/testing.md` — test workspace visibility, mirror regressions, CI steps.
+- `docs/development.md` — workspace layout, build scripts, the Windows
+  package-manager shims this repository has to work around.

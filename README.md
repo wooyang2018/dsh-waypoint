@@ -52,7 +52,10 @@ pinned with `remoteDshVersion`.
 | Remote sessions open in the normal Conversation UI | Available |
 | Localized UI follows the DSH language (zh / en) | Available |
 | Prompts, stop, transcripts, tool cards, usage | Available |
-| Direct remote key (default) or optional local key proxy | Available |
+| Per-host model key source (local proxy or remote direct) | Available |
+| Remote model catalog, offered in the model menu for mirrored Sessions | Available |
+| Restart the remote DSH without reinstalling | Available (`systemd` deployments; `nohup` uses Reinstall) |
+| Open the remote DSH Web UI through the tunnel | Available |
 | Remote file tree and file previews | Available (agent-backed over the SSH tunnel) |
 | Remote terminal per Session | Available (local Sessions keep local PTY; remote Sessions use the remote agent PTY over the SSH tunnel) |
 | Agent tools for host/workspace/session operations | Available |
@@ -89,7 +92,7 @@ Keep this pinned version in sync with each release.
 For development, clone the repository and run the installer:
 
 ```sh
-cd /path/to/dsh-remote/dsh-remote
+cd /path/to/dsh-remote
 pnpm install
 pnpm -r build
 ./scripts/install-local.sh
@@ -108,9 +111,11 @@ Reopen DSH. **Settings → Remote development** appears.
 ## Use
 
 1. In **Settings → Remote development**, enter the SSH target (`my-host`) and click **Save and connect**.
-2. On first use the plugin discovers or installs the remote agent, starts remote `dsh web`, opens the
-   loopback tunnel, and copies the resolved model key into the remote environment. The card shows
-   **Installing → Connected** and **Model credentials: Remote direct**.
+2. On first use the plugin discovers or installs the remote agent, starts remote `dsh web`, and opens
+   the loopback tunnel. It also applies a model key source: with the default seed it copies the
+   resolved model key into the remote environment. The card shows **Installing → Connected** and the
+   row reads **Remote direct**; switch **Model key source** to **Local key proxy** on the card if you
+   would rather keep the key here.
 3. In the sidebar **Workspaces** header, click **+**. The create dialog chooses **This computer** or a
    connected **Remote device**, then **Add** a source folder. Local folders use the native system
    directory picker; remote folders use the read-only SSH browser.
@@ -178,18 +183,25 @@ ordinary client code paths handle rendering, selection, streaming, and the trans
 
 ## Model credentials
 
-**Default: direct key on the remote host.** The plugin resolves `DEEPSEEK_API_KEY` from the local DSH
-credential store and writes it into the remote `dsh web` environment, with
-`DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic`. The remote agent calls DeepSeek directly.
+**The choice is per host.** Each host card has a **Model key source** switch with two values
+(**Local key proxy** / **Remote direct**), and the collapsed row states the live result as
+**Local proxy**, **Remote direct**, or **Remote default**:
 
-**Optional: local proxy.** Set `credentialProxy: true` to keep the key local:
+- **Local key proxy** — keeps the key on this machine. The remote DSH gets
+  `DEEPSEEK_BASE_URL=http://127.0.0.1:47821` and a placeholder key; the SSH tunnel adds
+  `-R 127.0.0.1:47821:127.0.0.1:<local-proxy-port>`; the local proxy injects the real key and forwards
+  to `credentialProxyUpstream`.
+- **Remote direct** — the resolved local key is copied into the remote `dsh web` environment (the
+  systemd unit or the `nohup` environment) with
+  `DEEPSEEK_BASE_URL=https://api.deepseek.com/anthropic`. The remote host calls DeepSeek directly.
 
-- remote DSH gets `DEEPSEEK_BASE_URL=http://127.0.0.1:47821` and a placeholder key;
-- the SSH tunnel adds `-R 127.0.0.1:47821:127.0.0.1:<local-proxy-port>`;
-- the local proxy injects the real key and forwards to `credentialProxyUpstream`.
+Switching a host's source restarts its remote DSH. The profile-wide `credentialProxy` setting is only
+the seed for hosts that never chose: `false` seeds `remote direct`, `true` seeds `local key proxy`. A
+host that has chosen keeps its choice.
 
 If no local key resolves, the plugin still provisions and connects; configure the remote DSH's own
-credentials. The host card shows **Model credentials: Local proxy / Remote direct / Remote default**.
+credentials. The row then reads **Remote default**, meaning the plugin supplied no key and the remote
+host uses its own.
 
 ## Agent tools
 
@@ -199,6 +211,7 @@ credentials. The host card shows **Model credentials: Local proxy / Remote direc
 | `remote_host_add` | Add an SSH host and start provisioning |
 | `remote_host_connect` | Connect/reconnect/refresh |
 | `remote_host_provision` | Force reinstall/restart and reconnect |
+| `remote_host_restart` | Restart the remote DSH service without reinstalling |
 | `remote_workspace_add` | Register a remote directory |
 | `remote_workspaces_list` | List remote workspaces |
 | `remote_session_create` | Create a remote session |
@@ -207,15 +220,30 @@ credentials. The host card shows **Model credentials: Local proxy / Remote direc
 | `remote_session_snapshot` | Read a transcript page |
 | `remote_session_cancel` | Cancel the active turn |
 
+`remote_host_add`, `remote_host_connect`, `remote_host_provision`, and `remote_host_restart` ask for
+approval before they run: they may open an SSH connection, and in direct-key mode provisioning copies
+the local model key into the remote service environment. `remote_host_restart` requires the
+installer-owned systemd user unit; a `nohup` deployment uses **Reinstall** or a manual restart instead.
+
 ## Requirements
 
 **Local:** official [DSH Desktop](https://github.com/deepseek-ai/deepseek-harness) or DSH Web with the same core version, plus `ssh` with key or ssh-agent auth. Only the official Desktop client is a verified GUI target.
 
-**Remote:** Linux or macOS with an SSH server. [Node.js 22.19+](https://nodejs.org/en/download) is preferred and discovered through
-PATH, nvm, Volta, fnm, Bun, asdf, mise, Nix, Homebrew, and the login shell. When no usable Node.js is
-found, the installer downloads the official [Node.js tarball](https://nodejs.org/en/download) into `remoteInstallDir`, verifies its
-SHA-256 checksum, and uses it without root. This needs `curl` or `wget`, `tar`, and `sha256sum` or
-`shasum`; Windows remotes are not supported.
+**Remote:** Linux or macOS with an SSH server. [Node.js 22.19+](https://nodejs.org/en/download) must already
+be installed and is discovered through the account's own shell, so PATH, nvm, Volta, fnm, Bun, asdf, mise,
+Nix, and Homebrew all answer. The installer does **not** download Node.js: picking a runtime version is your
+decision, and a second one on the machine is how two runtimes end up fighting over one command. A missing or
+too-old Node.js stops the install with a message naming what to install. Windows remotes are not supported.
+
+`pnpm` and `@deepseek-ai/dsh` are installed **globally**, into the prefix `npm prefix -g` reports, so the
+`dsh` the plugin starts and the `dsh` you type yourself are the same file and the same version. Override the
+prefix with `remoteGlobalPrefix` when npm's answer is not the one you want; there is no fallback location,
+because a silently relocated `dsh` is exactly the divergence this removes. If that prefix is not on your
+login shell's `PATH`, the install log prints the one `export PATH=…` line to add — the installer never edits
+your shell startup files. A prefix npm cannot write fails the install with npm's own error instead of
+installing somewhere else; note that npm writes
+`<prefix>/lib/node_modules` and `<prefix>/bin`, so a machine can have one writable and not the other, which
+is what `dsh-remote-install doctor` is for.
 
 If the remote host needs a proxy, set `remoteInstallProxy` to a URL that is reachable **from the
 remote host**, for example `http://127.0.0.1:17890` when a port forward serves the proxy there. The
@@ -248,14 +276,13 @@ remote model requests use it as well, not just the installer.
   config:
     autoProvision: true
     remoteDshHome: ~/.dsh
-    remoteInstallDir: ~/.local/share/dsh-remote
-    # remoteDshVersion: 0.2.2-rc.2  # pin a remote DSH version; omit to follow the local DSH version
+    # npm globals (pnpm and @deepseek-ai/dsh) go into this prefix; empty asks `npm prefix -g`.
+    remoteGlobalPrefix: ''
+    # remoteDshVersion: 0.2.2-rc.3  # pin a remote DSH version; omit to follow the local DSH version
     remotePnpmVersion: 11.21.0
-    remoteNodeVersion: 22.19.0
-    # Remote-visible proxy for Node/npm/DSH downloads. Empty means inspect the remote login shell.
+    # Remote-visible proxy for npm and DSH downloads. Empty means inspect the remote login shell.
     remoteInstallProxy: ''
     remoteInstallNoProxy: 127.0.0.1,localhost
-    autoInstallNode: true
     remoteStart: systemd          # systemd | nohup | none
     # Direct key mode (default): copy the resolved key to the remote service env.
     credentialProxy: false
@@ -288,9 +315,11 @@ The remote agent config remains available for advanced deployments:
 
 ## Known limits
 
-- The complete remote DSH browser UI is not offered by default. The remote host disables its
-  Remote-Event carrier so approval waterfalls reach the native local UI; this is the tradeoff that
-  makes **Allow once / Reject** work in the ordinary conversation.
+- The complete remote DSH browser UI is a diagnostic surface, not the primary flow. The remote agent
+  keeps `dsh-api-remotes` enabled so that surface keeps booting, and its approval bridge registers
+  with `prepend` so mirrored approvals still reach the native local UI; use the host card's
+  **Open remote Web UI** action when you need the remote browser (for example to install remote
+  plugins).
 - The local workspace anchor is a metadata handle. File listing, preview, and terminal are routed to
   the remote workspace; remote diffs and some advanced file actions still use the native session's
   own tool results.
@@ -302,15 +331,20 @@ The remote agent config remains available for advanced deployments:
 
 | Symptom | Action |
 |---|---|
-| **Installing** never finishes / `Waiting for remote dsh web…` | Check `ssh -o BatchMode=yes my-host true`; the installer discovers nvm/Volta/fnm and automatically downloads Node.js when needed. If the host blocks nodejs.org or checksum tools, install [Node.js 22.19+](https://nodejs.org/en/download) manually or use `remoteStart: nohup`; then **Reinstall** |
+| **Installing** never finishes / `Waiting for remote dsh web…` | Check `ssh -o BatchMode=yes my-host true`. The installer detects Node.js through your shell (nvm/Volta/fnm) and never installs one, so a missing or too-old Node.js ends the install with an explicit message; install [Node.js 22.19+](https://nodejs.org/en/download) there, or use `remoteStart: nohup`, then **Reinstall** |
+| Install stops saying Node.js was not found | Your login shell does not expose `node`. Install it under an interactive shell for that account (nvm/fnm/Volta all work), confirm `bash -lic 'command -v node'` prints a path, then **Reinstall** |
 | `does not accept POST` | Remote agent is old; click **Reinstall** |
 | No remote workspace in sidebar | Use **Workspaces +**, or Settings → Remote development → Workspaces |
-| Native session has no reply | Check **Model credentials**; configure remote credentials |
+| Native session has no reply | Check the host row's **Local proxy / Remote direct / Remote default** state; configure remote credentials or switch to the local key proxy |
 | `DeepSeek Messages request failed (404)` | Proxy upstream must be `https://api.deepseek.com/anthropic`; the fixed proxy joins/preserves the provider prefix. Reinstall the local plugin and reconnect |
 | Approval appears locally but remote tool still fails | The local decision was sent; check the remote tool result |
 | Local terminal opens local shell | Expected for local Sessions; remote Sessions use `Remote · <dir>` terminals |
 | Remote terminal opens local zsh | The terminal-controller fork is not active; run `./scripts/install-local.sh` again |
 | Port changed after remote restart | Click **Rediscover** |
+| Install fails while reporting the npm global prefix | npm cannot write `<prefix>/lib/node_modules` or `<prefix>/bin` for this account, or `npm prefix -g` printed nothing. Point `remoteGlobalPrefix` at a directory you own (for example `~/npm-global`) and retry |
+| `dsh` not found in your own shell after installing | The install log printed the `export PATH=…` line to add to your shell startup. The installer does not edit those files itself |
+| Remote DSH stopped starting after you switched Node.js versions | An nvm/Volta switch moves the npm global prefix with it, so the service's baked-in `dsh` path no longer exists. Click **Reinstall**; `dsh-remote-install doctor --target …` reports `global_dsh` and `login_path_has_dsh` |
+| Remote agent port jumps around or the host keeps disconnecting | Two `dsh web` processes are writing the same `agent.json`. Run one per `DSH_HOME`; `doctor` reports `dsh_web_processes` |
 
 Remote logs: `journalctl --user -u dsh-remote-agent -f` or `$DSH_HOME/remote-agent/web.log`.
 
@@ -331,10 +365,10 @@ into the ordinary Conversation UI, a second follow-up, and a remote tool call/re
 - [Operations guide](docs/operations.md)
 - [Development](docs/development.md)
 - [Testing](docs/testing.md)
+- [Adapting to a new DSH release](docs/adapting-to-dsh-releases.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
-- [ADR-001](docs/decisions/ADR-001-protocol-envelope.md)
 - [Design document copy](docs/remote-development-design.md)
 
 ## Packages

@@ -9,13 +9,15 @@ permissions:
   contents: read
   pull-requests: read
 
+env:
+  # The only supported and tested target. Bumping a DSH release means changing
+  # this value; the workflow re-pins every DSH package and peer to it.
+  DSH_TARGET: 0.2.2-rc.3
+
 jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      matrix:
-        dsh: ['0.2.2-rc.2']
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,8 +29,28 @@ jobs:
         with:
           node-version: 22.19.0
           cache: pnpm
-      - name: Install
+      # `select_dsh_version.mjs` discovers the DSH packages through `pnpm list`,
+      # so the committed lockfile is installed first. This also keeps the
+      # "--frozen-lockfile installs cleanly" guarantee on every run.
+      - name: Install committed lockfile
         run: pnpm install --frozen-lockfile
+      - name: Select compatibility target
+        run: node scripts/select_dsh_version.mjs "$DSH_TARGET"
+      # Not frozen: this step is expected to resolve versions outside the
+      # committed lockfile, which stays pinned to the previous target.
+      - name: Install target versions
+        run: pnpm install --no-frozen-lockfile
+      # A silently ignored override would make the whole job pass against the
+      # wrong tree, so the resolved version is asserted rather than assumed.
+      - name: Verify installed DSH version
+        run: |
+          RESOLVED="$(node -e "
+            const { createRequire } = require('node:module')
+            const r = createRequire(process.cwd() + '/packages/local-plugin/package.json')
+            process.stdout.write(r('@deepseek-ai/dsh-session/package.json').version)
+          ")"
+          echo "expected $DSH_TARGET, resolved $RESOLVED"
+          test "$RESOLVED" = "$DSH_TARGET"
       - name: Build
         run: pnpm -r build
       - name: Typecheck
@@ -41,9 +63,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build installable bundle
         run: node scripts/release-plugin.mjs
-      - name: Upload plugin tarball
+      # The artifact name carries the DSH target, so a run against a newer
+      # release is distinguishable from the committed lockfile's tree. Both
+      # tarballs are uploaded: the plugin bundles the agent, and the agent is
+      # also useful on its own for a manual remote install (see
+      # packages/remote-agent/README.md).
+      - name: Upload installable artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dsh-remote-local-plugin-${{ matrix.dsh }}
-          path: packages/local-plugin/dsh-remote-local-plugin-*.tgz
+          name: dsh-remote-${{ env.DSH_TARGET }}
+          path: |
+            packages/local-plugin/dsh-remote-local-plugin-*.tgz
+            packages/local-plugin/assets/goldenpigeon-dsh-remote-agent-*.tgz
           if-no-files-found: error
+          retention-days: 30

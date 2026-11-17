@@ -62,7 +62,7 @@ an issue will be closed without review.
 
 ## Pull requests
 
-- Keep changes focused and include tests where behavior changes. CI runs the build, typecheck, and test suite against both supported DSH versions.
+- Keep changes focused and include tests where behavior changes. CI builds, typechecks, and tests against the DSH version in the workflow's `DSH_TARGET` (`0.2.2-rc.3`), re-pinning every DSH package each run; the Playwright suite runs locally.
 - Reference the corresponding issue in the pull request description.
 - Run `pnpm -r typecheck`, `pnpm -r test`, and `pnpm -r build` before opening a PR.
 - Do not rewrite published tags or history.
