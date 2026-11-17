@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets a maintainer run the suite on demand. A fork's push-triggered runs can
+  # land in `action_required` before they ever execute, which leaves no signal;
+  # a dispatch run can be started and watched explicitly.
+  workflow_dispatch:
 
 permissions:
   contents: read
