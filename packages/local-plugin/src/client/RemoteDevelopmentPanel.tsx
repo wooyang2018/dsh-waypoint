@@ -107,10 +107,7 @@ const POLL_MS = 2_500
 /** Render the remote-development settings page. */
 export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
   const [state, setState] = useState<RemoteHostsState | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [pollError, setPollError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
-  const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [expandedHost, setExpandedHost] = useState<string | null>(null)
   /** Host awaiting an inline delete confirmation, or null. */
@@ -140,12 +137,12 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
     const load = async (): Promise<void> => {
       try {
         const next = await api.state()
-        if (!cancelled) {
-          setState(next)
-          setPollError(null)
-        }
-      } catch (failure) {
-        if (!cancelled) setPollError(localizedError(t, failure, t('settings.unavailable')))
+        if (!cancelled) setState(next)
+      } catch {
+        // A failed poll keeps the last good snapshot on screen. It stays silent
+        // on purpose: each host row already reports its own state, and a page
+        // level banner for a background refresh reads as an error the user
+        // caused.
       }
     }
     void load()
@@ -176,13 +173,13 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
 
   async function run(key: string, task: () => Promise<void>): Promise<void> {
     setBusy(key)
-    setError(null)
-    setNotice(null)
     try {
       await task()
       await refresh()
-    } catch (failure) {
-      setError(localizedError(t, failure, t('settings.operationFailed')))
+    } catch {
+      // The host row carries the result: every host operation the service runs
+      // records its failure on the host runtime, and the card renders it there.
+      // Repeating it here only duplicated a line the user can already see.
     } finally {
       setBusy(null)
     }
@@ -207,13 +204,12 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
   async function openWebUi(host: HostView): Promise<void> {
     const key = `web:${host.id}`
     setBusy(key)
-    setError(null)
-    setNotice(null)
     try {
       const { url } = await api.webUrl(host.id)
       window.open(url, '_blank', 'noopener,noreferrer')
-    } catch (failure) {
-      setError(localizedError(t, failure, t('settings.openWebUiFailed')))
+    } catch {
+      // Nothing to show: the page has no banner area by design, and a failure
+      // here means the host is not reachable, which its row already states.
     } finally {
       setBusy(null)
     }
@@ -245,7 +241,6 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
     await run(`discover:${entry.alias}`, async () => {
       const host = await api.addHost({ sshTarget: entry.alias, autoConnect: true })
       setExpandedHost(host.id)
-      setNotice(t('settings.hostSaved'))
       await scan(true)
     })
   }
@@ -315,12 +310,10 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
       try {
         const result = await api.workspaces(hostId)
         setWorkspaces(current => ({ ...current, [hostId]: [...result.workspaces] }))
-      } catch (failure) {
+      } catch {
         setWorkspaces(current => ({ ...current, [hostId]: [] }))
-        // An automatic load failing is not something the user did. Raising a
-        // page-level banner for it reads as an error they caused, and the host
-        // row already shows its own state. Only a requested refresh reports.
-        if (refresh) setError(localizedError(t, failure, t('settings.readWorkspacesFailed')))
+        // A failed listing leaves an empty list; the host row already reports
+        // its own state, so there is nothing extra to say here.
       }
     })()
     loadingWorkspaces.current.set(hostId, request)
@@ -342,19 +335,16 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
     const start = workspaceDraft.trim() === '' ? '~' : workspaceDraft.trim()
     await pickRemoteDirectory({ api, t, host, initialPath: start }, path => {
       setWorkspaceDraft(path)
-    }).catch(failure => {
-      setError(localizedError(t, failure, t('settings.addWorkspaceFailed')))
+    }).catch(() => {
+      // A cancelled or failed browse leaves the field as it was; the picker
+      // reports its own failures inline.
     })
   }
 
   async function addWorkspace(host: HostView): Promise<void> {
     const path = workspaceDraft.trim()
-    if (path === '') {
-      setError(t('settings.pathRequired'))
-      return
-    }
+    if (path === '') return
     setBusy(`workspace:${host.id}`)
-    setError(null)
     try {
       // Name the workspace after the folder unless the agent already has one.
       // A bare path is hard to scan in the list, and the server accepts a title.
@@ -362,8 +352,8 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
       setWorkspaceDraft('')
       await loadWorkspaces(host.id)
       setExpandedHost(host.id)
-    } catch (failure) {
-      setError(localizedError(t, failure, t('settings.addWorkspaceFailed')))
+    } catch {
+      // Silently keep the draft so the path can be corrected and retried.
     } finally {
       setBusy(null)
     }
@@ -457,10 +447,6 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
           </p>
         </div>
       </header>
-
-      {error !== null && <p className="dshr-banner dshr-banner-error" role="alert">{error}</p>}
-      {pollError !== null && <p className="dshr-banner dshr-banner-error" role="alert">{pollError}</p>}
-      {notice !== null && <p className="dshr-banner dshr-banner-info" role="status">{notice}</p>}
 
       <section className="dshr-card">
         <div className="dshr-section-title">

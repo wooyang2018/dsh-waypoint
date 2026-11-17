@@ -383,8 +383,12 @@ describe('SSH config discovery in the Settings panel', () => {
 
     assert.equal(workspaceCalls, 0, 'no workspace request for a disconnected host')
     const json = JSON.stringify(renderer.toJSON())
+    // The page has no banner area at all: a host operation reports through its
+    // own row, never as a page-level line above the list.
     assert.equal(json.includes('dshr-banner-error'), false,
-      'expanding a disconnected host must not raise a page-level error')
+      'the panel must not render a page-level error banner')
+    assert.equal(json.includes('is not connected'), false,
+      'expanding a disconnected host must not surface its failure as page text')
   })
 
   it('does not raise a banner when an automatic workspace load fails', async () => {
@@ -415,8 +419,11 @@ describe('SSH config discovery in the Settings panel', () => {
 
     // A background load the user did not request stays quiet; the row still
     // shows its own state.
-    assert.equal(JSON.stringify(renderer.toJSON()).includes('dshr-banner-error'), false,
+    const rendered = JSON.stringify(renderer.toJSON())
+    assert.equal(rendered.includes('dshr-banner-error'), false,
       'a failed automatic load must not surface as a page banner')
+    assert.equal(rendered.includes('is not connected'), false,
+      'the failure message must not leak into the panel as page text')
   })
 
   it('offers a folder browser beside the workspace path field', async () => {

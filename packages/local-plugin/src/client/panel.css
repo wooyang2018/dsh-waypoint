@@ -172,6 +172,10 @@
 }
 
 .dshr-hint {
+  /* Zeroed because this class lands on <p> as well as <span>: a paragraph's
+     default vertical margin doubled the gap around a hint that already sits
+     inside a padded container. */
+  margin: 0;
   font-size: 12px;
   opacity: 0.62;
 }
@@ -270,7 +274,11 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 6px 0 2px;
+  /* Same rule as .dshr-field: this block sits directly under one, and without
+     it the group reads as a continuation of "local tunnel" instead of its own
+     section. */
+  padding: 9px 0;
+  border-top: 1px solid var(--dshr-border);
 }
 
 .dshr-model-list {
