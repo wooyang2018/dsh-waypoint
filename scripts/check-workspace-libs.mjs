@@ -12,17 +12,27 @@
  * inspects workspace links and compares modification times.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
+import { repoRoot } from './paths.mjs'
 
-const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
-
-/** Recursively collect every source file that should precede a build. */
+/**
+ * Recursively collect the newest modification time under `dir`.
+ *
+ * Only TypeScript sources count: a build the consumer can resolve is produced
+ * from `.ts`/`.tsx`, and generated `lib/` or `dist/` would otherwise compare
+ * against itself.
+ *
+ * @param {string} dir Directory to scan.
+ * @returns {number} Milliseconds since the epoch, or 0 when nothing was found.
+ */
 function newestSource(dir) {
   let newest = 0
+  /** @type {string[]} */
   const stack = [dir]
   while (stack.length > 0) {
     const current = stack.pop()
+    if (current === undefined) continue
+    /** @type {import('node:fs').Dirent[]} */
     let entries
     try {
       entries = readdirSync(current, { withFileTypes: true })
@@ -44,10 +54,15 @@ function newestSource(dir) {
   return newest
 }
 
-/** Workspace package directories, by package name. */
+/**
+ * Workspace package directories, by package name.
+ *
+ * @returns {Map<string, { dir: string, manifest: any }>} One entry per published package.
+ */
 function workspacePackages() {
+  /** @type {Map<string, { dir: string, manifest: any }>} */
   const packages = new Map()
-  const packagesDir = join(root, 'packages')
+  const packagesDir = join(repoRoot, 'packages')
   if (!existsSync(packagesDir)) return packages
   for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
@@ -64,8 +79,14 @@ function workspacePackages() {
   return packages
 }
 
-/** Entry points a consumer resolves through the package `main`/`types` fields. */
+/**
+ * Entry points a consumer resolves through the package `main`/`types` fields.
+ *
+ * @param {any} manifest Parsed `package.json`.
+ * @returns {string[]} Relative entry paths that should exist after a build.
+ */
 function builtEntries(manifest) {
+  /** @type {string[]} */
   const entries = []
   for (const field of ['main', 'types']) {
     const value = manifest[field]
@@ -74,6 +95,7 @@ function builtEntries(manifest) {
   return entries
 }
 
+/** @type {{ name: string, relative: string, reason: string }[]} */
 const problems = []
 for (const [name, { dir, manifest }] of workspacePackages()) {
   const built = builtEntries(manifest)

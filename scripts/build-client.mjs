@@ -9,6 +9,7 @@
  * bundled.
  */
 import { build } from 'esbuild'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -18,18 +19,20 @@ const packageName = manifest.name
 const entry = 'src/client/index.tsx'
 const outfile = 'lib/client.js'
 
+/**
+ * Shared modules the DSH shell injects into every client bundle's `require`.
+ *
+ * Wildcards cover whole families, so a new `@deepseek-ai/*` or `react/*` import
+ * needs no entry here. Anything added to this list must be a module the shell
+ * actually provides; listing modules this package never imports only hides a
+ * mistake, and listing one the shell does not provide fails at load time.
+ */
 const PLATFORM_MODULES = [
   'react',
-  'react/jsx-runtime',
   'react-dom',
-  'react-dom/client',
-  '@deepseek-ai/cordis',
-  'zod',
-  '@tanstack/react-virtual',
-  '@deepseek-ai/dsh-client-store',
-  '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-dockkit',
+  '@deepseek-ai/*',
+  'react/*',
+  'react-dom/*',
 ]
 
 const banner = [
@@ -45,6 +48,10 @@ const footer = [
   '  },',
   '});',
 ].join('\n')
+
+if (!existsSync(join(packageDir, entry))) {
+  throw new Error(`build-client: ${packageName} has no ${entry}; run this from the package directory`)
+}
 
 await build({
   absWorkingDir: packageDir,
@@ -64,12 +71,7 @@ await build({
   },
   banner: { js: banner },
   footer: { js: footer },
-  external: [
-    ...PLATFORM_MODULES,
-    '@deepseek-ai/*',
-    'react/*',
-    'react-dom/*',
-  ],
+  external: PLATFORM_MODULES,
 })
 
 process.stdout.write(`built ${packageName} -> ${join(packageDir, outfile)}\n`)

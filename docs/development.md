@@ -58,10 +58,42 @@ actually happens. It cannot prove a build is semantically current — `pnpm buil
 
 ```sh
 pnpm build      # all packages, dependency order
-pnpm typecheck  # type checking only
-pnpm test       # each package's own test runner
+pnpm typecheck  # the stale-lib guard, the scripts/ checkJs pass, then each package
+pnpm test       # the scripts/ tests, then each package's own test runner
 pnpm verify     # build + test
 ```
+
+`pnpm typecheck` and `pnpm test` are deliberately the root scripts: `pnpm -r` does not include the
+root package, so `pnpm -r typecheck` would skip `scripts/` entirely. CI runs the root form for that
+reason (`.github/workflows/ci.yml`).
+
+## The `scripts/` directory
+
+Build, release, and check tooling. Everything here is plain `.mjs` so a package's `build` script can
+run it without a TypeScript loader, and `scripts/tsconfig.json` type-checks the whole directory with
+`allowJs` + `checkJs` — no `.ts` rewrite needed, and `noUnusedLocals` still applies.
+
+| Script | What it does |
+|---|---|
+| `build-host.mjs` | Bundles a host entry to one self-contained ESM file (`--entry`, `--out`, `--cli`) |
+| `build-client.mjs` | Bundles a browser entry to the `window.__ModuleLoader__` closure-factory artifact |
+| `package-agent.mjs` | Packs the remote agent into `packages/local-plugin/assets/` |
+| `release-plugin.mjs` | Packs the installable plugin tarball; prints its path alone on stdout |
+| `npm-pack.mjs` | Shared `npm pack` invocation used by both packers |
+| `dev-version.mjs` | The `-dev-<stamp>-<random>` version stamp both packers apply |
+| `paths.mjs` | Shared `repoRoot` and manifest reader |
+| `package-manager.mjs` | Resolves a spawnable npm/pnpm (the Windows `.cmd` problem) |
+| `check-workspace-libs.mjs` | Fails when a package's built `lib/` is missing or older than its `src` |
+| `clean.mjs` | Removes `packages/*/lib` (`--dry-run`, `--keep-tracked`) |
+| `select_dsh_version.mjs` | Re-pins every DSH package to one target version (CI) |
+| `release-notes.mjs` | Prints the CHANGELOG section for the current version |
+| `test-e2e.mjs` | Packs, then runs Playwright against that exact tarball |
+| `install-local.sh` | Build, pack, and install into a local profile |
+| `test-sandbox.sh` | Starts an isolated `DSH_HOME` DSH Web for integration tests |
+
+Removing build output is not always harmless: a file git still *tracks* under `lib/` would show up as
+a deletion in the next commit. `node scripts/clean.mjs` therefore warns when that is about to happen,
+`--keep-tracked` deletes only untracked files, and `--dry-run` prints what it would remove.
 
 Per-package build scripts are plain arguments, not POSIX environment prefixes:
 
@@ -111,6 +143,9 @@ Two profile details matter when installing by hand:
 
 - `dsh plugin --profile desktop …` is refused (`managed exclusively by the Electron application`), so
   a local build goes into that profile with `pnpm add` from inside `$DSH_HOME/profiles/desktop`.
+  Only the app's own launcher passes the permission this refusal checks for;
+  `scripts/install-local.sh` detects the case and stops with the manual instructions rather than
+  letting the CLI error surface after a full build.
 - `pnpm add` records the dependency but does **not** add the package to `dsh.profile.bundles`. Add it
   there too, or DSH will not load the bundle.
 
@@ -128,4 +163,5 @@ Build tooling therefore resolves a real entry point next to the running Node ins
 
 That logic lives in `scripts/package-manager.mjs` for the build scripts (plain JavaScript) and in
 `packages/installer/src/npm.ts` for the installer. Both fall back to the bare command name when no
-entry point is found, so POSIX systems behave exactly as before.
+entry point is found, so POSIX systems behave exactly as before. Each half has its own test:
+`packages/installer/test/npm.test.ts` and `scripts/package-manager.test.mjs`.

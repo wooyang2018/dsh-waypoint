@@ -8,6 +8,7 @@
  * without publishing those internal packages.
  */
 import { build } from 'esbuild'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -17,12 +18,16 @@ import { join } from 'node:path'
  * npm scripts cannot use POSIX `VAR=1 cmd` prefixes on Windows, so the same
  * settings are available as arguments. Environment variables still work and
  * lose to an explicit argument.
+ *
+ * @param {string[]} argv Arguments after the script path.
+ * @returns {Map<string, string | true>} Flag name to value, or `true` for a bare flag.
  */
 function parseFlags(argv) {
+  /** @type {Map<string, string | true>} */
   const flags = new Map()
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
-    if (!arg.startsWith('--')) continue
+    if (arg === undefined || !arg.startsWith('--')) continue
     const name = arg.slice(2)
     const next = argv[index + 1]
     if (next === undefined || next.startsWith('--')) {
@@ -38,9 +43,25 @@ function parseFlags(argv) {
 const flags = parseFlags(process.argv.slice(2))
 const packageDir = process.cwd()
 const manifest = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf8'))
-const entry = flags.get('entry') ?? process.env.DSH_REMOTE_HOST_ENTRY ?? 'src/index.ts'
-const outfile = flags.get('out') ?? process.env.DSH_REMOTE_HOST_OUT ?? 'lib/index.js'
+
+/**
+ * A string flag, ignoring a bare `--name` that carries no value.
+ *
+ * @param {string} name Flag name without the leading `--`.
+ * @returns {string | undefined} The value, when the flag carried one.
+ */
+function flagValue(name) {
+  const value = flags.get(name)
+  return typeof value === 'string' ? value : undefined
+}
+
+const entry = flagValue('entry') ?? process.env.DSH_REMOTE_HOST_ENTRY ?? 'src/index.ts'
+const outfile = flagValue('out') ?? process.env.DSH_REMOTE_HOST_OUT ?? 'lib/index.js'
 const isCli = flags.has('cli') || process.env.DSH_REMOTE_CLI === '1'
+
+if (!existsSync(join(packageDir, entry))) {
+  throw new Error(`build-host: ${manifest.name} has no ${entry}; pass --entry or run this from the package directory`)
+}
 
 await build({
   absWorkingDir: packageDir,

@@ -57,10 +57,13 @@ jobs:
           test "$RESOLVED" = "$DSH_TARGET"
       - name: Build
         run: pnpm -r build
+      # Root scripts, not `-r`: `pnpm -r` skips the root package, which is where
+      # the scripts/ checkJs pass and the scripts' own tests live. `pnpm typecheck`
+      # also runs the pretypecheck guard that rejects a stale workspace `lib/`.
       - name: Typecheck
-        run: pnpm -r typecheck
+        run: pnpm typecheck
       - name: Test
-        run: pnpm -r test
+        run: pnpm test
       - name: Secret scan
         uses: gitleaks/gitleaks-action@v2
         env:

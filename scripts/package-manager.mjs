@@ -8,19 +8,40 @@
  * that instead.
  *
  * Plain JavaScript so the `scripts/*.mjs` build tools can import it without a
- * TypeScript loader. Mirrors `packages/installer/src/npm.ts`.
+ * TypeScript loader. Mirrors `packages/installer/src/npm.ts`; the parameters
+ * below exist so `scripts/package-manager.test.mjs` can exercise every branch
+ * without a matching filesystem.
  */
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-/** How to run npm from this process. */
+/**
+ * @typedef {object} Invocation
+ * @property {string} command Executable to spawn.
+ * @property {string[]} prefixArgs Arguments that must precede the real ones.
+ */
+
+/**
+ * How to run npm from this process.
+ *
+ * @param {string} [execPath] Node executable whose sibling `node_modules` is probed.
+ * @param {(path: string) => boolean} [exists] Existence probe, injectable for tests.
+ * @returns {Invocation} Executable plus leading arguments.
+ */
 export function npmInvocation(execPath = process.execPath, exists = existsSync) {
   const cli = join(dirname(execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
   if (exists(cli)) return { command: execPath, prefixArgs: [cli] }
   return { command: 'npm', prefixArgs: [] }
 }
 
-/** How to run pnpm from this process. */
+/**
+ * How to run pnpm from this process.
+ *
+ * @param {string} [execPath] Node executable whose sibling `node_modules` is probed.
+ * @param {(path: string) => boolean} [exists] Existence probe, injectable for tests.
+ * @param {NodeJS.Platform} [platform] Target platform, injectable for tests.
+ * @returns {Invocation} Executable plus leading arguments.
+ */
 export function pnpmInvocation(execPath = process.execPath, exists = existsSync, platform = process.platform) {
   const root = join(dirname(execPath), 'node_modules', 'pnpm')
   const native = join(root, 'pnpm.exe')

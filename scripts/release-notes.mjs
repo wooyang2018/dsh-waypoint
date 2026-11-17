@@ -6,12 +6,11 @@
  * the version has no section, instead of publishing an empty release.
  */
 import { readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
+import { readManifest, repoRoot } from './paths.mjs'
 
-const root = resolve(import.meta.dirname, '..')
-const manifest = JSON.parse(readFileSync(join(root, 'packages', 'local-plugin', 'package.json'), 'utf8'))
-const version = manifest.version
-const lines = readFileSync(join(root, 'CHANGELOG.md'), 'utf8').split(/\r?\n/u)
+const version = readManifest(join(repoRoot, 'packages', 'local-plugin')).version
+const lines = readFileSync(join(repoRoot, 'CHANGELOG.md'), 'utf8').split(/\r?\n/u)
 const escaped = version.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 const heading = new RegExp(`^##\\s+\\[?${escaped}\\]?\\s*$`, 'u')
 const start = lines.findIndex(line => heading.test(line))

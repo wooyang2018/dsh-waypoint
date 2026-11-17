@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add `--dry-run` and `--keep-tracked` to `pnpm clean`, and warn when a removal would delete a file
+  git still tracks. `lib/` is gitignored, but a file git already tracks stays tracked after the
+  ignore rule appears, so a plain clean could leave an unrelated deletion staged for the next commit.
+- Type-check and test `scripts/` alongside the packages. `scripts/tsconfig.json` runs `allowJs` +
+  `checkJs` over the directory, `scripts/*.test.mjs` cover the package-manager resolver and the
+  development-version shape, and CI now runs the root `pnpm typecheck`/`pnpm test` — the previous
+  `pnpm -r` form skips the root package, so none of this ran there.
+- Stop `install-local.sh` from attempting the reserved `desktop` profile through a launcher that cannot
+  manage it, and drop a pinned `dsh-client-ui-sidebar@0.2.2-rc.2` install from `test-sandbox.sh`: the
+  `dsh-web-app` bundle already depends on that package at the profile's own version.
+
 - Stamp local plugin builds with a unique `<version>-dev-<timestamp>` prerelease.
   A package manager keys an install on the dependency version and the recorded
   tarball integrity, so rebuilding at a constant version and path left the

@@ -19,9 +19,10 @@ if [ "$PROFILE" = "desktop" ] && pgrep -f "/Applications/DeepSeek Harness.app/Co
   printf 'install-local: DSH Desktop is running; installing now. Restart it after this finishes to load the new bundles.\n'
 fi
 
+APP_CLI="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
 DSH_BIN="${DSH_BIN:-}"
-if [ -z "$DSH_BIN" ] && [ -x "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" ]; then
-  DSH_BIN="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
+if [ -z "$DSH_BIN" ] && [ -x "$APP_CLI" ]; then
+  DSH_BIN="$APP_CLI"
 fi
 if [ -z "$DSH_BIN" ]; then
   DSH_BIN="$(command -v dsh || true)"
@@ -31,13 +32,34 @@ if [ -z "$DSH_BIN" ] || [ ! -x "$DSH_BIN" ]; then
   exit 1
 fi
 
+# Only the Desktop app's own launcher may manage the reserved `desktop` profile:
+# it calls the CLI with the app-only permission that the standalone launcher
+# withholds (`profile "desktop" is managed exclusively by the Electron
+# application`). Failing here with that explanation beats letting `set -e` relay
+# the CLI's error after a full build.
+if [ "$PROFILE" = "desktop" ]; then
+  if [ ! -f "$APP_CLI" ] || [ ! "$DSH_BIN" -ef "$APP_CLI" ]; then
+    printf '%s\n' \
+      'install-local: the desktop profile can only be installed through the DeepSeek Harness app launcher.' \
+      "  resolved CLI: $DSH_BIN" \
+      "  app launcher: $APP_CLI" \
+      '' \
+      'Either install DSH Desktop and re-run this script, or pick a Web profile:' \
+      '  ./scripts/install-local.sh --profile web' \
+      '' \
+      'To install by hand into the desktop profile, run `pnpm add <tarball>` from inside' \
+      '$DSH_HOME/profiles/desktop and add the package to `dsh.profile.bundles`; see' \
+      'docs/development.md, "Installing a local build into a profile".' >&2
+    exit 1
+  fi
+fi
+
 printf 'install-local: building (this also packs the remote agent asset)\n'
 cd "$ROOT"
 pnpm install
 pnpm -r build
 
 printf 'install-local: packing the local plugin with the bundled terminal controller fork\n'
-cd "$ROOT"
 TARBALL="$(node scripts/release-plugin.mjs)"
 if [ ! -f "$TARBALL" ]; then
   printf 'install-local: plugin tarball was not produced at %s\n' "$TARBALL" >&2

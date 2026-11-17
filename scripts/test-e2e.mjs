@@ -11,20 +11,20 @@
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { join } from 'node:path'
+import { repoRoot } from './paths.mjs'
 
-const root = resolve(import.meta.dirname, '..')
-const packArgs = ['scripts/release-plugin.mjs']
+const packArgs = [join(repoRoot, 'scripts', 'release-plugin.mjs')]
 if (process.argv.includes('--release')) packArgs.push('--release')
 
-const output = execFileSync(process.execPath, packArgs, { cwd: root, encoding: 'utf8' })
+const output = execFileSync(process.execPath, packArgs, { cwd: repoRoot, encoding: 'utf8' })
 const tarball = output.trim().split('\n').at(-1) ?? ''
 if (tarball === '' || !existsSync(tarball)) {
   throw new Error(`e2e: the plugin tarball was not produced (got ${JSON.stringify(tarball)})`)
 }
 
 execFileSync('playwright', ['test'], {
-  cwd: root,
+  cwd: repoRoot,
   stdio: 'inherit',
   shell: process.platform === 'win32',
   env: { ...process.env, DSH_REMOTE_PLUGIN_TARBALL: tarball },
