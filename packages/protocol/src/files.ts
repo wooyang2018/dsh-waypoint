@@ -5,7 +5,7 @@
  * `workspaceFiles` contract. Binary payloads use base64 JSON because the
  * transport is ordinary HTTP envelopes rather than a binary framing layer.
  *
- * @module @dsh-remote/protocol/files
+ * @module @dsh-waypoint/protocol/files
  */
 
 /** Current metadata for one remote file. */

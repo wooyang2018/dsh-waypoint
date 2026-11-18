@@ -11,7 +11,7 @@ import { describe, it } from 'node:test'
 import { developmentVersion } from './dev-version.mjs'
 
 /** The pattern `release-plugin.mjs` uses to delete older development tarballs. */
-const PRUNE_PATTERN = /^dsh-remote-local-plugin-\d+\.\d+\.\d+-dev-[^.]+\.tgz$/u
+const PRUNE_PATTERN = /^dsh-waypoint-\d+\.\d+\.\d+-dev-[^.]+\.tgz$/u
 
 describe('developmentVersion', () => {
   it('produces the documented <base>-dev-<stamp>-<random> shape', () => {
@@ -31,7 +31,7 @@ describe('developmentVersion', () => {
   })
 
   it('stays matchable by the pruning pattern used on the packed tarball name', () => {
-    const tarball = `dsh-remote-local-plugin-${developmentVersion('0.8.21')}.tgz`
+    const tarball = `dsh-waypoint-${developmentVersion('0.8.21')}.tgz`
     assert.match(tarball, PRUNE_PATTERN)
   })
 })

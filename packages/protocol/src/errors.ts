@@ -5,7 +5,7 @@
  * agent switch on them, so they are stable strings rather than HTTP status
  * codes or free-form messages.
  *
- * @module @dsh-remote/protocol/errors
+ * @module @dsh-waypoint/protocol/errors
  */
 
 import type { RemoteFailure } from './types.ts'

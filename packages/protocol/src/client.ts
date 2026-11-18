@@ -6,7 +6,7 @@
  * follower. Reconnection, backoff, host lookup, and credential storage live
  * in the local plugin's service layer.
  *
- * @module @dsh-remote/protocol/client
+ * @module @dsh-waypoint/protocol/client
  */
 
 import { EventCursor } from './cursor.ts'

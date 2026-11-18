@@ -3,7 +3,7 @@
  * construction. Local Sessions call the stock remote face; mirrored Sessions
  * call the local plugin's SSH terminal route.
  */
-const TERMINAL_ROUTE = '/api/dsh-remote-terminal'
+const TERMINAL_ROUTE = '/api/dsh-waypoint-terminal'
 
 function applyRouted(ctx) {
   const original = ctx.remote.terminal

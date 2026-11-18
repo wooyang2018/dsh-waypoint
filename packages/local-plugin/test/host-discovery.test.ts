@@ -31,7 +31,7 @@ async function fixture(options: {
   readonly configText?: string
   readonly records?: readonly HostRecord[]
 } = {}) {
-  const home = await mkdtemp(join(tmpdir(), 'dshr-discovery-'))
+  const home = await mkdtemp(join(tmpdir(), 'dshwp-discovery-'))
   temporary.push(home)
   const sshConfig = join(home, 'ssh-config')
   if (options.configText !== undefined) await writeFile(sshConfig, options.configText)

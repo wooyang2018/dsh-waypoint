@@ -7,7 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="${PROFILE:-web}"
-TEST_HOME="${TEST_DSH_HOME:-$(mktemp -d "${TMPDIR:-/tmp}/dsh-remote-test.XXXXXX")}"
+TEST_HOME="${TEST_DSH_HOME:-$(mktemp -d "${TMPDIR:-/tmp}/dsh-waypoint-test.XXXXXX")}"
 case "$TEST_HOME" in
   "$HOME"|"$HOME/.dsh") echo "test-sandbox: refusing to use the primary DSH_HOME" >&2; exit 1 ;;
 esac
@@ -30,10 +30,10 @@ pnpm -r build >/dev/null
 TARBALL="$(node scripts/release-plugin.mjs)"
 "$DSH_BIN" plugin --profile "$PROFILE" add "$TARBALL" >/dev/null
 
-mkdir -p "$DSH_HOME/remote"
-cat > "$DSH_HOME/remote/test-visibility.json" <<JSON
+mkdir -p "$DSH_HOME/waypoint"
+cat > "$DSH_HOME/waypoint/test-visibility.json" <<JSON
 {
-  "hiddenPaths": ["/tmp/dsh-remote-tests"],
+  "hiddenPaths": ["/tmp/dsh-waypoint-tests"],
   "hiddenWorkspaceIds": []
 }
 JSON
@@ -55,5 +55,5 @@ fi
 echo "test-sandbox: TEST_DSH_HOME=$TEST_HOME"
 echo "test-sandbox: PID=$PID LOG=$LOG"
 echo "test-sandbox: URL=$URL"
-echo "test-sandbox: manifest=$DSH_HOME/remote/test-visibility.json"
+echo "test-sandbox: manifest=$DSH_HOME/waypoint/test-visibility.json"
 echo "test-sandbox: this profile is isolated; do not use the production remote home."

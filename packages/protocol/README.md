@@ -1,6 +1,6 @@
-# @dsh-remote/protocol
+# @dsh-waypoint/protocol
 
-The shared wire contract for `dsh-remote` (reads and writes):
+The shared wire contract for `dsh-waypoint` (reads and writes):
 
 - protocol revision negotiation;
 - JSON envelopes and stable error codes;

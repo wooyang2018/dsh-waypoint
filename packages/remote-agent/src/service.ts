@@ -5,7 +5,7 @@
  * workspace/session snapshots, remote file access, and PTY terminals so the
  * HTTP layer stays a thin transport.
  *
- * @module dsh-remote-agent/service
+ * @module dsh-waypoint-agent/service
  */
 
 import { EventEmitter } from 'node:events'
@@ -42,7 +42,7 @@ import {
   type SessionSnapshot,
   type SessionStreamFrame,
   type WebUrlResult,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 import { isLoopbackAddress } from './auth.ts'
 import {
   resolveConfig,
@@ -115,7 +115,7 @@ export class RemoteAgentService {
     service.#bindApprovals()
     await service.#bindListener()
     ctx.logger.info(
-      'dsh-remote-agent: listening on %s (state: %s)',
+      'dsh-waypoint-agent: listening on %s (state: %s)',
       service.#state.url ?? 'unknown',
       resolved.stateFile,
     )
@@ -408,7 +408,7 @@ export class RemoteAgentService {
         async (request: ApprovalRequestEvent) => this.#askApproval(request),
         { prepend: true },
       ),
-      'dsh-remote-agent: approval bridge',
+      'dsh-waypoint-agent: approval bridge',
     )
   }
 
@@ -671,7 +671,7 @@ export class RemoteAgentService {
     })
     try {
       if (llm === undefined) {
-        this.ctx.logger.warn('dsh-remote-agent: llm registry unavailable; reporting an empty model catalog')
+        this.ctx.logger.warn('dsh-waypoint-agent: llm registry unavailable; reporting an empty model catalog')
         return fallback()
       }
       const providers = llm.listProviders()
@@ -725,7 +725,7 @@ export class RemoteAgentService {
         failures,
       }
     } catch (error) {
-      this.ctx.logger.warn('dsh-remote-agent: model catalog failed: %s', String(error))
+      this.ctx.logger.warn('dsh-waypoint-agent: model catalog failed: %s', String(error))
       return fallback()
     }
   }
@@ -758,7 +758,7 @@ export class RemoteAgentService {
       this.#state = withStopped(this.#state)
       await writeState(this.config.stateFile, this.#state)
     } catch (error) {
-      this.ctx.logger.warn('dsh-remote-agent: failed to write stopped state: %s', String(error))
+      this.ctx.logger.warn('dsh-waypoint-agent: failed to write stopped state: %s', String(error))
     }
   }
 
@@ -767,7 +767,7 @@ export class RemoteAgentService {
     if (port === undefined) {
       throw new RemoteProtocolError({
         code: 'agent/not-ready',
-        message: 'dsh-remote-agent requires an active web listener with a bound port',
+        message: 'dsh-waypoint-agent requires an active web listener with a bound port',
       })
     }
     const url = this.ctx.webServer.getOrigin()
@@ -784,7 +784,7 @@ export class RemoteAgentService {
       const snapshots = await this.ctx.sessionPersistence.list()
       return new Map(snapshots.map(snapshot => [String(snapshot.header.id), snapshot]))
     } catch (error) {
-      this.ctx.logger.warn('dsh-remote-agent: session persistence list failed: %s', String(error))
+      this.ctx.logger.warn('dsh-waypoint-agent: session persistence list failed: %s', String(error))
       return new Map()
     }
   }

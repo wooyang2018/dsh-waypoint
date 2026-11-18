@@ -1,5 +1,5 @@
 /**
- * dsh-remote-agent plugin entry.
+ * dsh-waypoint-agent plugin entry.
  *
  * Installed into a remote DSH Web profile. It publishes a loopback-only,
  * bearer-authenticated API for host identity, workspaces, sessions, live
@@ -7,7 +7,7 @@
  * surface executes a shell on the remote host; the bearer token and private
  * state file are the trust boundary.
  *
- * @module dsh-remote-agent
+ * @module dsh-waypoint-agent
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -19,7 +19,7 @@ import { Config, type Config as RemoteAgentConfig } from './config.ts'
 import { registerAgentRoutes } from './http.ts'
 import { RemoteAgentService } from './service.ts'
 
-export const name = '@goldenpigeon/dsh-remote-agent'
+export const name = 'dsh-waypoint-agent'
 
 /** Services that must be active before the agent can answer anything. */
 export const inject = ['webServer', 'workspaceRegistry', 'sessions', 'sessionPersistence', 'sessionController', 'agents']
@@ -37,10 +37,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   const service = await RemoteAgentService.create(ctx, config)
   ctx.effect(
     () => registerAgentRoutes(ctx, service),
-    'dsh-remote-agent: loopback HTTP/SSE surface',
+    'dsh-waypoint-agent: loopback HTTP/SSE surface',
   )
   ctx.effect(
     () => () => { void service.dispose() },
-    'dsh-remote-agent: private state lifecycle',
+    'dsh-waypoint-agent: private state lifecycle',
   )
 }

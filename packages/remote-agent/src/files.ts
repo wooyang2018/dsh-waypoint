@@ -6,7 +6,7 @@
  * world. The agent only enforces read-only semantics, size/page caps, and
  * stable errors.
  *
- * @module dsh-remote-agent/files
+ * @module dsh-waypoint-agent/files
  */
 
 import { createReadStream } from 'node:fs'
@@ -23,7 +23,7 @@ import {
   type RemoteFileStat,
   type RemoteFileText,
   type RemoteFileWatchFrame,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 
 const MAX_LINE = 32 * 1024
 const MAX_PAGE = 1024 * 1024

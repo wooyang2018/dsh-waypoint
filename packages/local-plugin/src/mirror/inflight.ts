@@ -8,7 +8,7 @@
  * through a per-key in-flight table guarantees one creator and lets every
  * caller share its result.
  *
- * @module dsh-remote-local/mirror/inflight
+ * @module dsh-waypoint/mirror/inflight
  */
 
 /** Run `task` once per key while a previous run for that key is unsettled. */

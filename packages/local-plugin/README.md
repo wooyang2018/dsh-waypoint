@@ -1,4 +1,4 @@
-# dsh-remote-local-plugin
+# dsh-waypoint
 
 Remote development that appears as ordinary local sessions.
 
@@ -7,7 +7,7 @@ Remote development that appears as ordinary local sessions.
 This plugin targets the official **DSH Desktop** application. Supported versions:
 
 - [DSH Desktop](https://github.com/deepseek-ai/deepseek-harness) [`0.2.2-rc.3`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)
-- Plugin [`0.8.21`](https://www.npmjs.com/package/dsh-remote-local-plugin)
+- Plugin [`1.0.0`](https://www.npmjs.com/package/dsh-waypoint)
 - Remote DSH [`0.2.2-rc.3`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested; new installs follow the local DSH version)
 - Remote [Node.js `22.19+`](https://nodejs.org/en/download) on Linux/macOS
 
@@ -18,9 +18,9 @@ range is permissive for installation only; it is not a support guarantee.
 
 ## What it does
 
-- Durable host registry at `$DSH_HOME/remote/hosts.json` (mode `0600`).
+- Durable host registry at `$DSH_HOME/waypoint/hosts.json` (mode `0600`).
 - SSH discovery of the remote agent's private state file.
-- **Plugin-owned provisioning**: uploads the bundled `dsh-remote-agent` tarball, installs `pnpm` and
+- **Plugin-owned provisioning**: uploads the bundled `dsh-waypoint-agent` tarball, installs `pnpm` and
   `@deepseek-ai/dsh` globally into the remote npm prefix (`npm prefix -g` unless `remoteGlobalPrefix`
   says otherwise), starts remote `dsh web` from that same command, waits for it, and connects. No
   separate installer command, and no second `dsh` on the remote machine.
@@ -40,7 +40,7 @@ range is permissive for installation only; it is not a support guarantee.
 - Remote agent PTY terminals for mirror Sessions over the SSH tunnel; local Sessions keep the local terminal.
 - Remote approval questions bridged into the normal local approval UI.
 - Model tools for every operation.
-- Authenticated host API at `/api/dsh-remote` through DSH Connection's Fetch route.
+- Authenticated host API at `/api/dsh-waypoint` through DSH Connection's Fetch route.
 
 ## Install
 
@@ -49,7 +49,7 @@ range is permissive for installation only; it is not a support guarantee.
 After the npm package is published, use **Plugins → Add plugin** and enter:
 
 ```text
-dsh-remote-local-plugin
+dsh-waypoint
 ```
 
 The package bundles the remote agent asset and the terminal-controller fork. Restart DSH after the
@@ -59,7 +59,7 @@ If npmjs.com resolves an older `latest` tag for a newly published release, insta
 version instead:
 
 ```text
-dsh-remote-local-plugin@0.8.21
+dsh-waypoint@1.0.0
 ```
 
 Keep this pinned version in sync with each release.

@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const STOCK_ID = '@deepseek-ai/dsh-api-terminal-controller'
-const FORK_ID = 'dsh-remote-terminal-controller'
+const FORK_ID = 'dsh-waypoint-terminal-controller'
 const here = dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 const stockPackage = require.resolve(STOCK_ID + '/package.json')
@@ -51,4 +51,4 @@ await writeFile(join(here, '..', 'lib', 'typert.host.js'), `import { TYPERT as S
 export const TYPERT = { ...STOCK, package: '${FORK_ID}' }
 `)
 await writeFile(join(here, '..', 'lib', 'typert.host.d.ts'), 'export declare const TYPERT: unknown\n')
-process.stdout.write('built dsh-remote-terminal-controller client\n')
+process.stdout.write('built dsh-waypoint-terminal-controller client\n')

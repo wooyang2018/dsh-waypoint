@@ -1,7 +1,7 @@
 /**
  * Decision helper for a remote turn abandoned by a host restart.
  *
- * @module dsh-remote-local/mirror/recovery
+ * @module dsh-waypoint/mirror/recovery
  */
 
 /** The subset of the local `turnBoundary` projection used by recovery. */

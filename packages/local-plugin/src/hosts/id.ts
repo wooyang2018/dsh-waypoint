@@ -6,7 +6,7 @@
  * two aliases for the same machine remain distinct hosts (the user decides
  * whether to merge them).
  *
- * @module dsh-remote-local/hosts/id
+ * @module dsh-waypoint/hosts/id
  */
 
 import { createHash } from 'node:crypto'

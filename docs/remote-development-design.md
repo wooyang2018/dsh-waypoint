@@ -1,7 +1,7 @@
 > **Historical note:** this document describes an early two-repository plan. The proposed
 > `dsh-remote-client` patch/fork repository was built as a prototype and has been removed; it was
 > never part of the runtime or user installation. The shipped implementation is the single
-> `dsh-remote` repository: `local-plugin` + `terminal-controller` + `remote-agent` + `installer`.
+> `dsh-waypoint` repository: `local-plugin` + `terminal-controller` + `remote-agent` + `installer`.
 > References to `dsh-remote-client` below are retained only as design history.
 
 > **Implementation note:** this is an early design note. The implemented plugin now mirrors remote
@@ -14,6 +14,10 @@
 > `remote-dev-kit/` references in the original are not part of this repository.
 
 # DSH 远程开发设计文档：从 A 到 B-native
+
+> **本文件是历史设计记录。** 它写于项目还叫 `dsh-remote` 的时候，正文里的插件名、包名、
+> 状态目录和检索到的同类项目都保持当时的写法——那是一份设计笔记，不是当前用法说明。
+> 当前的名字与路径见根目录 `README.md`、`THIRD_PARTY_NOTICES.md` 和 `docs/operations.md`。
 
 - **Status**: Draft v0.1
 - **Date**: 2026-10-18
@@ -30,7 +34,7 @@
    - B-lite：`dsh-remote-tunnel` / `dsh-remote-explorer`，remote session 能跑，但 UI 是侧栏/标签页里的远端界面，不是本地 workspace 列表。
 3. **目标架构选 B-native**：host-aware 客户端 + 远端 runtime + 远端 agent。A 保留为 DSH 现有的“本地 session + 远端执行”快速路径，B-lite 作为过渡，纯本地/离线仍走本地模式。
 4. **仓库：2 个起步，3 个完整，4 个含云。**
-   - 今天：`dsh-remote`（协议 + 本地插件 + 远端 agent + installer）、`dsh-remote-client`（host-aware 客户端 patch/fork）
+   - 今天：`dsh-waypoint`（协议 + 本地插件 + 远端 agent + installer）、`dsh-remote-client`（host-aware 客户端 patch/fork）
    - 需要 NAT/云时：`dsh-remote-relay`
    - 做云沙箱/PR/多租户时：`dsh-remote-cloud`
 5. **当前非目标**：Codex Cloud 式沙箱编排、PR、多租户、计费。
@@ -186,7 +190,7 @@ A 方案会把 sandbox policy 路由到远端路径；B 方案的远端 runtime 
 ┌──────────────────────▼──────────────────────────────┐
 │ Remote Runtime                                       │
 │  ├─ dsh web / headless host                          │
-│  ├─ dsh-remote-agent bundle                          │
+│  ├─ dsh-waypoint-agent bundle                          │
 │  │   health / workspace list / session attach / token│
 │  ├─ workspace + toolchain + git + terminal           │
 │  └─ systemd / container supervision                  │
@@ -282,7 +286,7 @@ DSH 客户端目前是单 Host。B-native 需要改这些层：
 ### 5.5 远端运行时
 
 - 复用 `dsh web` 或 `dsh-headless`，不重写 agent loop；
-- 安装 `dsh-remote-agent` bundle：health、workspace list、session attach、token、版本协商；
+- 安装 `dsh-waypoint-agent` bundle：health、workspace list、session attach、token、版本协商；
 - 工作区、工具链、git、终端都在远端；
 - 生命周期：
   - 单机：systemd（system/user unit）或进程管理；
@@ -322,15 +326,15 @@ DSH 客户端目前是单 Host。B-native 需要改这些层：
 
 | 仓库 | 内容 | 为什么独立 | 何时 |
 |---|---|---|---|
-| **`dsh-remote`** | `packages/protocol`、`local-plugin`、`remote-agent`、`installer`、`testkit` | 插件和远端 agent 共用协议，必须同步发版；pnpm workspace 管理 | 今天 |
+| **`dsh-waypoint`** | `packages/protocol`、`local-plugin`、`remote-agent`、`installer`、`testkit` | 插件和远端 agent 共用协议，必须同步发版；pnpm workspace 管理 | 今天 |
 | **`dsh-remote-client`** | host-aware 客户端 patch/fork：connection、workspace store、session store、remote panels | 跟踪 DSH 上游，发版节奏不同；fork/patch 需要独立 rebase | 今天/下一步 |
 | **`dsh-remote-relay`** | outbound WebSocket relay、NAT 穿透、认证 | 独立服务、独立信任边界；SSH-only 不需要 | 需要 NAT/云时 |
 | **`dsh-remote-cloud`** | 沙箱编排、PR、多租户、infra | 运维/安全/计费，和插件不是一类东西 | 做云版时 |
 
-### 6.2 `dsh-remote` 目录
+### 6.2 `dsh-waypoint` 目录
 
 ```text
-dsh-remote/
+dsh-waypoint/
   packages/
     protocol/        # 类型、schema、版本协商、错误码
     local-plugin/    # DSH desktop profile 插件：host 管理、连接、UI
@@ -354,8 +358,8 @@ dsh-remote-client/
 ### 6.4 依赖方向
 
 ```text
-dsh-remote-client  ──depends on──▶  dsh-remote/packages/protocol
-dsh-remote/remote-agent  ──uses──▶  DSH runtime (dsh web / headless)
+dsh-remote-client  ──depends on──▶  dsh-waypoint/packages/protocol
+dsh-waypoint/remote-agent  ──uses──▶  DSH runtime (dsh web / headless)
 dsh-remote-relay  ──speaks──▶  protocol
 dsh-remote-cloud  ──orchestrates──▶  relay + runtime images
 ```
@@ -370,7 +374,7 @@ dsh-remote-cloud  ──orchestrates──▶  relay + runtime images
 ### 6.6 为什么不拆更多
 
 - `protocol` 先做 package，不做独立仓库；没有第三方实现者时，独立仓库只会增加跨仓库发版成本；
-- `installer`、`testkit` 同理，留在 `dsh-remote`；
+- `installer`、`testkit` 同理，留在 `dsh-waypoint`；
 - 等出现外部 agent 实现者，再把 protocol 拆出去。
 
 ---
@@ -466,7 +470,7 @@ dsh-remote-cloud  ──orchestrates──▶  relay + runtime images
 
 ## 9. 交接清单（在新 project 中开始）
 
-1. 建 `dsh-remote` 仓库，pnpm workspace，先落 `protocol`、`local-plugin`、`remote-agent`、`installer`、`testkit` 五个 package。
+1. 建 `dsh-waypoint` 仓库，pnpm workspace，先落 `protocol`、`local-plugin`、`remote-agent`、`installer`、`testkit` 五个 package。
 2. 建 `dsh-remote-client` 仓库，先放 `upstream.md` + `patches/` + `apply.sh`，不要复制整个 DSH。
 3. 写 ADR-001：协议复用 vs 新 envelope。
 4. 写 ADR-002：repo 2 patch vs fork。

@@ -1,5 +1,5 @@
 {
-  "name": "dsh-remote-workspace",
+  "name": "dsh-waypoint-workspace",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -34,7 +34,7 @@
     "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
     "@deepseek-ai/dsh-workspace": "0.2.2-rc.3",
     "@deepseek-ai/schemastery": "3.18.5",
-    "@dsh-remote/testkit": "workspace:*",
+    "@dsh-waypoint/testkit": "workspace:*",
     "@playwright/test": "^1.64.1",
     "@types/node": "^24.10.0",
     "@types/react": "^18.3.27",
@@ -49,12 +49,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Golden-Pigeon/dsh-remote.git"
+    "url": "git+https://github.com/wooyang2018/dsh-waypoint.git"
   },
-  "homepage": "https://github.com/Golden-Pigeon/dsh-remote#readme",
+  "homepage": "https://github.com/wooyang2018/dsh-waypoint#readme",
   "bugs": {
-    "url": "https://github.com/Golden-Pigeon/dsh-remote/issues"
+    "url": "https://github.com/wooyang2018/dsh-waypoint/issues"
   },
-  "author": "Golden-Pigeon",
+  "author": "wooyang2018 (fork of Golden-Pigeon/dsh-remote)",
   "license": "MIT"
 }

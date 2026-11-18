@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import type { RemoteApprovalRequest, RemoteSessionSummary, RemoteWorkspace, SessionSnapshot } from '@dsh-remote/protocol'
+import type { RemoteApprovalRequest, RemoteSessionSummary, RemoteWorkspace, SessionSnapshot } from '@dsh-waypoint/protocol'
 import type { ResolvedConfig } from '../src/config.ts'
 import { RemoteMirrorService } from '../src/mirror/service.ts'
 import type { RemoteHostsService } from '../src/service.ts'
@@ -15,7 +15,7 @@ export function deferred<T>() {
 }
 
 export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<void>) {
-  const stateDir = await mkdtemp(join(tmpdir(), 'dsh-remote-removal-'))
+  const stateDir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-removal-'))
   const ctx = new Context()
   const warnings: unknown[] = []
   ctx.logger.warn = (...args: unknown[]) => { warnings.push(args) }
@@ -157,7 +157,7 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
       service = new RemoteMirrorService(ctx, hosts, config)
       await service.start()
     },
-    async add(hostId = host.id, remote = workspace) { await ctx.parallel('dsh-remote/workspace-added', hostId, remote) },
+    async add(hostId = host.id, remote = workspace) { await ctx.parallel('dsh-waypoint/workspace-added', hostId, remote) },
     async close() { await service.dispose(); await rm(stateDir, { recursive: true, force: true }) },
   }
 }

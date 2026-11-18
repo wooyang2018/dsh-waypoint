@@ -15,7 +15,7 @@ installation allowance, not a support guarantee.
 Please use the repository's **Security → Report a vulnerability** flow to open a private security
 advisory:
 
-https://github.com/Golden-Pigeon/dsh-remote/security/advisories/new
+https://github.com/wooyang2018/dsh-waypoint/security/advisories/new
 
 Do not open a public issue for a vulnerability that could expose credentials, execute commands, or
 affect remote hosts. Include the affected version, reproduction steps, and whether the issue affects

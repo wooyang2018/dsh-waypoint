@@ -1,7 +1,7 @@
 /**
- * `@dsh-remote/protocol` public surface.
+ * `@dsh-waypoint/protocol` public surface.
  *
- * @module @dsh-remote/protocol
+ * @module @dsh-waypoint/protocol
  */
 
 export {

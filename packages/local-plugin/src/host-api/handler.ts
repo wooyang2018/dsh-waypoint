@@ -6,7 +6,7 @@
  * validates the endpoint/payload, dispatches to the service, and shapes the
  * JSON result.
  *
- * @module dsh-remote-local/host-api/handler
+ * @module dsh-waypoint/host-api/handler
  */
 
 import type { Context } from '@deepseek-ai/cordis'

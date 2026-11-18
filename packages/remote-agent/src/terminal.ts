@@ -5,7 +5,7 @@
  * not need a native node-pty build. Each terminal is still a child of this
  * agent; the local plugin only sees frames over the existing tunnel.
  *
- * @module dsh-remote-agent/terminal
+ * @module dsh-waypoint-agent/terminal
  */
 
 import { accessSync, constants } from 'node:fs'
@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto'
 import { userInfo } from 'node:os'
 import { basename, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { RemoteProtocolError, type RemoteTerminalCreateRequest, type RemoteTerminalFrame, type RemoteTerminalInfo, type RemoteTerminalInput } from '@dsh-remote/protocol'
+import { RemoteProtocolError, type RemoteTerminalCreateRequest, type RemoteTerminalFrame, type RemoteTerminalInfo, type RemoteTerminalInput } from '@dsh-waypoint/protocol'
 
 const MAX_BUFFERED_BYTES = 512 * 1024
 const MAX_COLS = 240

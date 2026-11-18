@@ -5,7 +5,7 @@
  * used by the local plugin over SSH; it deliberately contains no DSH API
  * keys, workspace contents, or session data.
  *
- * @module dsh-remote-agent/state
+ * @module dsh-waypoint-agent/state
  */
 
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
@@ -43,23 +43,23 @@ export function parseState(raw: string): AgentState {
   try {
     value = JSON.parse(raw)
   } catch (error) {
-    throw new Error(`dsh-remote-agent: state file is not valid JSON`, { cause: error })
+    throw new Error(`dsh-waypoint-agent: state file is not valid JSON`, { cause: error })
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('dsh-remote-agent: state file is not a JSON object')
+    throw new Error('dsh-waypoint-agent: state file is not a JSON object')
   }
   const record = value as Record<string, unknown>
   if (record.version !== STATE_VERSION) {
-    throw new Error(`dsh-remote-agent: unsupported state version ${String(record.version)}`)
+    throw new Error(`dsh-waypoint-agent: unsupported state version ${String(record.version)}`)
   }
   if (typeof record.token !== 'string' || !isValidToken(record.token)) {
-    throw new Error('dsh-remote-agent: state file token is malformed')
+    throw new Error('dsh-waypoint-agent: state file token is malformed')
   }
   if (record.port !== null && (typeof record.port !== 'number' || !Number.isInteger(record.port))) {
-    throw new Error('dsh-remote-agent: state file port is malformed')
+    throw new Error('dsh-waypoint-agent: state file port is malformed')
   }
   if (typeof record.pid !== 'number' || typeof record.startedAt !== 'string') {
-    throw new Error('dsh-remote-agent: state file liveness metadata is malformed')
+    throw new Error('dsh-waypoint-agent: state file liveness metadata is malformed')
   }
   return {
     version: STATE_VERSION,
@@ -101,7 +101,7 @@ export async function openState(
     ? configuredToken
     : existing?.token ?? mintToken()
   if (!isValidToken(token)) {
-    throw new Error(`dsh-remote-agent: token must be at least ${16} characters`)
+    throw new Error(`dsh-waypoint-agent: token must be at least ${16} characters`)
   }
   const now = new Date().toISOString()
   const state: AgentState = {

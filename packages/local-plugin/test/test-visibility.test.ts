@@ -8,7 +8,7 @@ import { isTestHidden, loadTestVisibility } from '../src/mirror/test-visibility.
 
 describe('test visibility manifest', () => {
   let dir = ''
-  before(async () => { dir = await mkdtemp(join(tmpdir(), 'dsh-remote-visibility-')) })
+  before(async () => { dir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-visibility-')) })
   after(async () => { if (dir !== '') await rm(dir, { recursive: true, force: true }) })
 
   it('matches hidden ids and path prefixes only on segment boundaries', () => {

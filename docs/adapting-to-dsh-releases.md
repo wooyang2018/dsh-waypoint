@@ -69,7 +69,7 @@ Four places carry an exact version and must agree with the new target:
 | Location | What it is |
 |---|---|
 | `.github/workflows/ci.yml` → `env.DSH_TARGET` | the only CI-side switch; artifact name follows it |
-| `packages/installer/src/options.ts` → `dshVersion` default **and** the `HELP` text | what `dsh-remote-install --dsh-version` defaults to |
+| `packages/installer/src/options.ts` → `dshVersion` default **and** the `HELP` text | what `dsh-waypoint-install --dsh-version` defaults to |
 | `packages/local-plugin/src/remote/provisioner.ts` → `FALLBACK_REMOTE_DSH_VERSION` | used only when the local DSH version cannot be read; tracks the newest supported release |
 | `README.md`, `README.zh.md`, `packages/local-plugin/README.md`, `SECURITY.md`, `CONTRIBUTING.md`, `RELEASING.md` | the supported-version matrix |
 
@@ -89,7 +89,7 @@ pnpm -r build && pnpm -r typecheck && pnpm -r test && node scripts/release-plugi
 - **A client bundle test fails.** `packages/local-plugin/test/client-bundle.test.ts` pins the
   roster/binding face the stock UI calls. That test failing means the stock surface moved, and the fork
   or the mirror bridge needs the new shape.
-- **A Playwright case fails.** Run `DSH_REMOTE_E2E_DSH_VERSION=<new-version> pnpm test:e2e` locally;
+- **A Playwright case fails.** Run `DSH_WAYPOINT_E2E_DSH_VERSION=<new-version> pnpm test:e2e` locally;
   that suite is not in CI and defaults to the newest tested release.
 - **Runtime approval ordering regresses.** `packages/remote-agent/cordis.patch.yml` keeps
   `dsh-api-remotes` enabled and the approval bridge registers with `prepend` so it wins the

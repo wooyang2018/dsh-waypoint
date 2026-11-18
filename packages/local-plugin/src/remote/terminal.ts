@@ -6,14 +6,14 @@
  * over the existing SSH tunnel and exposes the browser protocol the normal
  * terminal UI consumes.
  *
- * @module dsh-remote-local/remote/terminal
+ * @module dsh-waypoint/remote/terminal
  */
 
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TerminalFrame, TerminalInput, TerminalShell, WebTerminalInfo } from '@deepseek-ai/dsh-api-terminal-controller'
-import type { RemoteAgentClient } from '@dsh-remote/protocol'
+import type { RemoteAgentClient } from '@dsh-waypoint/protocol'
 import { LocalError } from '../errors.ts'
 import type { RemoteHostsService } from '../service.ts'
 import type { RemoteMirrorService } from '../mirror/service.ts'

@@ -27,5 +27,5 @@ execFileSync('playwright', ['test'], {
   cwd: repoRoot,
   stdio: 'inherit',
   shell: process.platform === 'win32',
-  env: { ...process.env, DSH_REMOTE_PLUGIN_TARBALL: tarball },
+  env: { ...process.env, DSH_WAYPOINT_PLUGIN_TARBALL: tarball },
 })

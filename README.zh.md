@@ -1,7 +1,7 @@
-# dsh-remote
+# dsh-waypoint
 
-[![CI](https://github.com/Golden-Pigeon/dsh-remote/actions/workflows/ci.yml/badge.svg)](https://github.com/Golden-Pigeon/dsh-remote/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/dsh-remote-local-plugin.svg)](https://www.npmjs.com/package/dsh-remote-local-plugin)
+[![CI](https://github.com/wooyang2018/dsh-waypoint/actions/workflows/ci.yml/badge.svg)](https://github.com/wooyang2018/dsh-waypoint/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-waypoint.svg)](https://www.npmjs.com/package/dsh-waypoint)
 
 [English](README.md) | 简体中文
 
@@ -13,7 +13,7 @@
 本地 DSH                                        远端主机
 ┌──────────────────────────────────────┐          ┌──────────────────────────────┐
 │ 普通侧边栏 + Conversation UI         │          │ dsh web（由插件安装）        │
-│  本地镜像 Session + Agent façade     │  SSH     │ dsh-remote-agent             │
+│  本地镜像 Session + Agent façade     │  SSH     │ dsh-waypoint-agent             │
 │  主机注册 / 自动安装                 │◀────────▶│  workspace/session 写入      │
 │  直连 key 或本地 key proxy           │          │  远端工具 + 模型调用          │
 │  已认证的 /api 路由                  │  隧道    │                              │
@@ -27,7 +27,7 @@
 | 组件 | 版本 |
 |---|---|
 | [DSH Desktop / 官方客户端](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)（已测试） |
-| 插件 | [**0.8.21**](https://www.npmjs.com/package/dsh-remote-local-plugin) |
+| 插件 | [**1.0.0**](https://www.npmjs.com/package/dsh-waypoint) |
 | 远端 DSH 运行时 | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)（已测试；新安装跟随本机 DSH 版本） |
 | 远端 Node.js | [**22.19+**](https://nodejs.org/en/download) |
 | 远端操作系统 | Linux 或 macOS |
@@ -67,7 +67,7 @@
 打开 **Plugins → Add plugin**，输入：
 
 ```text
-dsh-remote-local-plugin
+dsh-waypoint
 ```
 
 DSH 会从 npm 安装 bundle。这个包已经包含远端 agent 资源和 terminal-controller fork，不需要再安装其他包。按插件页提示重启 DSH，然后 **Settings → Remote development** 会出现。
@@ -75,7 +75,7 @@ DSH 会从 npm 安装 bundle。这个包已经包含远端 agent 资源和 termi
 如果 npmjs.com 对刚发布版本的 `latest` 解析仍旧滞后，可以改为安装当前的精确版本：
 
 ```text
-dsh-remote-local-plugin@0.8.21
+dsh-waypoint@1.0.0
 ```
 
 每次发新版本时同步更新这个版本号。
@@ -85,7 +85,7 @@ dsh-remote-local-plugin@0.8.21
 开发时克隆仓库并运行安装脚本：
 
 ```sh
-cd /path/to/dsh-remote
+cd /path/to/dsh-waypoint
 pnpm install
 pnpm -r build
 ./scripts/install-local.sh
@@ -122,11 +122,11 @@ Settings 页面只负责主机和工作区管理，会话本身不是弹窗。
 测试隔离由测试 DSH home 里的一个测试专用清单控制，不是 Settings 选项，也不是 agent 工具：
 
 ```text
-$DSH_HOME/remote/test-visibility.json
+$DSH_HOME/waypoint/test-visibility.json
 ```
 
 ```json
-{"hiddenPaths": ["/tmp/dsh-remote-tests"], "hiddenWorkspaceIds": ["remote-workspace-id"]}
+{"hiddenPaths": ["/tmp/dsh-waypoint-tests"], "hiddenWorkspaceIds": ["remote-workspace-id"]}
 ```
 
 `hiddenPaths` 在创建工作区时就阻止本地注册。`hiddenWorkspaceIds` 在测试跑完之后隐藏一个已经可见的测试工作区；本地镜像会话会被归档而不是删除，移除该条目后恢复。详见 [docs/testing.md](docs/testing.md)。
@@ -189,7 +189,7 @@ $DSH_HOME/remote/test-visibility.json
 
 **远端：** Linux 或 macOS，带 SSH server，且**已装好** [Node.js 22.19+](https://nodejs.org/en/download)。Node.js 通过该账号自己的 shell 探测，所以 PATH、nvm、Volta、fnm、Bun、asdf、mise、Nix、Homebrew 都会被识别。安装器**不会**下载或安装 Node.js：选哪个运行时版本是你的决定，机器上多一份正是两个运行时争抢同一个命令的起因。找不到或版本过低时，安装会停下并说明该装什么。不支持 Windows 远端。
 
-`pnpm` 和 `@deepseek-ai/dsh` 一律**全局安装**到 `npm prefix -g` 给出的前缀，因此插件启动的 `dsh` 和你自己敲的 `dsh` 是同一个文件、同一个版本。想换前缀就设 `remoteGlobalPrefix`，没有兜底位置——把 `dsh` 悄悄装到别处才是这次要去掉的分歧。如果该前缀不在你登录 shell 的 `PATH` 上，安装日志会打印唯一一行 `export PATH=…` 让人自行加入；安装器从不改你的 shell 启动文件。前缀不可写时安装会带着 npm 原始错误失败，而不是改装到别处。注意 npm 写的是 `<prefix>/lib/node_modules` 和 `<prefix>/bin`，两者可以一个可写一个不可写，这正是要跑 `dsh-remote-install doctor` 的原因。
+`pnpm` 和 `@deepseek-ai/dsh` 一律**全局安装**到 `npm prefix -g` 给出的前缀，因此插件启动的 `dsh` 和你自己敲的 `dsh` 是同一个文件、同一个版本。想换前缀就设 `remoteGlobalPrefix`，没有兜底位置——把 `dsh` 悄悄装到别处才是这次要去掉的分歧。如果该前缀不在你登录 shell 的 `PATH` 上，安装日志会打印唯一一行 `export PATH=…` 让人自行加入；安装器从不改你的 shell 启动文件。前缀不可写时安装会带着 npm 原始错误失败，而不是改装到别处。注意 npm 写的是 `<prefix>/lib/node_modules` 和 `<prefix>/bin`，两者可以一个可写一个不可写，这正是要跑 `dsh-waypoint-install doctor` 的原因。
 
 如果远端需要代理，把 `remoteInstallProxy` 设为**从远端能访问的**代理 URL，例如端口转发后暴露在远端的 `http://127.0.0.1:17890`。安装流程会为 bootstrap 导出 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `npm_config_*`。留空时会使用该账号真实的登录 shell（bash、zsh、fish 等）及其登录/交互启动文件读取 `HTTPS_PROXY` / `HTTP_PROXY`。同一个代理也会写入远端 systemd unit（或由 `nohup` 进程继承），因此远端模型请求也会走代理，而不只是安装阶段。
 
@@ -206,7 +206,7 @@ $DSH_HOME/remote/test-visibility.json
 ## 配置
 
 ```yaml
-- id: dsh-remote-local
+- id: dsh-waypoint
   config:
     autoProvision: true
     remoteDshHome: ~/.dsh
@@ -235,7 +235,7 @@ $DSH_HOME/remote/test-visibility.json
 远端 agent 还支持高级配置：
 
 ```yaml
-- id: dsh-remote-agent
+- id: dsh-waypoint-agent
   config:
     stateFile: ''
     token: ''
@@ -268,15 +268,15 @@ $DSH_HOME/remote/test-visibility.json
 | 远端重启后端口变化 | 点 **Rediscover** |
 | 安装报 npm 全局前缀相关错误 | npm 无法写入该账号的 `<prefix>/lib/node_modules` 或 `<prefix>/bin`，或 `npm prefix -g` 输出为空。把 `remoteGlobalPrefix` 指向一个你自己拥有的目录（如 `~/npm-global`）后重试 |
 | 装完了自己的 shell 里找不到 `dsh` | 安装日志打印了要加到 shell 启动文件的那行 `export PATH=…`；安装器不会代你修改这些文件 |
-| 切换 Node.js 版本后远端 DSH 起不来 | nvm/Volta 切版本会连 npm 全局前缀一起搬走，服务里烘焙的 `dsh` 路径随之失效。点 **Reinstall**；`dsh-remote-install doctor --target …` 会报 `global_dsh` 与 `login_path_has_dsh` |
+| 切换 Node.js 版本后远端 DSH 起不来 | nvm/Volta 切版本会连 npm 全局前缀一起搬走，服务里烘焙的 `dsh` 路径随之失效。点 **Reinstall**；`dsh-waypoint-install doctor --target …` 会报 `global_dsh` 与 `login_path_has_dsh` |
 | 远端 agent 端口乱跳 / 主机反复断连 | 有两个 `dsh web` 在写同一个 `agent.json`。每个 `DSH_HOME` 只跑一个；`doctor` 会报 `dsh_web_processes` |
 
 远端日志：
 
 ```sh
-journalctl --user -u dsh-remote-agent -f
+journalctl --user -u dsh-waypoint-agent -f
 # 或
-$DSH_HOME/remote-agent/web.log
+$DSH_HOME/waypoint-agent/web.log
 ```
 
 ## 验证
@@ -286,6 +286,26 @@ pnpm verify
 ```
 
 测试覆盖 protocol/SSE/cursor/write 契约、安装器渲染、proxy 转发和 client bundle。原生路径已在一个真实 Linux 远端主机上验证：插件安装、远端 workspace/session 创建、通过本地 key proxy 发送 prompt、实时事件镜像、第二轮 follow-up，以及远端工具调用/结果。
+
+## 与上游的关系
+
+`dsh-waypoint` 起源于 [Golden-Pigeon/dsh-remote](https://github.com/Golden-Pigeon/dsh-remote) 的 fork。
+下面的改动曾试图合并回上游，被拒绝后，这项工作以独立项目的名义继续在这里维护。两者都是 MIT
+许可，原作者在 [LICENSE](LICENSE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 中保留署名，
+仓库历史（包含每一个上游提交）原样保留。
+
+改名同时改变了 DSH 持久化的身份，因此两者是**两份独立安装**，互不读取对方的状态：
+
+| | 上游 `dsh-remote` | 本项目 |
+|---|---|---|
+| 插件包 | `dsh-remote-local-plugin` | `dsh-waypoint` |
+| 远端 agent | `@goldenpigeon/dsh-remote-agent` | `dsh-waypoint-agent` |
+| 主机注册表 | `$DSH_HOME/remote` | `$DSH_HOME/waypoint` |
+| 远端 agent 状态 | `$DSH_HOME/remote-agent` | `$DSH_HOME/waypoint-agent` |
+
+不会自动迁移。如果要切换过来，请先卸掉旧插件（`dsh plugin --profile <p> remove
+dsh-remote-local-plugin`），避免同时出现两个设置分区；再按 `docs/operations.md` 搬迁主机注册表，
+并清理远端主机上遗留的 `dsh-remote-agent.service`。
 
 ## 文档
 
@@ -304,12 +324,12 @@ pnpm verify
 
 | 包 | 作用 |
 |---|---|
-| [`@dsh-remote/protocol`](packages/protocol) | Wire 类型、surface metadata、cursor、SSE、typed client |
-| [`dsh-remote-local-plugin`](packages/local-plugin) | 自动安装、隧道、proxy、**原生 Session 镜像**、工具、Settings |
-| [`dsh-remote-agent`](packages/remote-agent) | 远端 DSH 插件：workspace、session、prompt、SSE |
-| [`dsh-remote-terminal-controller`](packages/terminal-controller) | 按 Session 路由本地/远端终端的 profile fork |
-| [`@dsh-remote/installer`](packages/installer) | 插件使用的 bootstrap 库/CLI |
-| [`@dsh-remote/testkit`](packages/testkit) | Fake host 和 wire 契约测试 |
+| [`@dsh-waypoint/protocol`](packages/protocol) | Wire 类型、surface metadata、cursor、SSE、typed client |
+| [`dsh-waypoint`](packages/local-plugin) | 自动安装、隧道、proxy、**原生 Session 镜像**、工具、Settings |
+| [`dsh-waypoint-agent`](packages/remote-agent) | 远端 DSH 插件：workspace、session、prompt、SSE |
+| [`dsh-waypoint-terminal-controller`](packages/terminal-controller) | 按 Session 路由本地/远端终端的 profile fork |
+| [`@dsh-waypoint/installer`](packages/installer) | 插件使用的 bootstrap 库/CLI |
+| [`@dsh-waypoint/testkit`](packages/testkit) | Fake host 和 wire 契约测试 |
 
 ## License
 

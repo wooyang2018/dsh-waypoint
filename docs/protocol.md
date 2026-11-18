@@ -1,6 +1,6 @@
 # Remote development wire protocol
 
-- **Status**: v1, implemented by `dsh-remote-agent` and `@dsh-remote/protocol`
+- **Status**: v1, implemented by `dsh-waypoint-agent` and `@dsh-waypoint/protocol`
 - **Transport**: HTTP/1.1 over an SSH local forward; Server-Sent Events for streamed frames
 - **Encoding**: JSON envelopes; UTF-8
 - **Scope**: host/workspace/session projections plus a small session/workspace write surface. No arbitrary shell or file-content access.
@@ -20,7 +20,7 @@ cross-host multiplexing.
 ## Endpoint base
 
 ```text
-http://127.0.0.1:<remote-port>/dsh-remote-agent/api/v1
+http://127.0.0.1:<remote-port>/dsh-waypoint-agent/api/v1
 ```
 
 The remote agent is served by the remote DSH web host. It is reached through a local SSH forward:
@@ -38,9 +38,9 @@ Every request requires:
 
 ```http
 Authorization: Bearer <agent-token>
-x-dsh-remote-protocol: 1
-x-dsh-remote-host-id: <logical-host-id>   # optional, defaults to "local"
-x-dsh-remote-request-id: <uuid>           # optional, echoed for tracing
+x-dsh-waypoint-protocol: 1
+x-dsh-waypoint-host-id: <logical-host-id>   # optional, defaults to "local"
+x-dsh-waypoint-request-id: <uuid>           # optional, echoed for tracing
 ```
 
 The agent requires a loopback peer when `loopbackOnly` is true. A missing or wrong token yields
@@ -50,10 +50,10 @@ The agent requires a loopback peer when `loopbackOnly` is true. A missing or wro
 The agent advertises its revision on every response:
 
 ```http
-x-dsh-remote-server-protocol: 1
-x-dsh-remote-agent-version: 0.2.10
-x-dsh-remote-host-id: <echoed or local>
-x-dsh-remote-request-id: <echoed or generated>
+x-dsh-waypoint-server-protocol: 1
+x-dsh-waypoint-agent-version: 0.2.10
+x-dsh-waypoint-host-id: <echoed or local>
+x-dsh-waypoint-request-id: <echoed or generated>
 ```
 
 ### Version rules
@@ -269,7 +269,7 @@ Rules:
 
 ### Cursor rules
 
-A cursor is the next expected `seq`. `EventCursor` (in `@dsh-remote/protocol`) provides:
+A cursor is the next expected `seq`. `EventCursor` (in `@dsh-waypoint/protocol`) provides:
 
 - `applied` when `seq === cursor`;
 - `duplicate` when `seq < cursor` (ignore);
@@ -311,8 +311,8 @@ never logged or stored by the local plugin.
 
 ## Package surface: contract versus internals
 
-`@dsh-remote/protocol` is a workspace package, not a published one — the release workflow publishes
-only `dsh-remote-local-plugin` and `@goldenpigeon/dsh-remote-agent`, and `scripts/build-host.mjs`
+`@dsh-waypoint/protocol` is a workspace package, not a published one — the release workflow publishes
+only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 

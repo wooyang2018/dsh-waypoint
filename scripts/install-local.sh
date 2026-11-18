@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Install dsh-remote-local-plugin into a local DSH profile.
+# Install dsh-waypoint into a local DSH profile.
 #
 # Usage:
 #   ./scripts/install-local.sh                 # desktop profile
 #   ./scripts/install-local.sh --profile web   # a DSH Web profile
 #
 # The script builds the workspace, packages the plugin (including the bundled
-# dsh-remote-agent tarball), and installs it with the DSH CLI. It is safe to run
+# dsh-waypoint-agent tarball), and installs it with the DSH CLI. It is safe to run
 # while the desktop app is open; restart the app afterwards to load the new host
 # and client bundles.
 set -euo pipefail

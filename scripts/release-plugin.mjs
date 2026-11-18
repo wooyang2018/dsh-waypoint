@@ -24,7 +24,7 @@ const terminalManifest = readManifest(terminalDir)
 
 const release = process.argv.includes('--release')
 const version = release ? manifest.version : developmentVersion(manifest.version)
-const target = join(pluginDir, `dsh-remote-local-plugin-${version}.tgz`)
+const target = join(pluginDir, `dsh-waypoint-${version}.tgz`)
 
 /**
  * Drop development tarballs older than the one about to be written.
@@ -40,7 +40,7 @@ function pruneDevelopmentBuilds(keep) {
   if (release) return
   for (const name of readdirSync(pluginDir)) {
     if (name === keep) continue
-    if (!/^dsh-remote-local-plugin-\d+\.\d+\.\d+-dev-[^.]+\.tgz$/u.test(name)) continue
+    if (!/^dsh-waypoint-\d+\.\d+\.\d+-dev-[^.]+\.tgz$/u.test(name)) continue
     try {
       unlinkSync(join(pluginDir, name))
     } catch {
@@ -59,14 +59,14 @@ for (const required of [
   if (!existsSync(required)) throw new Error(`release-plugin: missing build output ${required}; run pnpm -r build first`)
 }
 
-const staging = mkdtempSync(join(tmpdir(), 'dsh-remote-release-'))
+const staging = mkdtempSync(join(tmpdir(), 'dsh-waypoint-release-'))
 try {
-  for (const entry of ['lib', 'assets', 'cordis.patch.yml', 'README.md']) {
+  for (const entry of ['lib', 'assets', 'cordis.patch.yml', 'icon-180.png', 'README.md']) {
     cpSync(join(pluginDir, entry), join(staging, entry), { recursive: true })
   }
   cpSync(join(repoRoot, 'LICENSE'), join(staging, 'LICENSE'))
 
-  const terminalTarget = join(staging, 'node_modules', 'dsh-remote-terminal-controller')
+  const terminalTarget = join(staging, 'node_modules', 'dsh-waypoint-terminal-controller')
   for (const entry of ['lib', 'cordis.patch.yml', 'README.md', 'package.json']) {
     cpSync(join(terminalDir, entry), join(terminalTarget, entry), { recursive: true })
   }
@@ -74,19 +74,19 @@ try {
   const published = {
     ...manifest,
     version,
-    files: ['lib', 'assets', 'cordis.patch.yml', 'README.md', 'LICENSE'],
+    files: ['lib', 'assets', 'cordis.patch.yml', 'icon-180.png', 'README.md', 'LICENSE'],
     dependencies: {
       ...manifest.dependencies,
-      'dsh-remote-terminal-controller': terminalManifest.version,
+      'dsh-waypoint-terminal-controller': terminalManifest.version,
     },
-    bundledDependencies: ['dsh-remote-terminal-controller'],
+    bundledDependencies: ['dsh-waypoint-terminal-controller'],
     scripts: {},
     devDependencies: undefined,
   }
   writeFileSync(join(staging, 'package.json'), `${JSON.stringify(published, null, 2)}\n`)
 
   copyFileSync(packTarball({ cwd: staging, destination: staging }), target)
-  pruneDevelopmentBuilds(`dsh-remote-local-plugin-${version}.tgz`)
+  pruneDevelopmentBuilds(`dsh-waypoint-${version}.tgz`)
   // stdout carries the tarball path alone: callers consume it as
   // `TARBALL="$(node scripts/release-plugin.mjs)"`. Progress goes to stderr.
   if (!release) process.stderr.write(`release-plugin: dev version ${version}\n`)

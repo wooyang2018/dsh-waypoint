@@ -1,20 +1,20 @@
 {
-  "name": "@dsh-remote/installer",
+  "name": "@dsh-waypoint/installer",
   "version": "0.1.0",
   "private": true,
-  "description": "Bootstrap CLI for installing dsh-remote-agent on an SSH host and starting its DSH Web host.",
+  "description": "Bootstrap CLI for installing dsh-waypoint-agent on an SSH host and starting its DSH Web host.",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "bin": {
-    "dsh-remote-install": "lib/cli.js"
+    "dsh-waypoint-install": "lib/cli.js"
   },
   "files": [
     "lib"
   ],
   "devDependencies": {
-    "@dsh-remote/protocol": "workspace:*"
+    "@dsh-waypoint/protocol": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node ../../scripts/build-host.mjs --entry src/bin.ts --out lib/cli.js --cli && node ../../scripts/build-host.mjs",

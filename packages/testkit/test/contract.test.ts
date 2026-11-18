@@ -6,7 +6,7 @@ import {
   RemoteAgentClient,
   RemoteProtocolError,
   type SessionStreamFrame,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 import { FakeRemoteHost } from '../src/fake-host.ts'
 
 const TOKEN = 'contract-token-0123456789'

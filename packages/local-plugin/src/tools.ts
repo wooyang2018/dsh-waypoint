@@ -5,12 +5,12 @@
  * page uses. They let an agent add a host, inspect its status, and read remote
  * workspaces/sessions without a UI detour; secrets are never returned.
  *
- * @module dsh-remote-local/tools
+ * @module dsh-waypoint/tools
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { JsonValue } from '@dsh-remote/protocol'
+import type { JsonValue } from '@dsh-waypoint/protocol'
 import type { RemoteHostsService } from './service.ts'
 
 type JsonObject = Record<string, JsonValue>
@@ -43,7 +43,7 @@ export function installRemoteToolGuards(ctx: Context): void {
         zh: '允许这次远程主机操作吗？它可能通过 SSH 连接，并把本地模型凭据复制到远端主机。',
       },
     })
-  }), 'dsh-remote-local: host-write tool approvals')
+  }), 'dsh-waypoint: host-write tool approvals')
 }
 
 /** Register the remote-development tool family. */
@@ -121,7 +121,7 @@ export function registerRemoteTools(ctx: Context, service: RemoteHostsService): 
 
   ctx.tools.register(defineTool({
     name: 'remote_host_provision',
-    description: 'Force a fresh remote installation/restart of dsh-remote-agent and dsh web, then reconnect. Use this to repair a broken host or update an old agent.',
+    description: 'Force a fresh remote installation/restart of dsh-waypoint-agent and dsh web, then reconnect. Use this to repair a broken host or update an old agent.',
     parameters: {
       hostId: { type: 'string', required: true, description: 'Registered host id.' },
     },

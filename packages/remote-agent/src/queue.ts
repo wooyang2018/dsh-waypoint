@@ -5,7 +5,7 @@
  * the SSE route drains them with `for await`. Overflow fails the stream
  * instead of growing without bound behind a slow client.
  *
- * @module dsh-remote-agent/queue
+ * @module dsh-waypoint-agent/queue
  */
 
 interface Waiter<T> {

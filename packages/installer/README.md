@@ -1,6 +1,6 @@
-# @dsh-remote/installer
+# @dsh-waypoint/installer
 
-`dsh-remote-install` bootstraps `dsh-remote-agent` on an SSH host. The local plugin calls the same
+`dsh-waypoint-install` bootstraps `dsh-waypoint-agent` on an SSH host. The local plugin calls the same
 provisioning library automatically; the CLI is for manual diagnostics.
 
 ```sh

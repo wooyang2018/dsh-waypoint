@@ -6,7 +6,7 @@
  * exponential backoff. The browser and agent tools only ever see
  * {@link HostView}; tokens stay in this process.
  *
- * @module dsh-remote-local/service
+ * @module dsh-waypoint/service
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
@@ -31,7 +31,7 @@ import {
   type SessionSnapshot,
   type SessionStreamFrame,
   type WebUrlResult,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 import type { ResolvedConfig } from './config.ts'
 import { ModelCredentialProxy, type CredentialProxyAddress } from './credentials/proxy.ts'
 import { LocalError, asLocalError } from './errors.ts'
@@ -83,7 +83,7 @@ const SSH_SCAN_TTL_MS = 30_000
 declare module '@deepseek-ai/cordis' {
   interface Events {
     /** Explicit workspace add, after the remote registration succeeded. @mode parallel */
-    'dsh-remote/workspace-added'(hostId: string, workspace: RemoteWorkspace): Promise<void>
+    'dsh-waypoint/workspace-added'(hostId: string, workspace: RemoteWorkspace): Promise<void>
   }
 }
 
@@ -153,7 +153,7 @@ export class RemoteHostsService {
   /** Load the registry and auto-connect opted-in hosts. */
   async start(): Promise<void> {
     const loaded = await this.#store.load()
-    for (const warning of loaded.warnings) this.ctx.logger.warn('dsh-remote: %s', warning)
+    for (const warning of loaded.warnings) this.ctx.logger.warn('dsh-waypoint: %s', warning)
     for (const record of loaded.hosts) {
       this.#records.set(record.id, record)
       this.#runtime.set(record.id, idleRuntime())
@@ -163,7 +163,7 @@ export class RemoteHostsService {
       this.#manualDisconnect.delete(record.id)
       this.#setRuntime(record.id, { phase: 'idle' })
       void this.connect(record.id).catch(error => {
-        this.ctx.logger.warn('dsh-remote: auto-connect %s failed: %s', record.id, String(error))
+        this.ctx.logger.warn('dsh-waypoint: auto-connect %s failed: %s', record.id, String(error))
       })
     }
   }
@@ -244,7 +244,7 @@ export class RemoteHostsService {
     if (record.autoConnect) {
       this.#setRuntime(record.id, { phase: 'discovering' })
       void this.connect(record.id).catch(error => {
-        this.ctx.logger.warn('dsh-remote: connect %s failed: %s', record.id, String(error))
+        this.ctx.logger.warn('dsh-waypoint: connect %s failed: %s', record.id, String(error))
       })
     }
     return this.view(record.id)
@@ -371,7 +371,7 @@ export class RemoteHostsService {
     void this.#runUpgrade(id, localVersion).catch(error => {
       // The task itself reports expected failures through the host runtime;
       // log anything unexpected without rejecting the Settings action.
-      this.ctx.logger.warn('dsh-remote: upgrade task for %s failed: %s', id, String(error))
+      this.ctx.logger.warn('dsh-waypoint: upgrade task for %s failed: %s', id, String(error))
     }).finally(() => {
       this.#upgrades.delete(id)
     })
@@ -438,7 +438,7 @@ export class RemoteHostsService {
       }
       // The upgrade itself succeeded; leave reconnection to the normal health
       // loop instead of reporting an action failure.
-      this.ctx.logger.warn('dsh-remote: upgrade of %s is waiting to reconnect: %s', id, String(lastError))
+      this.ctx.logger.warn('dsh-waypoint: upgrade of %s is waiting to reconnect: %s', id, String(lastError))
     } catch (error) {
       this.#markError(id, error, 'agent/unavailable')
       this.#scheduleReconnect(id)
@@ -599,7 +599,7 @@ export class RemoteHostsService {
     } catch (error) {
       throw this.#remoteFailure(id, error)
     }
-    await this.ctx.parallel('dsh-remote/workspace-added', id, workspace)
+    await this.ctx.parallel('dsh-waypoint/workspace-added', id, workspace)
     return workspace
   }
 
@@ -634,7 +634,7 @@ export class RemoteHostsService {
     text: string,
     mode?: PromptDeliveryMode,
     selection?: { provider: string; model: string; reasoningEffort?: string },
-    content?: readonly import('@dsh-remote/protocol').PromptContentPart[],
+    content?: readonly import('@dsh-waypoint/protocol').PromptContentPart[],
   ): Promise<AcceptedResult> {
     const client = this.#requireClient(id)
     try {
@@ -662,17 +662,17 @@ export class RemoteHostsService {
   }
 
   /** Connected agent client for auxiliary remote adapters. */
-  agentFor(id: string): import('@dsh-remote/protocol').RemoteAgentClient {
+  agentFor(id: string): import('@dsh-waypoint/protocol').RemoteAgentClient {
     return this.#requireClient(id)
   }
 
   /** Connected host health document for auxiliary host adapters. */
-  hostInfoFor(id: string): import('@dsh-remote/protocol').HostInfo | undefined {
+  hostInfoFor(id: string): import('@dsh-waypoint/protocol').HostInfo | undefined {
     return this.#runtimeFor(id).hostInfo ?? undefined
   }
 
   /** Whether the connected agent advertises one capability. */
-  supportsAgent(id: string, capability: import('@dsh-remote/protocol').AgentCapability): boolean {
+  supportsAgent(id: string, capability: import('@dsh-waypoint/protocol').AgentCapability): boolean {
     return this.#runtimeFor(id).hostInfo?.capabilities.includes(capability) === true
   }
 
@@ -892,7 +892,7 @@ export class RemoteHostsService {
         }
       } else if (token !== null && remotePort !== null) {
         this.ctx.logger.warn(
-          'dsh-remote: discovery for %s failed; using cached port %s: %s',
+          'dsh-waypoint: discovery for %s failed; using cached port %s: %s',
           id,
           String(remotePort),
           String(error),
@@ -999,7 +999,7 @@ export class RemoteHostsService {
     this.#agentReconciled.add(id)
     this.#setRuntime(id, { ...this.#runtimeFor(id), detail: 'agentInstalling' })
     this.ctx.logger.warn(
-      'dsh-remote: remote agent for %s is %s, this build ships %s; reinstalling',
+      'dsh-waypoint: remote agent for %s is %s, this build ships %s; reinstalling',
       id,
       health.agentVersion ?? 'unknown',
       expected ?? 'unknown',
@@ -1041,7 +1041,7 @@ export class RemoteHostsService {
     }
     if (this.#modelReconciled.has(id) || !this.config.autoProvision) {
       this.ctx.logger.warn(
-        'dsh-remote: model environment for %s still differs from this profile (%s vs %s)',
+        'dsh-waypoint: model environment for %s still differs from this profile (%s vs %s)',
         id,
         current ?? 'unset',
         desired,
@@ -1051,7 +1051,7 @@ export class RemoteHostsService {
     this.#modelReconciled.add(id)
     this.#setRuntime(id, { ...this.#runtimeFor(id), detail: 'reconcilingModel' })
     this.ctx.logger.warn(
-      'dsh-remote: remote model environment for %s is %s, expected %s; reinstalling',
+      'dsh-waypoint: remote model environment for %s is %s, expected %s; reinstalling',
       id,
       current ?? 'unset',
       desired,
@@ -1105,11 +1105,11 @@ export class RemoteHostsService {
     try {
       key = await this.#resolveModelKey?.()
     } catch (error) {
-      this.ctx.logger.warn('dsh-remote: could not resolve local model credential: %s', String(error))
+      this.ctx.logger.warn('dsh-waypoint: could not resolve local model credential: %s', String(error))
       return undefined
     }
     if (key === undefined || key.trim() === '') {
-      this.ctx.logger.warn('dsh-remote: no local DEEPSEEK_API_KEY; remote host must use its own credentials')
+      this.ctx.logger.warn('dsh-waypoint: no local DEEPSEEK_API_KEY; remote host must use its own credentials')
       return undefined
     }
     this.#directModel = { baseUrl: this.config.remoteModelBaseUrl, apiKey: key }
@@ -1164,11 +1164,11 @@ export class RemoteHostsService {
     try {
       key = await this.#resolveModelKey?.()
     } catch (error) {
-      this.ctx.logger.warn('dsh-remote: could not resolve local model credential: %s', String(error))
+      this.ctx.logger.warn('dsh-waypoint: could not resolve local model credential: %s', String(error))
       return undefined
     }
     if (key === undefined || key.trim() === '') {
-      this.ctx.logger.warn('dsh-remote: no local DEEPSEEK_API_KEY; remote host must use its own credentials')
+      this.ctx.logger.warn('dsh-waypoint: no local DEEPSEEK_API_KEY; remote host must use its own credentials')
       return undefined
     }
     try {
@@ -1182,7 +1182,7 @@ export class RemoteHostsService {
       this.#proxyAddress = address
       return address
     } catch (error) {
-      this.ctx.logger.warn('dsh-remote: could not start credential proxy: %s', String(error))
+      this.ctx.logger.warn('dsh-waypoint: could not start credential proxy: %s', String(error))
       return undefined
     }
   }
@@ -1237,7 +1237,7 @@ export class RemoteHostsService {
       const health = await client.health()
       this.#setConnected(id, health)
     } catch (error) {
-      this.ctx.logger.warn('dsh-remote: health check %s failed: %s', id, String(error))
+      this.ctx.logger.warn('dsh-waypoint: health check %s failed: %s', id, String(error))
       const connected = this.#connected(id)
       await connected?.tunnel.stop()
       this.#tunnels.delete(id)
@@ -1261,7 +1261,7 @@ export class RemoteHostsService {
     const attempt = (this.#attempts.get(id) ?? 0) + 1
     this.#attempts.set(id, attempt)
     const delay = Math.min(1_000 * 2 ** Math.min(attempt - 1, 10), this.config.maxReconnectDelayMs)
-    this.ctx.logger.info('dsh-remote: reconnecting %s in %dms (attempt %d)', id, delay, attempt)
+    this.ctx.logger.info('dsh-waypoint: reconnecting %s in %dms (attempt %d)', id, delay, attempt)
     this.#setRuntime(id, {
       ...this.#runtimeFor(id),
       phase: 'connecting',
@@ -1271,7 +1271,7 @@ export class RemoteHostsService {
     const timer = setTimeout(() => {
       this.#reconnectTimers.delete(id)
       void this.connect(id).catch(error => {
-        this.ctx.logger.warn('dsh-remote: reconnect %s failed: %s', id, String(error))
+        this.ctx.logger.warn('dsh-waypoint: reconnect %s failed: %s', id, String(error))
       })
     }, delay)
     timer.unref?.()

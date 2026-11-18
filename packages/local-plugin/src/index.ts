@@ -1,10 +1,10 @@
 /**
- * dsh-remote-local-plugin host entry.
+ * dsh-waypoint host entry.
  *
  * Owns the host registry, SSH tunnels, the authenticated Connection RPC
  * channel used by the Settings page, and the model-facing remote tools.
  *
- * @module dsh-remote-local
+ * @module dsh-waypoint
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -20,7 +20,7 @@ import { registerTerminalApi } from './host-api/terminal.ts'
 import { RemoteHostsService } from './service.ts'
 import { installRemoteToolGuards, registerRemoteTools } from './tools.ts'
 
-export const name = 'dsh-remote-local'
+export const name = 'dsh-waypoint'
 
 /** Connection owns the authenticated `/api` carrier; credentials stay local. */
 export const inject = ['connection', 'credentials', 'workspaceRegistry', 'agents', 'sessions']
@@ -39,7 +39,7 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
         const resolvedKey = await ctx.credentials.resolve(credentialRef(resolved.modelCredentialRef))
         return resolvedKey?.value
       } catch (error) {
-        ctx.logger.warn('dsh-remote-local: could not resolve %s: %s', resolved.modelCredentialRef, String(error))
+        ctx.logger.warn('dsh-waypoint: could not resolve %s: %s', resolved.modelCredentialRef, String(error))
         return undefined
       }
     },
@@ -55,14 +55,14 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
         await service.dispose()
       }
     },
-    'dsh-remote-local: tunnel and mirror lifecycle',
+    'dsh-waypoint: tunnel and mirror lifecycle',
   )
 
   // Install mirror ownership before the first host-store or connection await.
   await mirrors.start()
   await service.start()
   await mirrors.sync()
-  ctx.effect(() => registerTerminalApi(ctx, terminals), 'dsh-remote-local: remote terminal route')
+  ctx.effect(() => registerTerminalApi(ctx, terminals), 'dsh-waypoint: remote terminal route')
   ctx.inject(['workspaceFiles'], child => {
     installRemoteWorkspaceFiles(child, mirrors, service)
   })
@@ -71,7 +71,7 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
     if (controller === undefined) return
     child.effect(
       () => installRemoteTerminalController(child, controller, terminals),
-      'dsh-remote-local: gateway terminal routing',
+      'dsh-waypoint: gateway terminal routing',
     )
   })
 
@@ -80,7 +80,7 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
       const dispose = registerHostApi(ctx, service, mirrors)
       return () => { void dispose() }
     },
-    'dsh-remote-local: authenticated host API',
+    'dsh-waypoint: authenticated host API',
   )
 
   installRemoteToolGuards(ctx)
@@ -89,7 +89,7 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
   })
 
   ctx.logger.info(
-    'dsh-remote-local: %d host(s), state in %s',
+    'dsh-waypoint: %d host(s), state in %s',
     service.list().length,
     resolved.stateDir,
   )

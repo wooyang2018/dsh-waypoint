@@ -5,10 +5,10 @@
  * reconnect after a restart without prompting. It never crosses the RPC
  * boundary: {@link HostView} carries only `hasToken`.
  *
- * @module dsh-remote-local/hosts/types
+ * @module dsh-waypoint/hosts/types
  */
 
-import type { HostInfo } from '@dsh-remote/protocol'
+import type { HostInfo } from '@dsh-waypoint/protocol'
 import type { HostDetail, UiText } from '../messages.ts'
 
 /**

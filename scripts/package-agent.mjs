@@ -34,7 +34,7 @@ const version = release ? manifest.version : developmentVersion(manifest.version
 
 const built = join(agentDir, 'lib', 'index.js')
 if (!existsSync(built)) {
-  throw new Error('dsh-remote-agent is not built; run `pnpm --filter @goldenpigeon/dsh-remote-agent build` first')
+  throw new Error('dsh-waypoint-agent is not built; run `pnpm --filter dsh-waypoint-agent build` first')
 }
 if (!readFileSync(built, 'utf8').includes(manifest.version)) {
   throw new Error(`packaged agent build does not contain its manifest version ${manifest.version}; rebuild the agent`)
@@ -42,7 +42,7 @@ if (!readFileSync(built, 'utf8').includes(manifest.version)) {
 
 // Pack from a copy: the workspace manifest and built bundle must keep reporting
 // the committed version, so the stamped one exists only inside the tarball.
-const staging = join(repoRoot, 'node_modules', '.cache', 'dsh-remote-agent-pack')
+const staging = join(repoRoot, 'node_modules', '.cache', 'dsh-waypoint-agent-pack')
 rmSync(staging, { recursive: true, force: true })
 mkdirSync(staging, { recursive: true })
 cpSync(agentDir, staging, {

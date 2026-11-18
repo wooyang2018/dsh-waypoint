@@ -4,7 +4,7 @@
  * These codes are surfaced to the Settings UI and to agent tools; they are
  * never sent to a remote host as-is.
  *
- * @module dsh-remote-local/errors
+ * @module dsh-waypoint/errors
  */
 
 import type { UiText } from './messages.ts'

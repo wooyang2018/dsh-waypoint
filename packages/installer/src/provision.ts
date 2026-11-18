@@ -1,12 +1,12 @@
 /**
  * Programmatic remote provisioning used by the local plugin.
  *
- * The plugin ships a packed `dsh-remote-agent` tarball as an asset, uploads
+ * The plugin ships a packed `dsh-waypoint-agent` tarball as an asset, uploads
  * it over SCP, and pipes the bootstrap script to the remote `bash -s`. This
  * keeps every installation step inside the plugin instead of requiring a
  * separate CLI run.
  *
- * @module @dsh-remote/installer/provision
+ * @module @dsh-waypoint/installer/provision
  */
 
 import { access } from 'node:fs/promises'
@@ -18,7 +18,7 @@ import { parseTarget, runRemoteScript, uploadFile } from './ssh.ts'
 export interface ProvisionRemoteOptions {
   /** SSH destination (`user@host[:port]` or an SSH config alias). */
   readonly target: string
-  /** Local packed dsh-remote-agent tarball. */
+  /** Local packed dsh-waypoint-agent tarball. */
   readonly agentTarballPath: string
   readonly sshBinary: string
   /** scp binary; pairs with {@link sshBinary}. */
@@ -64,16 +64,16 @@ export interface ProvisionRemoteResult {
 export async function provisionRemoteAgent(options: ProvisionRemoteOptions): Promise<ProvisionRemoteResult> {
   const target = parseTarget(options.target)
   await access(options.agentTarballPath)
-  const remoteTarball = `/tmp/dsh-remote-agent-${Date.now()}-${process.pid}.tgz`
+  const remoteTarball = `/tmp/dsh-waypoint-agent-${Date.now()}-${process.pid}.tgz`
   const timeoutMs = Math.max(options.timeoutMs ?? 600_000, 600_000)
 
-  options.onProgress?.('dsh-remote: uploading agent package')
+  options.onProgress?.('dsh-waypoint: uploading agent package')
   await uploadFile(options.agentTarballPath, remoteTarball, target, {
     binary: options.scpBinary,
     strictHostKeyChecking: options.strictHostKeyChecking,
     verbose: options.verbose ?? false,
   })
-  options.onProgress?.('dsh-remote: agent package uploaded')
+  options.onProgress?.('dsh-waypoint: agent package uploaded')
   const script = renderBootstrapScript({
     profile: options.profile,
     port: options.port ?? 0,

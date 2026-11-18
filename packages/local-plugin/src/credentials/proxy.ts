@@ -9,7 +9,7 @@
  * The proxy binds loopback only. The reverse tunnel exposes it only on the
  * remote host's loopback interface while the SSH connection is up.
  *
- * @module dsh-remote-local/credentials/proxy
+ * @module dsh-waypoint/credentials/proxy
  */
 
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'

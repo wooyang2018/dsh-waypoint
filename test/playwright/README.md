@@ -1,7 +1,7 @@
 # Playwright E2E
 
 These tests boot an isolated DSH Web host with a temporary `DSH_HOME`, a fake
-remote agent (`@dsh-remote/testkit`), and a fake `ssh` binary. They do not use
+remote agent (`@dsh-waypoint/testkit`), and a fake `ssh` binary. They do not use
 the user's profile, SSH hosts, or remote DSH.
 
 ## Prerequisites

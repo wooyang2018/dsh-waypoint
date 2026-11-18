@@ -5,7 +5,7 @@
  * the local runtime lets Settings offer a manual upgrade when the remote is
  * older, without blocking the connection.
  *
- * @module dsh-remote-local/version
+ * @module dsh-waypoint/version
  */
 
 import { createRequire } from 'node:module'

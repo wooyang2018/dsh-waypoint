@@ -4,7 +4,7 @@
  * One JSON document, mode 0600, serialized through an in-process mutation
  * queue. The token lives here and is never returned to the browser.
  *
- * @module dsh-remote-local/hosts/store
+ * @module dsh-waypoint/hosts/store
  */
 
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'

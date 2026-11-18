@@ -1,10 +1,10 @@
-# @dsh-remote/testkit
+# @dsh-waypoint/testkit
 
-An in-memory fake remote host implementing the `dsh-remote-agent` wire contract.
+An in-memory fake remote host implementing the `dsh-waypoint-agent` wire contract.
 
 ```ts
-import { startFakeHost } from '@dsh-remote/testkit'
-import { RemoteAgentClient } from '@dsh-remote/protocol'
+import { startFakeHost } from '@dsh-waypoint/testkit'
+import { RemoteAgentClient } from '@dsh-waypoint/protocol'
 
 const { host, baseUrl } = await startFakeHost({ token: 'test-token-0123456789' })
 const client = new RemoteAgentClient({ baseUrl, token: host.token })

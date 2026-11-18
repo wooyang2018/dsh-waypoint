@@ -1,17 +1,17 @@
 /**
  * Local plugin configuration and path resolution.
  *
- * @module dsh-remote-local/config
+ * @module dsh-waypoint/config
  */
 
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import z from '@deepseek-ai/schemastery'
-import { parseGlobalPrefix, UsageError } from '@dsh-remote/installer'
+import { parseGlobalPrefix, UsageError } from '@dsh-waypoint/installer'
 
 /** Raw plugin config. */
 export interface Config {
-  /** Empty means `$DSH_HOME/remote`. */
+  /** Empty means `$DSH_HOME/waypoint`. */
   readonly stateDir?: string
   /** SSH executable. */
   readonly sshBinary?: string
@@ -28,7 +28,7 @@ export interface Config {
   readonly maxReconnectDelayMs?: number
   /** `yes`, `no`, `ask`, or `accept-new`. */
   readonly strictHostKeyChecking?: string
-  /** Provision DSH + dsh-remote-agent when discovery finds no agent. */
+  /** Provision DSH + dsh-waypoint-agent when discovery finds no agent. */
   readonly autoProvision?: boolean
   readonly remoteDshHome?: string
   /** npm global prefix that owns the remote `dsh`; empty asks `npm prefix -g`. */
@@ -199,7 +199,7 @@ export function resolveConfig(config: Config = {}, env: NodeJS.ProcessEnv = proc
     scpBinary: (config.scpBinary ?? '').trim(),
     sshConfigPath: configuredSshConfig === '' ? null : resolveHomePath(configuredSshConfig, env),
     remoteStateFile: configuredStateFile === ''
-      ? joinRemotePath(remoteDshHome, 'remote-agent/agent.json')
+      ? joinRemotePath(remoteDshHome, 'waypoint-agent/agent.json')
       : configuredStateFile,
     probeTimeoutMs: config.probeTimeoutMs ?? 10_000,
     connectTimeoutMs: config.connectTimeoutMs ?? 15_000,

@@ -10,7 +10,7 @@ Run the installer; it can install while DSH Desktop is open. Restart the app aft
 host and client bundles:
 
 ```sh
-cd /path/to/dsh-remote
+cd /path/to/dsh-waypoint
 ./scripts/install-local.sh
 ```
 
@@ -32,7 +32,7 @@ config alias), and click **保存并连接**.
 
 The plugin:
 
-1. reads `<remoteDshHome>/remote-agent/agent.json` over SSH;
+1. reads `<remoteDshHome>/waypoint-agent/agent.json` over SSH;
 2. if no agent is present and `autoProvision` is true, uploads its bundled agent, installs `pnpm` and
    `@deepseek-ai/dsh` **globally** into the npm prefix (`remoteGlobalPrefix`, else `npm prefix -g`),
    adds the agent to the remote `web` profile, and starts that same `dsh` for `dsh web` on `127.0.0.1`;
@@ -91,7 +91,7 @@ The **Workspace files** and **New terminal** panels are Session-scoped:
 - local Session: stock local workspace files and local PTY;
 - remote mirror Session: agent-backed remote file listing/preview and an agent PTY in the remote workspace, both over the existing SSH tunnel. Older agents must be reinstalled; file/terminal actions fail with a Reinstall instruction rather than opening extra SSH connections.
 
-The install script also installs the `dsh-remote-terminal-controller` profile fork. It disables the
+The install script also installs the `dsh-waypoint-terminal-controller` profile fork. It disables the
 stock terminal-controller row and inserts the fork so `ClientTerminals` is constructed with the
 Session-routing provider. This is profile-local; `app.asar` is untouched.
 
@@ -100,7 +100,7 @@ iframe.
 
 ## Test/CI workspace visibility
 
-Test workspaces use `$DSH_HOME/remote/test-visibility.json` (hidden paths/ids), never a Settings
+Test workspaces use `$DSH_HOME/waypoint/test-visibility.json` (hidden paths/ids), never a Settings
 control or agent tool. The manifest is read during mirror sync. See [testing.md](testing.md) for the
 two supported flows: hidden-at-creation for backend tests and visible-then-hidden for UI tests.
 
@@ -154,13 +154,13 @@ remote environment manually.
 Local plugin profile override:
 
 ```yaml
-- id: dsh-remote-local
+- id: dsh-waypoint
   config:
-    stateDir: ''                    # $DSH_HOME/remote
+    stateDir: ''                    # $DSH_HOME/waypoint
     sshBinary: ssh
     scpBinary: ''                   # empty pairs scp with sshBinary
     sshConfigPath: ''               # empty means ~/.ssh/config
-    remoteStateFile: ''             # <remoteDshHome>/remote-agent/agent.json
+    remoteStateFile: ''             # <remoteDshHome>/waypoint-agent/agent.json
     probeTimeoutMs: 10000
     connectTimeoutMs: 15000
     healthIntervalMs: 15000
@@ -195,7 +195,7 @@ Local plugin profile override:
 Remote agent override:
 
 ```yaml
-- id: dsh-remote-agent
+- id: dsh-waypoint-agent
   config:
     stateFile: ''
     token: ''
@@ -249,9 +249,9 @@ The normal plugin flow calls the same provisioning library.
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| `等待远端 dsh web 就绪…` | The remote DSH web host did not write its state file. | Check `systemctl --user status dsh-remote-agent` and `~/.dsh/remote-agent/web.log`. The installer discovers Node through PATH/version managers and installs a verified official Node.js tarball when needed; reinstall if the bootstrap failed |
+| `等待远端 dsh web 就绪…` | The remote DSH web host did not write its state file. | Check `systemctl --user status dsh-waypoint-agent` and `~/.dsh/waypoint-agent/web.log`. The installer discovers Node through PATH/version managers and installs a verified official Node.js tarball when needed; reinstall if the bootstrap failed |
 | Install never finishes | SSH auth is interactive or remote lacks Node/npm | `ssh -o BatchMode=yes host true`; run `doctor`; inspect the card |
-| `remote agent state file was not found` | Auto-provision disabled or remote start failed | Click **重新安装**; inspect `$DSH_HOME/remote-agent/web.log` |
+| `remote agent state file was not found` | Auto-provision disabled or remote start failed | Click **重新安装**; inspect `$DSH_HOME/waypoint-agent/web.log` |
 | `does not accept POST` | Remote agent older than local plugin | Click **重新安装** |
 | Remote workspace not in sidebar | Not added yet or sync pending | Use **Workspaces + → 远程新建工作区…**, or add it in **工作区** |
 | Native session has no reply | No local key copied and remote has no credentials | Check **模型 Key 来源**; either switch the host to **本地 Key 代理** or configure credentials on the remote DSH |
@@ -267,11 +267,11 @@ The normal plugin flow calls the same provisioning library.
 ### Logs
 
 - Local plugin: DSH process stderr / desktop logs.
-- Remote systemd: `journalctl --user -u dsh-remote-agent -f`.
-- Remote nohup: `$DSH_HOME/remote-agent/web.log`.
-- Local host registry: `$DSH_HOME/remote/hosts.json` (contains tokens; do not paste).
-- Mirror map: `$DSH_HOME/remote/mirrors.json` (contains local/remote session ids).
-- Remote state: `$DSH_HOME/remote-agent/agent.json` (contains a token; do not paste).
+- Remote systemd: `journalctl --user -u dsh-waypoint-agent -f`.
+- Remote nohup: `$DSH_HOME/waypoint-agent/web.log`.
+- Local host registry: `$DSH_HOME/waypoint/hosts.json` (contains tokens; do not paste).
+- Mirror map: `$DSH_HOME/waypoint/mirrors.json` (contains local/remote session ids).
+- Remote state: `$DSH_HOME/waypoint-agent/agent.json` (contains a token; do not paste).
 
 ## Security checklist
 

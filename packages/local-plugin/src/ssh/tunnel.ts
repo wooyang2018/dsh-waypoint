@@ -5,7 +5,7 @@
  * loopback port. It never exposes a public interface and never starts a
  * shell on the remote side (`-N`).
  *
- * @module dsh-remote-local/ssh/tunnel
+ * @module dsh-waypoint/ssh/tunnel
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { InstallerError, installerErrorForExit } from '@dsh-remote/installer'
+import { InstallerError, installerErrorForExit } from '@dsh-waypoint/installer'
 import { agentVersionDiffers, agentVersionMatches, agentVersionTransition, installerCodeOf, installerUi, resolveRemoteDshVersion } from '../src/remote/provisioner.ts'
 
 describe('agent install target', () => {

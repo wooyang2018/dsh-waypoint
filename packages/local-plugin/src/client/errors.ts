@@ -6,7 +6,7 @@
  * locale. The stable `ui` key, then the error code, then the caller fallback are
  * used in that order.
  *
- * @module dsh-remote-local/client/errors
+ * @module dsh-waypoint/client/errors
  */
 
 import type { UiText } from '../messages.ts'

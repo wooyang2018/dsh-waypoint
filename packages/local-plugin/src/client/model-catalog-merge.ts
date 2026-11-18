@@ -19,13 +19,13 @@
  * which cannot resolve a remote-only provider, so a remote row must be routed to
  * the mirror bridge that installs the selection on the remote Session.
  *
- * @module dsh-remote-local/model-catalog-merge
+ * @module dsh-waypoint/model-catalog-merge
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { HostsApi } from './api.ts'
 import type { MirrorTarget } from '../host-api/contract.ts'
-import type { ModelCatalogResult, RemoteModel } from '@dsh-remote/protocol'
+import type { ModelCatalogResult, RemoteModel } from '@dsh-waypoint/protocol'
 
 /** Prefix that keeps remote provider ids out of the Host's provider namespace. */
 export const REMOTE_PROVIDER_PREFIX = 'remote:'

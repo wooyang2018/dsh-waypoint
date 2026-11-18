@@ -5,7 +5,7 @@
  * A follower never executes anything. It is a read projection over
  * `session/event`, which keeps attach idempotent and safe across reconnects.
  *
- * @module dsh-remote-agent/stream
+ * @module dsh-waypoint-agent/stream
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -13,7 +13,7 @@ import type { Session, SessionEvent, SessionLogOffset } from '@deepseek-ai/dsh-s
 import {
   EventCursor,
   type SessionStreamFrame,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 import { toWireEvent } from './projection.ts'
 import { AsyncQueue } from './queue.ts'
 

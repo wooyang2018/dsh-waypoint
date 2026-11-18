@@ -8,7 +8,7 @@ import { RemoteTerminalManager } from '../src/terminal.ts'
 
 describe('remote files', () => {
   it('stats, reads, lists, and watches a file', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'dsh-remote-files-'))
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-files-'))
     try {
       const file = join(dir, 'sample.txt')
       await writeFile(file, 'one\ntwo\nthree\n')
@@ -34,7 +34,7 @@ describe('remote terminal', () => {
   const posix = process.platform !== 'win32'
 
   it('allocates a PTY, sends input, and streams output', { skip: !posix && 'requires a POSIX pty' }, async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'dsh-remote-term-'))
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-term-'))
     const manager = new RemoteTerminalManager()
     const controller = new AbortController()
     try {

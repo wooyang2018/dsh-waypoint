@@ -1,7 +1,7 @@
 /**
- * dsh-remote-install CLI entry.
+ * dsh-waypoint-install CLI entry.
  *
- * @module @dsh-remote/installer/cli
+ * @module @dsh-waypoint/installer/cli
  */
 
 import {
@@ -21,8 +21,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     options = parseArgs(argv)
   } catch (error) {
     if (error instanceof UsageError) {
-      process.stderr.write(`dsh-remote-install: ${error.message}\n`)
-      process.stderr.write('Run "dsh-remote-install help" for usage.\n')
+      process.stderr.write(`dsh-waypoint-install: ${error.message}\n`)
+      process.stderr.write('Run "dsh-waypoint-install help" for usage.\n')
       return 2
     }
     throw error
@@ -51,13 +51,13 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       case 'install': {
         const output = await commandInstall(options)
         if (output.trim() !== '') process.stdout.write(output.endsWith('\n') ? output : `${output}\n`)
-        else process.stdout.write('dsh-remote-install: install finished\n')
+        else process.stdout.write('dsh-waypoint-install: install finished\n')
         return 0
       }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`dsh-remote-install: ${message}\n`)
+    process.stderr.write(`dsh-waypoint-install: ${message}\n`)
     const detail = error as { result?: { stderr?: string } }
     if (detail.result?.stderr !== undefined && detail.result.stderr.trim() !== '') {
       process.stderr.write(detail.result.stderr)

@@ -3,12 +3,12 @@ import net from 'node:net'
 import { appendFileSync, readFileSync } from 'node:fs'
 
 const args = process.argv.slice(2)
-const logFile = process.env.DSH_REMOTE_FAKE_LOG
+const logFile = process.env.DSH_WAYPOINT_FAKE_LOG
 const log = (text) => { if (logFile) appendFileSync(logFile, `${new Date().toISOString()} ${text}\n`) }
 log(`args ${args.join(' ')}`)
-const stateFile = process.env.DSH_REMOTE_FAKE_STATE
+const stateFile = process.env.DSH_WAYPOINT_FAKE_STATE
 if (!stateFile) {
-  process.stderr.write('fake-ssh: DSH_REMOTE_FAKE_STATE is not set\n')
+  process.stderr.write('fake-ssh: DSH_WAYPOINT_FAKE_STATE is not set\n')
   process.exit(2)
 }
 if (args.includes('-O')) process.exit(0)

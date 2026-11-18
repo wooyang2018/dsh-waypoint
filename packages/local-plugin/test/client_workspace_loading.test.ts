@@ -69,7 +69,7 @@ async function harness() {
     // Re-query each time: the row's handler closes over the current expansion
     // state, so a stale node would keep toggling the same way.
     const row = renderer.root.findAll(node =>
-      node.props?.className === 'dshr-host-row' && typeof node.props?.onClick === 'function')[0]
+      node.props?.className === 'dshwp-host-row' && typeof node.props?.onClick === 'function')[0]
     await act(async () => { row?.props.onClick({ preventDefault() {} }) })
   }
   return {

@@ -8,7 +8,7 @@
 
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 
-export const NS = 'dshRemote'
+export const NS = 'dshWaypoint'
 
 export const zh = {
   'settings.title': '远程开发',
@@ -110,7 +110,7 @@ export const zh = {
   'phase.disconnected': '已断开',
   'phase.error': '异常',
   'detail.discovering': '正在通过 SSH 发现远端 agent…',
-  'detail.installing': '正在远端安装 DSH 与 dsh-remote-agent，首次约 1–3 分钟…',
+  'detail.installing': '正在远端安装 DSH 与 dsh-waypoint-agent，首次约 1–3 分钟…',
   'detail.connecting': '正在建立 SSH 隧道并校验远端 agent…',
   'detail.reprovisioning': '正在重新安装远端 agent…',
   'detail.restarting': '正在重启远端 DSH…',
@@ -264,7 +264,7 @@ export const en: Record<CopyKey, string> = {
   'phase.disconnected': 'Disconnected',
   'phase.error': 'Error',
   'detail.discovering': 'Discovering the remote agent over SSH…',
-  'detail.installing': 'Installing DSH and dsh-remote-agent remotely; this takes about 1–3 minutes…',
+  'detail.installing': 'Installing DSH and dsh-waypoint-agent remotely; this takes about 1–3 minutes…',
   'detail.connecting': 'Opening the SSH tunnel and checking the remote agent…',
   'detail.reprovisioning': 'Reinstalling the remote agent…',
   'detail.restarting': 'Restarting remote DSH…',
@@ -318,7 +318,7 @@ export const en: Record<CopyKey, string> = {
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    dshRemote: CopyKey
+    dshWaypoint: CopyKey
   }
 }
 

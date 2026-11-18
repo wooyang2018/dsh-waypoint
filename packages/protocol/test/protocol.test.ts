@@ -89,8 +89,8 @@ describe('route table', () => {
   })
 
   it('rejects unknown paths and malformed escapes', () => {
-    assert.equal(matchAgentRoute('/dsh-remote-agent/api/v1/nope'), undefined)
-    assert.equal(matchAgentRoute('/dsh-remote-agent/api/v1/sessions/%E0%A4%A'), undefined)
+    assert.equal(matchAgentRoute('/dsh-waypoint-agent/api/v1/nope'), undefined)
+    assert.equal(matchAgentRoute('/dsh-waypoint-agent/api/v1/sessions/%E0%A4%A'), undefined)
   })
 })
 
@@ -134,7 +134,7 @@ describe('RemoteAgentClient', () => {
   before(async () => {
     server = createServer((req, res) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1')
-      if (req.headers[`x-dsh-remote-protocol`] === undefined) {
+      if (req.headers[`x-dsh-waypoint-protocol`] === undefined) {
         json(res, 409, {
           ok: false,
           protocolVersion: PROTOCOL_VERSION,

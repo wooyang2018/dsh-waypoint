@@ -1,6 +1,6 @@
 {
-  "name": "dsh-remote-terminal-controller",
-  "version": "0.1.3",
+  "name": "dsh-waypoint-terminal-controller",
+  "version": "1.0.0",
   "description": "Terminal controller fork that routes terminals by Session: local Sessions keep the local PTY, mirrored remote Sessions use the plugin's SSH PTY route.",
   "license": "MIT",
   "type": "module",
@@ -54,14 +54,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Golden-Pigeon/dsh-remote.git",
+    "url": "git+https://github.com/wooyang2018/dsh-waypoint.git",
     "directory": "packages/terminal-controller"
   },
-  "homepage": "https://github.com/Golden-Pigeon/dsh-remote#readme",
+  "homepage": "https://github.com/wooyang2018/dsh-waypoint#readme",
   "bugs": {
-    "url": "https://github.com/Golden-Pigeon/dsh-remote/issues"
+    "url": "https://github.com/wooyang2018/dsh-waypoint/issues"
   },
-  "author": "Golden-Pigeon",
+  "author": "wooyang2018, based on work by Golden-Pigeon",
   "publishConfig": {
     "access": "public"
   }

@@ -9,7 +9,7 @@
  * adapter marks only the synchronous `startSession` window and routes the
  * `openWorkspace` it reaches; ordinary workspace opens keep the native path.
  *
- * @module dsh-remote-local/client/routing
+ * @module dsh-waypoint/client/routing
  */
 
 import type { Context } from '@deepseek-ai/cordis'

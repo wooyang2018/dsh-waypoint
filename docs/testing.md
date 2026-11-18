@@ -6,12 +6,12 @@ sidebar. It is not a Settings option and not an agent tool.
 The manifest lives only in the test DSH home:
 
 ```text
-$DSH_HOME/remote/test-visibility.json
+$DSH_HOME/waypoint/test-visibility.json
 ```
 
 ```json
 {
-  "hiddenPaths": ["/tmp/dsh-remote-tests"],
+  "hiddenPaths": ["/tmp/dsh-waypoint-tests"],
   "hiddenWorkspaceIds": ["remote-workspace-id"]
 }
 ```
@@ -44,7 +44,7 @@ profile has no manifest and mirrors remote workspaces normally.
 After `pnpm -r build`, run the focused checks from the repository root:
 
 ```sh
-pnpm --filter dsh-remote-local-plugin exec node --import tsx --test test/mirror_lifecycle.test.ts test/mirror-subagents.test.ts test/client_workspace_loading.test.ts
+pnpm --filter dsh-waypoint exec node --import tsx --test test/mirror_lifecycle.test.ts test/mirror-subagents.test.ts test/client_workspace_loading.test.ts
 ```
 
 The mirror fixture uses real Cordis contexts and scope disposal with in-memory remote services. It covers model selection and forwarding, explicit choices matching deployment defaults, recorded-model precedence, asynchronous shutdown and subagent pruning, and native resume attempted before persisted mirror mappings finish loading. Ordinary local Agents and the remote façade remain admissible.
@@ -61,7 +61,7 @@ CI runs one job, `verify`, against the current target in the workflow's `DSH_TAR
 4. Assert the resolved `@deepseek-ai/dsh-session` version equals `DSH_TARGET`, so an override that
    silently failed does not pass the job against the wrong tree.
 5. `pnpm -r build`, `pnpm -r typecheck`, `pnpm -r test`, secret scan, and the installable bundle.
-6. Upload both tarballs as the `dsh-remote-<DSH_TARGET>` artifact: the plugin bundle and the standalone
+6. Upload both tarballs as the `dsh-waypoint-<DSH_TARGET>` artifact: the plugin bundle and the standalone
    remote-agent bundle, kept for 30 days. The target version is in the artifact name, so a run against
    a newer DSH release is distinguishable from the committed lockfile's tree.
 
@@ -69,7 +69,7 @@ Bumping a DSH release means changing `DSH_TARGET` and moving the committed basel
 [adapting-to-dsh-releases.md](adapting-to-dsh-releases.md)); there is no separate baseline job, and the
 artifact name follows the value automatically.
 The job installs into no DSH profile and calls no model provider. The Playwright suite is not part of
-CI: `test/playwright` defaults to DSH `0.2.2-rc.3` through `DSH_REMOTE_E2E_DSH_VERSION` and runs
+CI: `test/playwright` defaults to DSH `0.2.2-rc.3` through `DSH_WAYPOINT_E2E_DSH_VERSION` and runs
 locally; see [test/playwright/README.md](../test/playwright/README.md). Changes to the mirror's Agent
 interface must pass CI and the Playwright suite locally.
 

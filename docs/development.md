@@ -6,7 +6,7 @@ This is a pnpm workspace. Packages reference each other with `workspace:*`, whic
 junction straight into the source directory:
 
 ```
-packages/local-plugin/node_modules/@dsh-remote/installer -> ../../installer
+packages/local-plugin/node_modules/@dsh-waypoint/installer -> ../../installer
 ```
 
 A link resolves the **package**, but Node and TypeScript still read the package's `main` and `types`
@@ -26,7 +26,7 @@ If you skip the rebuild, the consuming package's typecheck reads the old bundle 
 something like:
 
 ```
-error TS2305: Module '"@dsh-remote/installer"' has no exported member 'InstallerError'
+error TS2305: Module '"@dsh-waypoint/installer"' has no exported member 'InstallerError'
 ```
 
 …for a symbol that plainly exists in `src`. The error describes the stale artefact, not your edit,
@@ -36,7 +36,7 @@ Either of these avoids it:
 
 ```sh
 pnpm build          # rebuild everything
-pnpm --filter @dsh-remote/installer build    # rebuild one package
+pnpm --filter @dsh-waypoint/installer build    # rebuild one package
 ```
 
 ## Automatic guard
@@ -47,8 +47,8 @@ an actionable message instead of letting the stale-artefact error surface:
 
 ```
 Workspace builds are out of date:
-  @dsh-remote/installer  lib/index.js is stale
-Run "pnpm build" (or build @dsh-remote/installer) before typechecking.
+  @dsh-waypoint/installer  lib/index.js is stale
+Run "pnpm build" (or build @dsh-waypoint/installer) before typechecking.
 ```
 
 The check is a timestamp heuristic: it catches "edited but never rebuilt", which is the mistake that
@@ -102,8 +102,8 @@ node ../../scripts/build-host.mjs --entry src/bin.ts --out lib/cli.js --cli
 ```
 
 That form works on Windows too, where `VAR=1 command` is not understood by the shell npm uses.
-`scripts/build-host.mjs` still honours `DSH_REMOTE_HOST_ENTRY`, `DSH_REMOTE_HOST_OUT` and
-`DSH_REMOTE_CLI` for callers that set them; an explicit argument wins.
+`scripts/build-host.mjs` still honours `DSH_WAYPOINT_HOST_ENTRY`, `DSH_WAYPOINT_HOST_OUT` and
+`DSH_WAYPOINT_CLI` for callers that set them; an explicit argument wins.
 
 ## Installing a local build into a profile
 

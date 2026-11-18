@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- npm account with publish access to `dsh-remote-local-plugin`
+- npm account with publish access to `dsh-waypoint`
 - GitHub repository write access
 - `NPM_TOKEN` stored as a GitHub Actions secret for automated releases
 
@@ -15,8 +15,8 @@ node scripts/release-plugin.mjs --release
 ```
 
 `release-plugin.mjs` creates one package tarball. The terminal-controller fork is copied into
-`node_modules/dsh-remote-terminal-controller` and declared as a bundled dependency, so DSH users only
-install `dsh-remote-local-plugin`.
+`node_modules/dsh-waypoint-terminal-controller` and declared as a bundled dependency, so DSH users only
+install `dsh-waypoint`.
 
 **`--release` matters here.** Without it the packer stamps a unique
 `<version>-dev-<timestamp>-<rand>` prerelease, which is what you want while iterating: a package
@@ -44,23 +44,29 @@ The `Release` workflow uses the `NPM_TOKEN` repository secret to **stage** the b
 need 2FA. The final publish requires a maintainer with 2FA:
 
 ```sh
-npm stage list dsh-remote-local-plugin
+npm stage list dsh-waypoint
 npm stage approve <stage-id>
 ```
 
-The workflow also attaches the tarball to the GitHub release. The token is stored in
-`.secret/npm_token` locally; `.secret/` is ignored and must never be committed.
+The workflow also attaches the tarballs to the GitHub release. Besides the versioned tarball it
+uploads a **version-free copy** named `dsh-waypoint.tgz`, because the plugin-market entry links
+`releases/latest/download/dsh-waypoint.tgz`: that URL resolves `latest` at request time but takes the
+file name literally, so a versioned asset name would go 404 on the next release. Keep the
+version-free copy in every release.
+
+The token is stored in `.secret/npm_token` locally; `.secret/` is ignored and must never be
+committed.
 
 Manual publish is only a fallback:
 
 ```sh
-npm publish packages/local-plugin/dsh-remote-local-plugin-<version>.tgz --access public
+npm publish packages/local-plugin/dsh-waypoint-<version>.tgz --access public
 ```
 
 Then verify in a clean DSH profile:
 
 ```text
-Plugins → Add plugin → dsh-remote-local-plugin → Install → Restart
+Plugins → Add plugin → dsh-waypoint → Install → Restart
 ```
 
 ## Release through GitHub Actions
@@ -76,8 +82,8 @@ git push origin v<version>
 ```
 
 The `Release` workflow builds the workspace, creates the bundled tarball, stages it with npm, and
-attaches the tarball to the GitHub release. A maintainer must approve the staged version with 2FA
-before it becomes live on npm.
+attaches both the versioned tarball and the version-free `dsh-waypoint.tgz` that the plugin-market
+entry downloads. A maintainer must approve the staged version with 2FA before it becomes live on npm.
 
 ## Compatibility
 

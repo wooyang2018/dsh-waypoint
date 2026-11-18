@@ -5,14 +5,14 @@
  * DSH classes, so the testkit can exercise the exact projection the agent
  * uses without booting Cordis.
  *
- * @module dsh-remote-agent/projection
+ * @module dsh-waypoint-agent/projection
  */
 
 import type {
   RemoteSessionEvent,
   RemoteSessionSummary,
   RemoteWorkspace,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 
 /** Structural workspace shape shared by `Workspace` and test fakes. */
 export interface WorkspaceLike {

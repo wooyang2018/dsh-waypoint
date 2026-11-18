@@ -5,7 +5,7 @@
  * browser client and is selected by the user's DSH settings. Host code emits
  * stable codes; the client owns every translation.
  *
- * @module dsh-remote-local/messages
+ * @module dsh-waypoint/messages
  */
 
 /** Stable progress/status codes rendered by the Settings page. */

@@ -5,7 +5,7 @@
  * so it works through the web HTTP carrier and the desktop IPC carrier without
  * a second authentication scheme.
  *
- * @module dsh-remote-local/host-api/contract
+ * @module dsh-waypoint/host-api/contract
  */
 
 import type { HostView, ModelSource, SshDiscoveryResult } from '../hosts/types.ts'
@@ -18,10 +18,10 @@ import type {
   RemoteSessionSummary,
   RemoteWorkspace,
   SessionSnapshot,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 
 /** Exact authenticated Fetch route owned by the local plugin. */
-export const HOST_API_PATH = '/api/dsh-remote'
+export const HOST_API_PATH = '/api/dsh-waypoint'
 
 /** Endpoint names. */
 export type HostApiEndpoint =

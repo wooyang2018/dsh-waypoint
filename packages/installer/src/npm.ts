@@ -11,7 +11,7 @@
  * runs `npm install --global pnpm@<version>`, so nothing in this package
  * spawns pnpm directly.
  *
- * @module @dsh-remote/installer/npm
+ * @module @dsh-waypoint/installer/npm
  */
 
 import { existsSync } from 'node:fs'

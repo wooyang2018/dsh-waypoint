@@ -1,7 +1,7 @@
 {
-  "name": "@goldenpigeon/dsh-remote-agent",
-  "version": "0.2.12",
-  "description": "DSH remote agent: loopback HTTP/SSE companion for the dsh-remote-local-plugin.",
+  "name": "dsh-waypoint-agent",
+  "version": "1.0.0",
+  "description": "DSH remote agent: loopback HTTP/SSE companion the dsh-waypoint plugin installs on an SSH host.",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -37,7 +37,7 @@
     }
   },
   "devDependencies": {
-    "@dsh-remote/protocol": "workspace:*",
+    "@dsh-waypoint/protocol": "workspace:*",
     "@deepseek-ai/dsh-user-approval": "0.2.2-rc.3",
     "@deepseek-ai/cordis": "4.1.0"
   },
@@ -84,14 +84,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Golden-Pigeon/dsh-remote.git",
+    "url": "git+https://github.com/wooyang2018/dsh-waypoint.git",
     "directory": "packages/remote-agent"
   },
-  "homepage": "https://github.com/Golden-Pigeon/dsh-remote#readme",
+  "homepage": "https://github.com/wooyang2018/dsh-waypoint#readme",
   "bugs": {
-    "url": "https://github.com/Golden-Pigeon/dsh-remote/issues"
+    "url": "https://github.com/wooyang2018/dsh-waypoint/issues"
   },
-  "author": "Golden-Pigeon <goldenpigeon2000@gmail.com>",
+  "author": "wooyang2018, based on work by Golden-Pigeon",
   "publishConfig": {
     "access": "public"
   }

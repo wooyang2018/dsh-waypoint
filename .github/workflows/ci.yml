@@ -78,9 +78,9 @@ jobs:
       - name: Upload installable artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dsh-remote-${{ env.DSH_TARGET }}
+          name: dsh-waypoint-${{ env.DSH_TARGET }}
           path: |
-            packages/local-plugin/dsh-remote-local-plugin-*.tgz
-            packages/local-plugin/assets/goldenpigeon-dsh-remote-agent-*.tgz
+            packages/local-plugin/dsh-waypoint-*.tgz
+            packages/local-plugin/assets/dsh-waypoint-agent-*.tgz
           if-no-files-found: error
           retention-days: 30

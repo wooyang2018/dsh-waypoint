@@ -5,7 +5,7 @@
  * optional workspace name, and the source folder browser. It is intentionally
  * not a separate local/remote menu.
  *
- * @module dsh-remote-local/client/workspace-add
+ * @module dsh-waypoint/client/workspace-add
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -16,7 +16,7 @@ import { localizedError } from './errors.ts'
 
 const ADD_LABELS = new Set(['Add workspace', '添加工作区'])
 const NATIVE_CLICK_FLAG = 'dshrNativeClick'
-const DIALOG_CLASS = 'dshr-workspace-add-dialog'
+const DIALOG_CLASS = 'dshwp-workspace-add-dialog'
 let closeDialog: (() => void) | undefined
 let closeBrowser: (() => void) | undefined
 let closeMenu: (() => void) | undefined
@@ -96,7 +96,7 @@ export function installWorkspaceAddMenu(ctx: Context, api: HostsApi, t: Translat
       document.removeEventListener('click', onClick, true)
       closeTransient()
     }
-  }, 'dsh-remote: workspace add dialog')
+  }, 'dsh-waypoint: workspace add dialog')
 }
 
 async function openCreateDialog(flow: WorkspaceFlowContext): Promise<void> {
@@ -617,9 +617,9 @@ function setComputerIcon(icon: HTMLElement): void {
  * workspace browser (12–14px type, 28–36px controls, 4–8px rhythm).
  */
 function ensureStyles(): void {
-  const existing = document.getElementById('dshr-workspace-add-style')
+  const existing = document.getElementById('dshwp-workspace-add-style')
   const style = existing instanceof HTMLStyleElement ? existing : document.createElement('style')
-  style.id = 'dshr-workspace-add-style'
+  style.id = 'dshwp-workspace-add-style'
   style.textContent = `
     .${DIALOG_CLASS}-overlay {
       position: fixed; inset: 0; z-index: 100001; display: grid; place-items: center;

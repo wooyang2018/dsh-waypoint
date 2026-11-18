@@ -1,4 +1,4 @@
-# dsh-remote-local-plugin host bundle.
+# dsh-waypoint host bundle.
 #
 # One row owns the host registry, SSH tunnels, plugin-owned remote
 # provisioning, the local model credential proxy, and the authenticated host
@@ -8,17 +8,17 @@
 - id: terminal-controller
   disabled: true
 - insert:
-    - id: terminal-controller-remote
-      name: dsh-remote-terminal-controller
-    - id: dsh-remote-local
-      name: dsh-remote-local-plugin
+    - id: terminal-controller-waypoint
+      name: dsh-waypoint-terminal-controller
+    - id: dsh-waypoint
+      name: dsh-waypoint
       config:
-        # Empty means $DSH_HOME/remote.
+        # Empty means $DSH_HOME/waypoint.
         stateDir: ''
         sshBinary: ssh
         # Empty means ~/.ssh/config. Settings offers the aliases found here.
         sshConfigPath: ''
-        # Empty means <remoteDshHome>/remote-agent/agent.json.
+        # Empty means <remoteDshHome>/waypoint-agent/agent.json.
         remoteStateFile: ''
         probeTimeoutMs: 10000
         connectTimeoutMs: 15000

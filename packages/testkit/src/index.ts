@@ -1,7 +1,7 @@
 /**
- * `@dsh-remote/testkit` public surface.
+ * `@dsh-waypoint/testkit` public surface.
  *
- * @module @dsh-remote/testkit
+ * @module @dsh-waypoint/testkit
  */
 
 export { FakeRemoteHost, startFakeHost } from './fake-host.ts'

@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-remote/protocol",
+  "name": "@dsh-waypoint/protocol",
   "version": "0.1.0",
   "description": "Wire protocol shared by the DSH remote local plugin, remote agent, installer, and testkit.",
   "type": "module",

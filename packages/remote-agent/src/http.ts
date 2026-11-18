@@ -6,12 +6,12 @@
  * enforces its own loopback peer check, bearer token, protocol negotiation,
  * method allowlist, and no-store headers. It never accepts a request body.
  *
- * @module dsh-remote-agent/http
+ * @module dsh-waypoint-agent/http
  */
 
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { ApprovalOutcome } from '@dsh-remote/protocol'
+import type { ApprovalOutcome } from '@dsh-waypoint/protocol'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   AGENT_API_PREFIX,
@@ -33,7 +33,7 @@ import {
   type SessionStreamFrame,
   type RemoteTerminalCreateRequest,
   type RemoteTerminalInput,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 import { parseBearer, tokensEqual } from './auth.ts'
 import { listDirectories, listFile, readBytes, readText, statFile, watchFile } from './files.ts'
 import type { RemoteAgentService } from './service.ts'
@@ -254,14 +254,14 @@ export async function handleAgentRequest(
   } catch (error) {
     if (res.headersSent) {
       writeStreamEnd(res, 'error')
-      ctx.logger.warn('dsh-remote-agent: request %s failed after headers: %s', requestId, String(error))
+      ctx.logger.warn('dsh-waypoint-agent: request %s failed after headers: %s', requestId, String(error))
       return
     }
     if (error instanceof RemoteProtocolError) {
       sendFailure(res, error)
       return
     }
-    ctx.logger.warn('dsh-remote-agent: request %s failed: %s', requestId, String(error))
+    ctx.logger.warn('dsh-waypoint-agent: request %s failed: %s', requestId, String(error))
     sendFailure(res, new RemoteProtocolError({
       code: 'internal',
       message: 'remote agent request failed',
@@ -303,7 +303,7 @@ async function streamSession(
     }
     res.end()
   } catch (error) {
-    ctx.logger.warn('dsh-remote-agent: session stream %s failed: %s', sessionId, String(error))
+    ctx.logger.warn('dsh-waypoint-agent: session stream %s failed: %s', sessionId, String(error))
     writeStreamEnd(res, 'error')
     res.end()
   } finally {
@@ -338,7 +338,7 @@ async function streamAssistant(
     }
     res.end()
   } catch (error) {
-    ctx.logger.warn('dsh-remote-agent: assistant stream %s failed: %s', sessionId, String(error))
+    ctx.logger.warn('dsh-waypoint-agent: assistant stream %s failed: %s', sessionId, String(error))
     writeStreamEnd(res, 'error')
     res.end()
   } finally {

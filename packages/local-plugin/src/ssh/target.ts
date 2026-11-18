@@ -5,7 +5,7 @@
  * job is to reject strings that could be mistaken for options or that carry
  * shell metacharacters before they reach the process boundary.
  *
- * @module dsh-remote-local/ssh/target
+ * @module dsh-waypoint/ssh/target
  */
 
 import { LocalError } from '../errors.ts'

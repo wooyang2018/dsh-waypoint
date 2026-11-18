@@ -21,7 +21,7 @@ const catalog = {
 
 describe('model catalog route', () => {
   it('routes the catalog path to its own kind', () => {
-    assert.equal(AGENT_ROUTES.modelCatalog, '/dsh-remote-agent/api/v1/llm/catalog')
+    assert.equal(AGENT_ROUTES.modelCatalog, '/dsh-waypoint-agent/api/v1/llm/catalog')
     assert.deepEqual(matchAgentRoute(AGENT_ROUTES.modelCatalog), { kind: 'model-catalog' })
   })
 

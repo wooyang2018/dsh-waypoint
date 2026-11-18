@@ -10,7 +10,7 @@ import {
   withRemoteGroups,
   type DirectoryState,
 } from '../src/client/model-catalog-merge.ts'
-import type { ModelCatalogResult } from '@dsh-remote/protocol'
+import type { ModelCatalogResult } from '@dsh-waypoint/protocol'
 
 /** A catalog shaped like the one native1 reports. */
 function catalog(): ModelCatalogResult {

@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.0.0
+
+The project is now maintained independently as **`dsh-waypoint`**, a fork of
+[`Golden-Pigeon/dsh-remote`](https://github.com/Golden-Pigeon/dsh-remote). The upstream attempt to
+merge these changes back was declined, so the work continues here under its own name. History and
+authorship are preserved unchanged; thanks to `@Golden-Pigeon` for the original implementation.
+
+Renaming a DSH bundle renames the identity DSH persists, so **this is not an in-place upgrade of
+`dsh-remote-local-plugin`** — the two installs coexist and neither reads the other's state:
+
+- Packages: `dsh-remote-local-plugin` → `dsh-waypoint`, `@goldenpigeon/dsh-remote-agent` →
+  `dsh-waypoint-agent`, `dsh-remote-terminal-controller` → `dsh-waypoint-terminal-controller`.
+  Workspace-only packages: `@dsh-remote/*` → `@dsh-waypoint/*`.
+- On-disk identity: `$DSH_HOME/remote` → `$DSH_HOME/waypoint`, `$DSH_HOME/remote-agent` →
+  `$DSH_HOME/waypoint-agent`, and the systemd user unit `dsh-remote-agent.service` →
+  `dsh-waypoint-agent.service`. `docs/operations.md` describes the manual move for anyone switching
+  over; nothing is migrated automatically, because a half-migrated host registry is worse than an
+  empty one.
+- Transport identity: `/api/dsh-remote` → `/api/dsh-waypoint`, the agent API prefix
+  `/dsh-waypoint-agent/api/v1`, and the `x-dsh-waypoint-*` request headers. A remote host keeps
+  answering the old protocol until its agent is reinstalled; Settings offers **Reinstall** for
+  exactly that case.
+- Loader rows: `dsh-remote-local` → `dsh-waypoint`, `terminal-controller-remote` →
+  `terminal-controller-waypoint`. The installer still detects and removes a leftover
+  `dsh-remote-agent` dependency and stops a leftover `dsh-remote-agent.service`, so an
+  upgraded machine never runs two agents.
+
+Everyone else keeps their state: an install of this version starts from an empty host registry.
+
+Previously, in the 0.8.x line:
+
 ## Unreleased
 
 - Report a failed `npm install pnpm` as its own cause (new bootstrap `exit 25`,
@@ -70,14 +101,14 @@
   runtime silently picked a version the operator never chose, and left a second
   Node.js on hosts that already had one. `remoteNodeVersion`,
   `autoInstallNode`, and `remoteInstallDir` are removed with it.
-- Report the remote DSH version from the installer (`DSH_REMOTE_DSH_VERSION`),
+- Report the remote DSH version from the installer (`DSH_WAYPOINT_DSH_VERSION`),
   so "Update remote DSH" compares real versions instead of `unknown`.
-- `dsh-remote-install doctor` reports the npm global prefix it would use, which
+- `dsh-waypoint-install doctor` reports the npm global prefix it would use, which
   of npm's two write targets are usable (`lib/node_modules` and `bin`), the
   `dsh` version that prefix yields, whether the login shell can find that
   command, and how many `dsh web` processes are running (two for one `DSH_HOME`
   overwrite each other's state file).
-- Default `dsh-remote-install --dsh-version` to `0.2.2-rc.3`, matching the
+- Default `dsh-waypoint-install --dsh-version` to `0.2.2-rc.3`, matching the
   tested desktop and remote runtime.
 - Move the committed dependency baseline to DSH `0.2.2-rc.3`: every
   `overrides` and `minimumReleaseAgeExclude` entry in `pnpm-workspace.yaml`, plus
@@ -90,7 +121,7 @@
   `scripts/select_dsh_version.mjs`, asserts the resolved version, and then
   builds, typechecks, tests, and packages. Bumping a DSH release means changing
   that one value. The run uploads both installable tarballs, the plugin bundle
-  and the standalone remote agent, as a `dsh-remote-<DSH_TARGET>` artifact.
+  and the standalone remote agent, as a `dsh-waypoint-<DSH_TARGET>` artifact.
 - Rebuild the Settings panel as a host list instead of nested cards. Each
   machine is one summary row with its details behind it, the rare and
   destructive actions move into an overflow menu, and every colour now comes
@@ -363,7 +394,7 @@
 
 ## 0.8.6
 
-- Automatically migrate a legacy `dsh-remote-agent` entry out of the remote DSH profile during
+- Automatically migrate a legacy `dsh-waypoint-agent` entry out of the remote DSH profile during
   Reinstall. The installer backs up `package.json` and the stale lockfile, removes the old dependency
   and bundle entry, then installs the scoped npm agent. Existing remote plugins such as `dsh-mnemon`
   are preserved; no manual SSH profile editing is required.
@@ -373,7 +404,7 @@
 - Add a **Restart remote DSH** host action and `remote_host_restart` agent tool. It restarts the
   installer-owned systemd unit, waits for the agent state file, and reconnects without reinstalling
   DSH or overwriting the remote profile. Nohup deployments still use Reinstall or a manual restart.
-- Publish the remote agent as `@goldenpigeon/dsh-remote-agent` and install it from npm before falling
+- Publish the remote agent as `dsh-waypoint-agent` and install it from npm before falling
   back to the bundled tarball.
 - Keep the bundled agent artifact under the installer's persistent artifacts directory instead of a
   temporary `/tmp` path, so later plugin installations cannot break on a missing file dependency.
@@ -419,8 +450,8 @@
 
 ## 0.8.0
 
-- Publish one installable `dsh-remote-local-plugin` package.
-- Bundle `dsh-remote-terminal-controller` inside the plugin and merge its bundle patch.
+- Publish one installable `dsh-waypoint` package.
+- Bundle `dsh-waypoint-terminal-controller` inside the plugin and merge its bundle patch.
 - Add the DSH plugin-page installation path.
 - Add online metadata, CI, release workflow, and release documentation.
 - Harden systemd unit permissions, credential-proxy authentication, terminal fallback, approval

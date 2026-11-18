@@ -34,7 +34,7 @@ const PACKAGE_VERSION = JSON.parse(await readFile(new URL('../package.json', imp
 const tempDirs: string[] = []
 
 async function tempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'dsh-remote-agent-'))
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-agent-'))
   tempDirs.push(dir)
   return dir
 }
@@ -74,7 +74,7 @@ describe('config', () => {
     // form follows that platform rather than a fixed POSIX spelling.
     assert.equal(resolveDshHome({ DSH_HOME: '/srv/dsh' }), resolve('/srv/dsh'))
     assert.equal(resolveUserPath('~/x', '/home/u'), join('/home/u', 'x'))
-    assert.equal(resolveUserPath('', '/home/u'), join('/home/u', 'remote-agent', 'agent.json'))
+    assert.equal(resolveUserPath('', '/home/u'), join('/home/u', 'waypoint-agent', 'agent.json'))
     assert.equal(resolveUserPath('/abs/x', '/home/u'), '/abs/x')
   })
 

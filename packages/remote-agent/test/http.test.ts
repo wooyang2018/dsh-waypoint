@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
-import { RemoteAgentClient, sessionArchivePath } from '@dsh-remote/protocol'
+import { RemoteAgentClient, sessionArchivePath } from '@dsh-waypoint/protocol'
 import { handleAgentRequest } from '../src/http.ts'
 import type { RemoteAgentService } from '../src/service.ts'
 import { RemoteTerminalManager } from '../src/terminal.ts'
@@ -73,7 +73,7 @@ describe('agent HTTP file and terminal surface', () => {
     const response = await fetch(`${baseUrl}${sessionArchivePath('s1')}`, {
       headers: {
         authorization: `Bearer ${token}`,
-        'x-dsh-remote-protocol': '1',
+        'x-dsh-waypoint-protocol': '1',
       },
     })
     assert.equal(response.status, 405)

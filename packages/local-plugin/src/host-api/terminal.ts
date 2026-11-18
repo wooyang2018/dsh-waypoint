@@ -6,14 +6,14 @@
  * instead. Unary actions return JSON; attach returns SSE frames already in the
  * shape the normal terminal UI consumes.
  *
- * @module dsh-remote-local/host-api/terminal
+ * @module dsh-waypoint/host-api/terminal
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type { RemoteTerminals } from '../remote/terminal.ts'
 
-export const TERMINAL_API_PATH = '/api/dsh-remote-terminal'
+export const TERMINAL_API_PATH = '/api/dsh-waypoint-terminal'
 
 /** Register the terminal route. */
 export function registerTerminalApi(ctx: Context, terminals: RemoteTerminals): () => Promise<void> {

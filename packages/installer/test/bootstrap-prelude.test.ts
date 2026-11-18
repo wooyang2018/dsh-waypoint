@@ -17,7 +17,7 @@ function commandPath(name: string): string {
 
 describe('bootstrap node path prelude', () => {
   it('continues past a missing nvm installation', { skip }, () => {
-    const root = mkdtempSync(join(tmpdir(), 'dsh-remote-prelude-'))
+    const root = mkdtempSync(join(tmpdir(), 'dsh-waypoint-prelude-'))
     try {
       const home = join(root, 'home')
       const bin = join(root, 'bin')

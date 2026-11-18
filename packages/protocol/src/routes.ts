@@ -5,7 +5,7 @@
  * both sides and prevents the client from hard-coding a path the agent does
  * not serve.
  *
- * @module @dsh-remote/protocol/routes
+ * @module @dsh-waypoint/protocol/routes
  */
 
 import { AGENT_API_PREFIX } from './version.ts'

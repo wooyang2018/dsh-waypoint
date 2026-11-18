@@ -37,7 +37,7 @@ describe('RemoteAgentClient file and terminal calls', () => {
 
   before(async () => {
     server = createServer((req, res) => {
-      if (req.headers['x-dsh-remote-protocol'] === undefined || req.headers.authorization !== `Bearer ${token}`) {
+      if (req.headers['x-dsh-waypoint-protocol'] === undefined || req.headers.authorization !== `Bearer ${token}`) {
         res.writeHead(401, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: false, protocolVersion: PROTOCOL_VERSION, serverTime: new Date().toISOString(), error: { code: 'auth/invalid', message: 'bad token', retryable: false } }))
         return

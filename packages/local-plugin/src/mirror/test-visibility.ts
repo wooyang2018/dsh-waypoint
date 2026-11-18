@@ -4,14 +4,14 @@
  * This file lives only in a test DSH_HOME. It is intentionally not a Settings
  * option and not an agent tool: a test harness writes it before/after a run.
  *
- *   $DSH_HOME/remote/test-visibility.json
- *   { "hiddenPaths": ["/tmp/dsh-remote-tests"], "hiddenWorkspaceIds": ["..."] }
+ *   $DSH_HOME/waypoint/test-visibility.json
+ *   { "hiddenPaths": ["/tmp/dsh-waypoint-tests"], "hiddenWorkspaceIds": ["..."] }
  *
  * Hidden paths/ids are not registered into the local workspace registry. Hiding
  * an already-mirrored workspace archives its local mirror Sessions and removes
  * the local row; removing the entry restores it from the remote log later.
  *
- * @module dsh-remote-local/mirror/test-visibility
+ * @module dsh-waypoint/mirror/test-visibility
  */
 
 import { readFile } from 'node:fs/promises'

@@ -16,7 +16,7 @@ import { allocateLocalPort, tunnelArgs } from '../src/ssh/tunnel.ts'
 const tempDirs: string[] = []
 
 async function tempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'dsh-remote-local-'))
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-'))
   tempDirs.push(dir)
   return dir
 }
@@ -66,7 +66,7 @@ describe('SSH target', () => {
 describe('discovery command', () => {
   it('quotes literal paths and expands HOME for tilde paths', () => {
     assert.equal(shellQuote(`a'b`), `'a'\\''b'`)
-    assert.equal(discoveryCommand('~/.dsh/remote-agent/agent.json'), 'cat -- "$HOME/.dsh/remote-agent/agent.json" 2>/dev/null || true')
+    assert.equal(discoveryCommand('~/.dsh/waypoint-agent/agent.json'), 'cat -- "$HOME/.dsh/waypoint-agent/agent.json" 2>/dev/null || true')
     assert.equal(discoveryCommand('/srv/agent.json'), `cat -- '/srv/agent.json' 2>/dev/null || true`)
   })
 })

@@ -6,7 +6,7 @@
  * slot. Mirror sessions are archived instead of moved to Ungrouped, so patch
  * the one affected sentence in the rendered modal while it is open.
  *
- * @module dsh-remote-local/client/workspace-delete-copy
+ * @module dsh-waypoint/client/workspace-delete-copy
  */
 
 import type { HostsApi } from './api.ts'

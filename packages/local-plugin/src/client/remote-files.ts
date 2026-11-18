@@ -6,7 +6,7 @@
  * preview therefore call this proxy, which asks the local plugin's host API to
  * resolve the mirror and read the remote workspace.
  *
- * @module dsh-remote-local/client/remote-files
+ * @module dsh-waypoint/client/remote-files
  */
 
 import type { Context } from '@deepseek-ai/cordis'

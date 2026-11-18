@@ -4,7 +4,7 @@
 # Every key the plugin's schema accepts appears below, in schema order.
 # `remoteDshVersion` is shown commented out because an empty value means
 # "follow the local DSH version", which is the default.
-- id: dsh-remote-local
+- id: dsh-waypoint
   config:
     stateDir: ~/.dsh/remote
     sshBinary: ssh

@@ -6,7 +6,7 @@
  * intentionally narrow: they validate exactly the fields the UI consumes and
  * reject malformed envelopes loudly instead of rendering half a host list.
  *
- * @module @dsh-remote/protocol/validation
+ * @module @dsh-waypoint/protocol/validation
  */
 
 import type {

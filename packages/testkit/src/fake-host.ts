@@ -1,11 +1,11 @@
 /**
  * In-memory remote agent used by contract tests and plugin development.
  *
- * It implements the same wire contract as `dsh-remote-agent` without DSH,
+ * It implements the same wire contract as `dsh-waypoint-agent` without DSH,
  * SSH, or a real session store. Every response is a protocol envelope; the
  * session route can stream SSE and accept appended events.
  *
- * @module @dsh-remote/testkit/fake-host
+ * @module @dsh-waypoint/testkit/fake-host
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
@@ -33,7 +33,7 @@ import {
   type RemoteTerminalInput,
   type SessionSnapshot,
   type SessionStreamFrame,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 import { createFixtures, summarize, type FakeSession, type Fixtures } from './fixtures.ts'
 
 /** Options accepted by the fake host. */

@@ -37,7 +37,7 @@ interface PreludeRun {
  * @param configured explicit prefix handed to the prelude.
  */
 function runPrelude(prefixOutput: string | undefined, configured?: string): PreludeRun {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-remote-prefix-'))
+  const root = mkdtempSync(join(tmpdir(), 'dsh-waypoint-prefix-'))
   try {
     const bin = join(root, 'bin')
     mkdirSync(bin)

@@ -5,7 +5,7 @@
  * installer. A nohup deployment has no durable service definition to restart,
  * so it must use Reinstall or an explicit remote command instead.
  *
- * @module dsh-remote-local/remote/restart
+ * @module dsh-waypoint/remote/restart
  */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -21,10 +21,10 @@ export interface RestartRemoteOptions {
 }
 
 const RESTART_COMMAND = [
-  'if command -v systemctl >/dev/null 2>&1 && systemctl --user cat dsh-remote-agent.service >/dev/null 2>&1; then',
-  '  systemctl --user restart dsh-remote-agent.service',
+  'if command -v systemctl >/dev/null 2>&1 && systemctl --user cat dsh-waypoint-agent.service >/dev/null 2>&1; then',
+  '  systemctl --user restart dsh-waypoint-agent.service',
   'else',
-  '  echo "dsh-remote: dsh-remote-agent.service was not found; use Reinstall or restart the remote DSH manually" >&2',
+  '  echo "dsh-waypoint: dsh-waypoint-agent.service was not found; use Reinstall or restart the remote DSH manually" >&2',
   '  exit 4',
   'fi',
 ].join('\n')

@@ -9,7 +9,7 @@
  * This is a mirror, not a second agent loop: the local Session is a durable
  * projection of the remote log, and the remote DSH remains the execution owner.
  *
- * @module dsh-remote-local/mirror
+ * @module dsh-waypoint/mirror
  */
 
 import { createHash, randomUUID } from 'node:crypto'
@@ -33,7 +33,7 @@ import type {
   RemoteWorkspace,
   PromptContentPart,
   PromptDeliveryMode,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 import { resolveDshHome, type ResolvedConfig } from '../config.ts'
 import { singleFlight } from './inflight.ts'
 import { isTestHidden, loadTestVisibility, type TestVisibility } from './test-visibility.ts'
@@ -456,19 +456,19 @@ class LazyRemoteMirrorAgent implements MirrorAgent {
 export class RemoteMirrorService {
   get #sessions(): Context['sessions'] {
     const value = this.#ctx.get('sessions')
-    if (value === undefined) throw new Error('dsh-remote-local: sessions service is unavailable')
+    if (value === undefined) throw new Error('dsh-waypoint: sessions service is unavailable')
     return value
   }
 
   get #workspaceRegistry(): Context['workspaceRegistry'] {
     const value = this.#ctx.get('workspaceRegistry')
-    if (value === undefined) throw new Error('dsh-remote-local: workspaceRegistry service is unavailable')
+    if (value === undefined) throw new Error('dsh-waypoint: workspaceRegistry service is unavailable')
     return value
   }
 
   get #agents(): Context['agents'] {
     const value = this.#ctx.get('agents')
-    if (value === undefined) throw new Error('dsh-remote-local: agents service is unavailable')
+    if (value === undefined) throw new Error('dsh-waypoint: agents service is unavailable')
     return value
   }
 
@@ -518,7 +518,7 @@ export class RemoteMirrorService {
       for (const record of Object.values(this.#state.workspaces)) {
         if (record.localWorkspaceId !== change.key) continue
         void this.#retireWorkspace(record).catch(error => {
-          this.#ctx.logger.warn('dsh-remote-local: could not persist workspace removal: %s', String(error))
+          this.#ctx.logger.warn('dsh-waypoint: could not persist workspace removal: %s', String(error))
         })
       }
     }))
@@ -528,7 +528,7 @@ export class RemoteMirrorService {
     const workspaceState = this.#ctx.get('storageDomain')?.get('workspace')?.global.get() as WorkspaceDomainState | undefined
     const pending = workspaceState?.pendingMutation
     this.#pendingWorkspaceDeletion = pending?.operation === 'delete' ? pending.workspaceId : undefined
-    this.#workspaceOff.push(this.#ctx.on('dsh-remote/workspace-added', (hostId, workspace) =>
+    this.#workspaceOff.push(this.#ctx.on('dsh-waypoint/workspace-added', (hostId, workspace) =>
       this.#restoreWorkspace(hostId, workspace)))
     const offCreated = this.#ctx.on('agent/created' as never, (async ({ agent }: {
       agent: { id: SessionId; session: Session; ctx: Context }
@@ -582,7 +582,7 @@ export class RemoteMirrorService {
         await this.#promoteNativeDraft(agent, userMessages, target)
         return { kind: 'reject' }
       } catch (error) {
-        this.#ctx.logger.warn('dsh-remote-local: could not promote native draft %s: %s', agent.id, String(error))
+        this.#ctx.logger.warn('dsh-waypoint: could not promote native draft %s: %s', agent.id, String(error))
         throw error
       }
     }) as never)
@@ -648,7 +648,7 @@ export class RemoteMirrorService {
         try {
           await this.#syncHost(host)
         } catch (error) {
-          this.#ctx.logger.warn('dsh-remote-local: mirror sync for %s failed: %s', host.id, String(error))
+          this.#ctx.logger.warn('dsh-waypoint: mirror sync for %s failed: %s', host.id, String(error))
         }
       }
       await this.#pruneDetachedSessions()
@@ -687,7 +687,7 @@ export class RemoteMirrorService {
     try {
       sessions = this.#sessions
     } catch (error) {
-      this.#ctx.logger.warn('dsh-remote-local: skipping mirror-record pruning: %s', String(error))
+      this.#ctx.logger.warn('dsh-waypoint: skipping mirror-record pruning: %s', String(error))
       return
     }
     const survivors = Object.entries(this.#state.sessions)
@@ -702,7 +702,7 @@ export class RemoteMirrorService {
       const gone = await this.#allSessionsDeletedOnDisk(refs)
       if (!gone) {
         this.#ctx.logger.warn(
-          'dsh-remote-local: no mirrored Session resolved in memory; keeping %d record(s) because the archive still has them',
+          'dsh-waypoint: no mirrored Session resolved in memory; keeping %d record(s) because the archive still has them',
           total,
         )
         return
@@ -711,7 +711,7 @@ export class RemoteMirrorService {
     const removed = total - survivors.length
     this.#state.sessions = Object.fromEntries(survivors)
     this.#ctx.logger.warn(
-      'dsh-remote-local: removed %d mirrored Session record(s) whose local Session is gone',
+      'dsh-waypoint: removed %d mirrored Session record(s) whose local Session is gone',
       removed,
     )
     await this.#save()
@@ -859,7 +859,7 @@ export class RemoteMirrorService {
       && record.localWorkspaceId !== this.#pendingWorkspaceDeletion
       && this.#workspaceRegistry.get(record.localWorkspaceId as WorkspaceId) === undefined) {
       void this.#retireWorkspace(record).catch(error => {
-        this.#ctx.logger.warn('dsh-remote-local: could not persist workspace removal: %s', String(error))
+        this.#ctx.logger.warn('dsh-waypoint: could not persist workspace removal: %s', String(error))
       })
       return true
     }
@@ -1064,7 +1064,7 @@ export class RemoteMirrorService {
       if (candidate !== undefined && await this.#selectionUnavailable(runtime, candidate)) {
         rejectSelection(runtime, candidate)
         this.#ctx.logger.warn(
-          'dsh-remote-local: remote %s does not offer %s/%s; sending with the remote default model',
+          'dsh-waypoint: remote %s does not offer %s/%s; sending with the remote default model',
           runtime.record.remoteSessionId,
           candidate.provider,
           candidate.model,
@@ -1088,7 +1088,7 @@ export class RemoteMirrorService {
         // already using, which is the only model it can actually run.
         rejectSelection(runtime, forwarded)
         this.#ctx.logger.warn(
-          'dsh-remote-local: remote %s does not offer %s/%s; resending without a model selection',
+          'dsh-waypoint: remote %s does not offer %s/%s; resending without a model selection',
           runtime.record.remoteSessionId,
           forwarded.provider,
           forwarded.model,
@@ -1117,7 +1117,7 @@ export class RemoteMirrorService {
           ? (runtime.session as unknown as { seq: number }).seq - 1
           : -1
       } catch (error) {
-        this.#ctx.logger.warn('dsh-remote-local: could not append accepted user message: %s', String(error))
+        this.#ctx.logger.warn('dsh-waypoint: could not append accepted user message: %s', String(error))
       }
     } catch (error) {
       runtime.lastError = error instanceof Error ? error.message : String(error)
@@ -1130,7 +1130,7 @@ export class RemoteMirrorService {
 
   #reportPromptError(runtime: MirrorRuntime, error: unknown): void {
     runtime.lastError = error instanceof Error ? error.message : String(error)
-    this.#ctx.logger.warn('dsh-remote-local: remote prompt failed: %s', runtime.lastError)
+    this.#ctx.logger.warn('dsh-waypoint: remote prompt failed: %s', runtime.lastError)
     try {
       const emit = this.#ctx.emit as unknown as (name: string, payload: unknown) => void
       emit.call(this.#ctx, 'agent/error', {
@@ -1138,7 +1138,7 @@ export class RemoteMirrorService {
         error: error instanceof Error ? error : new Error(String(error)),
       })
     } catch (emitError) {
-      this.#ctx.logger.warn('dsh-remote-local: prompt error notification failed: %s', String(emitError))
+      this.#ctx.logger.warn('dsh-waypoint: prompt error notification failed: %s', String(emitError))
     }
   }
 
@@ -1188,7 +1188,7 @@ export class RemoteMirrorService {
       this.#setRunning(runtime, false)
     }).catch(error => {
       runtime.lastError = error instanceof Error ? error.message : String(error)
-      this.#ctx.logger.warn('dsh-remote-local: remote cancel failed: %s', runtime.lastError)
+      this.#ctx.logger.warn('dsh-waypoint: remote cancel failed: %s', runtime.lastError)
       // Keep the local Agent running so the UI can offer Stop again.
       this.#setRunning(runtime, true)
     })
@@ -1250,7 +1250,7 @@ export class RemoteMirrorService {
     try {
       await this.#sessions.flush(session)
     } catch (error) {
-      this.#ctx.logger.debug('dsh-remote-local: blank session flush failed: %s', String(error))
+      this.#ctx.logger.debug('dsh-waypoint: blank session flush failed: %s', String(error))
     }
     const options = this.#defaultSelection() ?? { provider: 'deepseek-official', model: 'deepseek-flash' }
     const pending = {
@@ -1279,7 +1279,7 @@ export class RemoteMirrorService {
         try {
           await dispose()
         } catch (disposeError) {
-          this.#ctx.logger.debug('dsh-remote-local: blank rollback detach failed: %s', String(disposeError))
+          this.#ctx.logger.debug('dsh-waypoint: blank rollback detach failed: %s', String(disposeError))
         }
       }
       await this.#archive(session.id)
@@ -1437,7 +1437,7 @@ export class RemoteMirrorService {
           const detach = this.#agents.enter(pending.agent as never)
           this.#registrations.set(pending.localSessionId, async () => { detach() })
         } catch (restoreError) {
-          this.#ctx.logger.warn('dsh-remote-local: could not restore lazy Agent %s: %s', pending.localSessionId, String(restoreError))
+          this.#ctx.logger.warn('dsh-waypoint: could not restore lazy Agent %s: %s', pending.localSessionId, String(restoreError))
         }
       }
       throw error
@@ -1466,7 +1466,7 @@ export class RemoteMirrorService {
 
   /** Log a lazy materialization failure without turning the blank Session into a local run. */
   reportBlankFailure(agent: LazyRemoteMirrorAgent, error: unknown): void {
-    this.#ctx.logger.warn('dsh-remote-local: could not start remote Session for %s: %s', agent.id, String(error))
+    this.#ctx.logger.warn('dsh-waypoint: could not start remote Session for %s: %s', agent.id, String(error))
     try {
       const emit = this.#ctx.emit as unknown as (name: string, payload: unknown) => void
       emit.call(this.#ctx, 'agent/error', {
@@ -1474,7 +1474,7 @@ export class RemoteMirrorService {
         error: error instanceof Error ? error : new Error(String(error)),
       })
     } catch (emitError) {
-      this.#ctx.logger.warn('dsh-remote-local: blank Session error notification failed: %s', String(emitError))
+      this.#ctx.logger.warn('dsh-waypoint: blank Session error notification failed: %s', String(emitError))
     }
   }
 
@@ -1730,7 +1730,7 @@ export class RemoteMirrorService {
         try {
           await this.#deleteLocalWorkspace(record)
         } catch (error) {
-          this.#ctx.logger.warn('dsh-remote-local: could not hide test workspace %s: %s', ref, String(error))
+          this.#ctx.logger.warn('dsh-waypoint: could not hide test workspace %s: %s', ref, String(error))
         }
         this.#state.testHidden.push(ref)
         changed = true
@@ -1802,7 +1802,7 @@ export class RemoteMirrorService {
       await this.#hosts.archiveSession(hostId, remoteSessionId)
     } catch (error) {
       this.#ctx.logger.warn(
-        'dsh-remote-local: could not archive abandoned remote Session %s: %s',
+        'dsh-waypoint: could not archive abandoned remote Session %s: %s',
         remoteSessionId,
         String(error),
       )
@@ -1861,7 +1861,7 @@ export class RemoteMirrorService {
         }
       } catch (error) {
         if (!controller.signal.aborted) {
-          this.#ctx.logger.warn('dsh-remote-local: approval stream %s failed: %s', host.id, String(error))
+          this.#ctx.logger.warn('dsh-waypoint: approval stream %s failed: %s', host.id, String(error))
         }
       } finally {
         this.#approvalStreams.delete(host.id)
@@ -1928,12 +1928,12 @@ export class RemoteMirrorService {
         async () => 'unavailable',
       ) as ApprovalOutcome
     } catch (error) {
-      this.#ctx.logger.warn('dsh-remote-local: local approval bridge failed: %s', String(error))
+      this.#ctx.logger.warn('dsh-waypoint: local approval bridge failed: %s', String(error))
       outcome = 'unavailable'
     }
     if (runtime.stopped) return
     await this.#hosts.answerApproval(hostId, request.id, outcome).catch(error => {
-      this.#ctx.logger.warn('dsh-remote-local: approval answer failed: %s', String(error))
+      this.#ctx.logger.warn('dsh-waypoint: approval answer failed: %s', String(error))
     })
   }
 
@@ -2024,7 +2024,7 @@ export class RemoteMirrorService {
     // instead of publishing a Session the client would reject.
     if (parentLocalId !== undefined && !filtered.some(event => event.type === 'subagent/descriptor')) {
       this.#ctx.logger.warn(
-        'dsh-remote-local: subagent %s has no descriptor in its mirror window; skipping its local mirror',
+        'dsh-waypoint: subagent %s has no descriptor in its mirror window; skipping its local mirror',
         remote.sessionId,
       )
       return undefined
@@ -2063,7 +2063,7 @@ export class RemoteMirrorService {
         this.#startAssistantStream(runtime)
       }
       this.#ctx.logger.info(
-        'dsh-remote-local: reattached remote session %s to local %s',
+        'dsh-waypoint: reattached remote session %s to local %s',
         remote.sessionId,
         reuse.id,
       )
@@ -2087,14 +2087,14 @@ export class RemoteMirrorService {
         },
       })
     } catch (error) {
-      this.#ctx.logger.warn('dsh-remote-local: could not seed mirror for %s: %s', remote.sessionId, String(error))
+      this.#ctx.logger.warn('dsh-waypoint: could not seed mirror for %s: %s', remote.sessionId, String(error))
       return undefined
     }
     await this.#attach(target.workspace, session.id)
     try {
       await this.#sessions.flush(session)
     } catch (error) {
-      this.#ctx.logger.debug('dsh-remote-local: mirror flush failed: %s', String(error))
+      this.#ctx.logger.debug('dsh-waypoint: mirror flush failed: %s', String(error))
     }
 
     const record: MirrorRecord = existing === undefined
@@ -2123,7 +2123,7 @@ export class RemoteMirrorService {
     }
     await this.#mountRuntime(record, session, snapshot, remoteToLocalSeq, latestTurn, remote.live)
     this.#ctx.logger.info(
-      'dsh-remote-local: mirrored remote session %s as local %s',
+      'dsh-waypoint: mirrored remote session %s as local %s',
       remote.sessionId,
       localId,
     )
@@ -2177,7 +2177,7 @@ export class RemoteMirrorService {
     const remoteMode = latestRemoteSandboxMode(snapshot.events)
     if (localMode !== undefined && remoteMode !== undefined && localMode !== remoteMode) {
       void this.#hosts.setSandboxMode(record.hostId, record.remoteSessionId, localMode).catch(error => {
-        this.#ctx.logger.warn('dsh-remote-local: initial sandbox mode failed: %s', String(error))
+        this.#ctx.logger.warn('dsh-waypoint: initial sandbox mode failed: %s', String(error))
       })
     }
     await this.#save()
@@ -2246,7 +2246,7 @@ export class RemoteMirrorService {
     } catch (error) {
       runtime.lastError = error instanceof Error ? error.message : String(error)
       this.#ctx.logger.warn(
-        'dsh-remote-local: mirror poll %s failed: %s',
+        'dsh-waypoint: mirror poll %s failed: %s',
         runtime.record.remoteSessionId,
         runtime.lastError,
       )
@@ -2258,7 +2258,7 @@ export class RemoteMirrorService {
     if (snapshot.truncated && (snapshot.events[0]?.seq ?? 0) > runtime.record.lastSeq) {
       const first = snapshot.events[0]?.seq
       this.#ctx.logger.warn(
-        'dsh-remote-local: remote log for %s skipped ahead to seq %s (window %d)',
+        'dsh-waypoint: remote log for %s skipped ahead to seq %s (window %d)',
         runtime.record.remoteSessionId,
         String(first ?? snapshot.cursor),
         this.#config.mirrorMaxEvents,
@@ -2293,7 +2293,7 @@ export class RemoteMirrorService {
       runtime.session.append('turn/end', event as never)
     } catch (error) {
       this.#ctx.logger.warn(
-        'dsh-remote-local: could not close the abandoned turn of %s: %s',
+        'dsh-waypoint: could not close the abandoned turn of %s: %s',
         runtime.record.remoteSessionId,
         String(error),
       )
@@ -2336,7 +2336,7 @@ export class RemoteMirrorService {
       if (signal.aborted || runtime.stopped || this.#disposed) return
       runtime.lastError = error instanceof Error ? error.message : String(error)
       this.#ctx.logger.warn(
-        'dsh-remote-local: mirror stream %s failed: %s',
+        'dsh-waypoint: mirror stream %s failed: %s',
         runtime.record.remoteSessionId,
         runtime.lastError,
       )
@@ -2411,7 +2411,7 @@ export class RemoteMirrorService {
       if (mode !== 'read-only' && mode !== 'workspace-write' && mode !== 'danger-full-access') return
       void this.#hosts.setSandboxMode(runtime.record.hostId, runtime.record.remoteSessionId, mode).catch(error => {
         runtime.lastError = error instanceof Error ? error.message : String(error)
-        this.#ctx.logger.warn('dsh-remote-local: remote sandbox mode failed: %s', runtime.lastError)
+        this.#ctx.logger.warn('dsh-waypoint: remote sandbox mode failed: %s', runtime.lastError)
       })
       return
     }
@@ -2426,7 +2426,7 @@ export class RemoteMirrorService {
     Object.assign(runtime.agent.options, selection)
     void this.#hosts.selectModel(runtime.record.hostId, runtime.record.remoteSessionId, selection).catch(error => {
       runtime.lastError = error instanceof Error ? error.message : String(error)
-      this.#ctx.logger.warn('dsh-remote-local: remote model selection failed: %s', runtime.lastError)
+      this.#ctx.logger.warn('dsh-waypoint: remote model selection failed: %s', runtime.lastError)
     })
   }
 
@@ -2477,7 +2477,7 @@ export class RemoteMirrorService {
       emit.call(this.#ctx, 'agent/assistant-stream', { agent: runtime.agent, frame })
     } catch (error) {
       this.#ctx.logger.warn(
-        'dsh-remote-local: local assistant frame %s failed: %s',
+        'dsh-waypoint: local assistant frame %s failed: %s',
         runtime.record.remoteSessionId,
         String(error),
       )
@@ -2572,7 +2572,7 @@ export class RemoteMirrorService {
     } catch (error) {
       if (signal.aborted || runtime.stopped || this.#disposed) return
       this.#ctx.logger.warn(
-        'dsh-remote-local: assistant stream %s failed: %s',
+        'dsh-waypoint: assistant stream %s failed: %s',
         runtime.record.remoteSessionId,
         error instanceof Error ? error.message : String(error),
       )
@@ -2593,7 +2593,7 @@ export class RemoteMirrorService {
       })
     } catch (error) {
       this.#ctx.logger.warn(
-        'dsh-remote-local: local agent status %s failed: %s',
+        'dsh-waypoint: local agent status %s failed: %s',
         runtime.record.remoteSessionId,
         String(error),
       )
@@ -2605,7 +2605,7 @@ export class RemoteMirrorService {
     try {
       await workspace.attachSession(sessionId)
     } catch (error) {
-      this.#ctx.logger.debug('dsh-remote-local: attach mirror %s failed: %s', sessionId, String(error))
+      this.#ctx.logger.debug('dsh-waypoint: attach mirror %s failed: %s', sessionId, String(error))
     }
   }
 
@@ -2614,7 +2614,7 @@ export class RemoteMirrorService {
       await this.#workspaceRegistry.archiveSession(sessionId, { stopActivity: true })
     } catch (error) {
       // Missing/active sessions are left alone; the new mirror is still usable.
-      this.#ctx.logger.debug('dsh-remote-local: archive %s failed: %s', sessionId, String(error))
+      this.#ctx.logger.debug('dsh-waypoint: archive %s failed: %s', sessionId, String(error))
     }
   }
 

@@ -6,7 +6,7 @@
  * so a mirrored Session would otherwise get a local shell. Patch the service for
  * mirrored Sessions and keep the stock implementation for local Sessions.
  *
- * @module dsh-remote-local/remote/terminal-controller
+ * @module dsh-waypoint/remote/terminal-controller
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -65,7 +65,7 @@ export function installRemoteTerminalController(
   controller.watch = (sessionId: SessionId, signal: AbortSignal): AsyncIterable<WebTerminalInfo[]> => {
     if (!isMirrorSession(sessionId)) return original.watch(sessionId, signal)
     return watchRemoteTerminals(terminals, String(sessionId), signal,
-      message => ctx.logger.warn('dsh-remote-local: remote terminal roster failed: %s', message))
+      message => ctx.logger.warn('dsh-waypoint: remote terminal roster failed: %s', message))
   }
   controller.retain = (sessionId: SessionId, id: WebTerminalId, signal: AbortSignal): AsyncIterable<TerminalRetentionFrame> => {
     if (!isMirrorSession(sessionId)) return original.retain(sessionId, id, signal)
@@ -87,7 +87,7 @@ export function installRemoteTerminalController(
           await terminals.input(String(id), input)
         }
       } catch (error) {
-        ctx.logger.warn('dsh-remote-local: remote terminal uplink failed: %s', String(error))
+        ctx.logger.warn('dsh-waypoint: remote terminal uplink failed: %s', String(error))
       }
     })()
     return terminals.attach(String(id), signal)

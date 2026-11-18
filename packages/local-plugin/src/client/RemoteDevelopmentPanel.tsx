@@ -5,11 +5,11 @@
  * It owns only view state (form fields, which host is expanded); every
  * durable fact and every tunnel lives in the host process.
  *
- * @module dsh-remote-local/client/panel
+ * @module dsh-waypoint/client/panel
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ModelCatalogResult, RemoteWorkspace } from '@dsh-remote/protocol'
+import type { ModelCatalogResult, RemoteWorkspace } from '@dsh-waypoint/protocol'
 import type { DiscoveredSshHost, HostView, SshDiscoveryResult } from '../hosts/types.ts'
 import type { HostDetail } from '../messages.ts'
 import type { RemoteHostsState } from '../host-api/contract.ts'
@@ -436,11 +436,11 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
   }
 
   return (
-    <div className="dshr-root">
-      <header className="dshr-header">
+    <div className="dshwp-root">
+      <header className="dshwp-header">
         <div>
           <h2>{t('settings.title')}</h2>
-          <p className="dshr-subtitle">
+          <p className="dshwp-subtitle">
             {t('settings.subtitle.lead')}
             {' '}
             {t('settings.subtitle.body')}
@@ -448,22 +448,22 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
         </div>
       </header>
 
-      <section className="dshr-card">
-        <div className="dshr-section-title">
+      <section className="dshwp-card">
+        <div className="dshwp-section-title">
           <h3>{t('settings.hosts')}</h3>
-          <span className="dshr-hint">{hosts.length} {t('settings.hostsUnit')}</span>
+          <span className="dshwp-hint">{hosts.length} {t('settings.hostsUnit')}</span>
         </div>
-        {hosts.length === 0 && <p className="dshr-empty">{t('settings.noHosts')}</p>}
-        <div className="dshr-hosts">
+        {hosts.length === 0 && <p className="dshwp-empty">{t('settings.noHosts')}</p>}
+        <div className="dshwp-hosts">
           {hosts.map(host => {
             const expanded = expandedHost === host.id
             const connected = host.phase === 'connected'
             return (
-              <article key={host.id} className={expanded ? 'dshr-host dshr-host-open' : 'dshr-host'}>
+              <article key={host.id} className={expanded ? 'dshwp-host dshwp-host-open' : 'dshwp-host'}>
                 {/* One summary row per machine: status, name, endpoint, menu.
                     Details live behind the row so the list stays scannable. */}
                 <div
-                  className="dshr-host-row"
+                  className="dshwp-host-row"
                   role="button"
                   tabIndex={0}
                   aria-expanded={expanded}
@@ -474,14 +474,14 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                     void toggleHost(host)
                   }}
                 >
-                  <span className={`dshr-dot dshr-dot-${host.phase}`} aria-hidden="true" />
-                  <div className="dshr-host-main">
-                    <div className="dshr-host-title">
+                  <span className={`dshwp-dot dshwp-dot-${host.phase}`} aria-hidden="true" />
+                  <div className="dshwp-host-main">
+                    <div className="dshwp-host-title">
                       <strong>{host.label}</strong>
                       {/* The label often defaults to the SSH destination, so
                           repeating it right beside itself adds nothing. */}
                       {host.sshTarget !== host.label && (
-                        <code className="dshr-endpoint">{host.sshTarget}</code>
+                        <code className="dshwp-endpoint">{host.sshTarget}</code>
                       )}
                     </div>
                     {(() => {
@@ -510,19 +510,19 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                       ].filter((item): item is string => item !== null)
                       if (facts.length === 0) return null
                       return (
-                        <div className="dshr-host-sub">
+                        <div className="dshwp-host-sub">
                           {facts.map(fact => <span key={fact}>{fact}</span>)}
                         </div>
                       )
                     })()}
                   </div>
-                  <div className="dshr-host-tail">
+                  <div className="dshwp-host-tail">
                     {/* The two actions you reach for most sit on the row itself,
                         so connecting or opening the Web UI never needs the row
                         expanded first. */}
                     <button
                       type="button"
-                      className="dshr-icon-btn"
+                      className="dshwp-icon-btn"
                       aria-label={connected ? t('settings.disconnect') : t('settings.connect')}
                       title={connected ? t('settings.disconnect') : t('settings.connect')}
                       disabled={busy !== null || host.phase === 'installing' || host.phase === 'discovering'}
@@ -537,12 +537,12 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                       }}
                     >
                       {busy === `disconnect:${host.id}` || busy === `connect:${host.id}`
-                        ? <span className="dshr-icon-spin" aria-hidden="true">⋯</span>
+                        ? <span className="dshwp-icon-spin" aria-hidden="true">⋯</span>
                         : connected ? <PowerIcon /> : <PlugIcon />}
                     </button>
                     <button
                       type="button"
-                      className="dshr-icon-btn"
+                      className="dshwp-icon-btn"
                       aria-label={t('settings.openWebUi')}
                       title={t('settings.openWebUi')}
                       disabled={busy !== null || !connected}
@@ -551,7 +551,7 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                         void openWebUi(host)
                       }}
                     >
-                      {busy === `web:${host.id}` ? <span className="dshr-icon-spin" aria-hidden="true">⋯</span> : <GlobeIcon />}
+                      {busy === `web:${host.id}` ? <span className="dshwp-icon-spin" aria-hidden="true">⋯</span> : <GlobeIcon />}
                     </button>
                     <HostActionMenu
                       label={`${t('settings.hostActions')}: ${host.label}`}
@@ -561,14 +561,14 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                 </div>
 
                 {expanded && (
-                  <div className="dshr-host-detail">
-                    <div className="dshr-field">
-                      <span className="dshr-field-label">{t('settings.modelSource')}</span>
-                      <span className="dshr-field-value">
-                        <span className="dshr-segmented" role="group" aria-label={t('settings.modelSource')}>
+                  <div className="dshwp-host-detail">
+                    <div className="dshwp-field">
+                      <span className="dshwp-field-label">{t('settings.modelSource')}</span>
+                      <span className="dshwp-field-value">
+                        <span className="dshwp-segmented" role="group" aria-label={t('settings.modelSource')}>
                           <button
                             type="button"
-                            className={host.modelSource === 'proxy' ? 'dshr-seg dshr-seg-active' : 'dshr-seg'}
+                            className={host.modelSource === 'proxy' ? 'dshwp-seg dshwp-seg-active' : 'dshwp-seg'}
                             aria-pressed={host.modelSource === 'proxy'}
                             disabled={busy !== null || host.phase === 'installing' || host.phase === 'discovering'}
                             onClick={() => { void switchModelSource(host, 'proxy') }}
@@ -577,7 +577,7 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                           </button>
                           <button
                             type="button"
-                            className={host.modelSource === 'direct' ? 'dshr-seg dshr-seg-active' : 'dshr-seg'}
+                            className={host.modelSource === 'direct' ? 'dshwp-seg dshwp-seg-active' : 'dshwp-seg'}
                             aria-pressed={host.modelSource === 'direct'}
                             disabled={busy !== null || host.phase === 'installing' || host.phase === 'discovering'}
                             onClick={() => { void switchModelSource(host, 'direct') }}
@@ -586,42 +586,42 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                           </button>
                         </span>
                         <span
-                          className="dshr-help"
+                          className="dshwp-help"
                           title={t('settings.modelSourceHelp')}
                           aria-label={t('settings.modelSourceHelp')}
                         >
                           ?
                         </span>
                         {busy === `source:${host.id}` && (
-                          <span className="dshr-detail" role="status">{t('settings.modelSourceBusy')}</span>
+                          <span className="dshwp-detail" role="status">{t('settings.modelSourceBusy')}</span>
                         )}
                       </span>
                     </div>
 
-                    <div className="dshr-field">
-                      <span className="dshr-field-label">{t('settings.localTunnel')}</span>
-                      <span className="dshr-field-value">
-                        <code className="dshr-endpoint">{host.localPort ?? '—'} → {host.remoteAgentPort ?? '—'}</code>
-                        <span className="dshr-badge">
+                    <div className="dshwp-field">
+                      <span className="dshwp-field-label">{t('settings.localTunnel')}</span>
+                      <span className="dshwp-field-value">
+                        <code className="dshwp-endpoint">{host.localPort ?? '—'} → {host.remoteAgentPort ?? '—'}</code>
+                        <span className="dshwp-badge">
                           {host.hasToken ? t('settings.saved') : t('settings.unsaved')}
                         </span>
                         {host.hostInfo?.dshVersion != null && (
-                          <span className="dshr-detail">DSH {host.hostInfo.dshVersion}</span>
+                          <span className="dshwp-detail">DSH {host.hostInfo.dshVersion}</span>
                         )}
                       </span>
                     </div>
 
                     {host.dshUpdate !== null && (
-                      <div className="dshr-field">
-                        <span className="dshr-field-label">{t('settings.dshVersion')}</span>
-                        <span className="dshr-field-value">
-                          <span className="dshr-warn">
+                      <div className="dshwp-field">
+                        <span className="dshwp-field-label">{t('settings.dshVersion')}</span>
+                        <span className="dshwp-field-value">
+                          <span className="dshwp-warn">
                             {t('settings.dshUpdateHint')}{' '}
                             <code>{host.dshUpdate.remoteVersion}</code> → <code>{host.dshUpdate.localVersion}</code>
                           </span>
                           <button
                             type="button"
-                            className="dshr-button dshr-button-small dshr-button-primary"
+                            className="dshwp-button dshwp-button-small dshwp-button-primary"
                             disabled={busy !== null || host.phase === 'installing'}
                             onClick={() => { void run(`upgrade:${host.id}`, async () => { await api.upgrade(host.id) }) }}
                           >
@@ -633,7 +633,7 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
 
                     {host.retry !== null
                       ? (
-                        <p className="dshr-detail">
+                        <p className="dshwp-detail">
                           {t('settings.retryPrefix')}{host.retry.attempt}{t('settings.retryMiddle')}
                           {' '}
                           {Math.max(0, Math.ceil((host.retry.at - now) / 1000))}{t('settings.retrySuffix')}
@@ -643,22 +643,22 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                       // happening. Once connected it only restated the dot and
                       // the model-key source already in the summary row.
                       : !connected && host.detail !== null && (
-                        <p className="dshr-detail">{detailLabel(t, host.detail)}</p>
+                        <p className="dshwp-detail">{detailLabel(t, host.detail)}</p>
                       )}
-                    {host.agentOutdated && <p className="dshr-detail dshr-agent-outdated">{t('settings.agentOutdated')}</p>}
+                    {host.agentOutdated && <p className="dshwp-detail dshwp-agent-outdated">{t('settings.agentOutdated')}</p>}
                     {host.error !== null && (
-                      <p className="dshr-host-error" role="alert">
+                      <p className="dshwp-host-error" role="alert">
                         {host.errorUi === null ? t('error.unknown') : formatUiText(t, host.errorUi)}
                       </p>
                     )}
 
                     {catalogs[host.id] !== undefined && (
-                      <div className="dshr-models">
-                        <p className="dshr-hint">{t('settings.remoteModelsHint')}</p>
+                      <div className="dshwp-models">
+                        <p className="dshwp-hint">{t('settings.remoteModelsHint')}</p>
                         {catalogs[host.id]!.groups.length === 0
-                          ? <p className="dshr-empty">{t('settings.remoteModelsEmpty')}</p>
+                          ? <p className="dshwp-empty">{t('settings.remoteModelsEmpty')}</p>
                           : (
-                            <ul className="dshr-model-list">
+                            <ul className="dshwp-model-list">
                               {catalogs[host.id]!.groups.map(group => (
                                 <li key={group.id}>
                                   <strong>{group.name}</strong>
@@ -669,20 +669,20 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                             </ul>
                           )}
                         {catalogs[host.id]!.failures.map(failure => (
-                          <p key={failure.id} className="dshr-detail" role="status">
+                          <p key={failure.id} className="dshwp-detail" role="status">
                             {failure.name}: {failure.message}
                           </p>
                         ))}
                       </div>
                     )}
                     {pendingRemove === host.id && (
-                      <div className="dshr-confirm" role="alertdialog" aria-label={t('settings.remove')}>
+                      <div className="dshwp-confirm" role="alertdialog" aria-label={t('settings.remove')}>
                         <span>
                           {t('settings.confirmRemovePrefix')}{host.label}{t('settings.confirmRemoveSuffix')}
                         </span>
                         <button
                           type="button"
-                          className="dshr-button dshr-button-small dshr-button-danger"
+                          className="dshwp-button dshwp-button-small dshwp-button-danger"
                           disabled={busy !== null}
                           onClick={() => { void onRemove(host) }}
                         >
@@ -690,7 +690,7 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                         </button>
                         <button
                           type="button"
-                          className="dshr-button dshr-button-small"
+                          className="dshwp-button dshwp-button-small"
                           onClick={() => { setPendingRemove(null) }}
                         >
                           {t('settings.cancel')}
@@ -699,8 +699,8 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                     )}
 
                     {expandedHost === host.id && (
-                      <div className="dshr-workspaces">
-                        <div className="dshr-workspace-add">
+                      <div className="dshwp-workspaces">
+                        <div className="dshwp-workspace-add">
                           <input
                             value={workspaceDraft}
                             onChange={event => setWorkspaceDraft(event.target.value)}
@@ -715,7 +715,7 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                           />
                           <button
                             type="button"
-                            className="dshr-button dshr-button-small"
+                            className="dshwp-button dshwp-button-small"
                             disabled={busy !== null}
                             onClick={() => { void browseWorkspace(host) }}
                           >
@@ -723,7 +723,7 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                           </button>
                           <button
                             type="button"
-                            className="dshr-button dshr-button-small dshr-button-primary"
+                            className="dshwp-button dshwp-button-small dshwp-button-primary"
                             disabled={busy !== null}
                             onClick={() => { void addWorkspace(host) }}
                           >
@@ -731,15 +731,15 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                           </button>
                         </div>
                         {workspaces[host.id] === undefined
-                          ? <p className="dshr-empty">{t('settings.readingWorkspaces')}</p>
+                          ? <p className="dshwp-empty">{t('settings.readingWorkspaces')}</p>
                           : workspaces[host.id]?.length === 0
-                            ? <p className="dshr-empty">{t('settings.noWorkspaces')}</p>
+                            ? <p className="dshwp-empty">{t('settings.noWorkspaces')}</p>
                             : (
-                              <ul className="dshr-workspace-list">
+                              <ul className="dshwp-workspace-list">
                                 {workspaces[host.id]?.map(workspace => (
-                                  <li key={workspace.workspaceId} className="dshr-workspace-item">
+                                  <li key={workspace.workspaceId} className="dshwp-workspace-item">
                                     <code>{workspace.path}</code>
-                                    <span className="dshr-count">
+                                    <span className="dshwp-count">
                                       {workspace.sessionIds.length} {t('settings.sessionsUnit')}
                                     </span>
                                   </li>
@@ -756,47 +756,47 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
         </div>
       </section>
 
-      <section className="dshr-card">
-        <div className="dshr-section-title">
+      <section className="dshwp-card">
+        <div className="dshwp-section-title">
           <h3>{t('settings.discovered.title')}</h3>
           <button
             type="button"
-            className="dshr-button dshr-button-small"
+            className="dshwp-button dshwp-button-small"
             disabled={busy !== null}
             onClick={() => { void scan(true) }}
           >
             {busy === 'discover' ? t('settings.discovered.scanning') : t('settings.discovered.rescan')}
           </button>
         </div>
-        <p className="dshr-hint">{t('settings.discovered.hint')}</p>
-        {discoveryError !== null && <p className="dshr-banner dshr-banner-error" role="alert">{discoveryError}</p>}
-        {discovery?.error != null && <p className="dshr-banner dshr-banner-error" role="alert">{discovery.error}</p>}
+        <p className="dshwp-hint">{t('settings.discovered.hint')}</p>
+        {discoveryError !== null && <p className="dshwp-banner dshwp-banner-error" role="alert">{discoveryError}</p>}
+        {discovery?.error != null && <p className="dshwp-banner dshwp-banner-error" role="alert">{discovery.error}</p>}
         {discovery === null
-          ? <p className="dshr-empty">{t('settings.discovered.scanning')}</p>
+          ? <p className="dshwp-empty">{t('settings.discovered.scanning')}</p>
           : discovery.hosts.length === 0
-            ? <p className="dshr-empty">{t('settings.discovered.empty')}</p>
+            ? <p className="dshwp-empty">{t('settings.discovered.empty')}</p>
             : (
-              <ul className="dshr-discovered">
+              <ul className="dshwp-discovered">
                 {discovery.hosts.map(entry => (
-                  <li key={entry.canonical} className="dshr-discovered-row">
-                    <div className="dshr-discovered-main">
+                  <li key={entry.canonical} className="dshwp-discovered-row">
+                    <div className="dshwp-discovered-main">
                       <strong>{entry.alias}</strong>
                       {entry.aliases.map(name => (
-                        <span key={name} className="dshr-alias-tag">{name}</span>
+                        <span key={name} className="dshwp-alias-tag">{name}</span>
                       ))}
-                      <code className="dshr-discovered-endpoint">
+                      <code className="dshwp-discovered-endpoint">
                         {entry.user === null ? '' : `${entry.user}@`}
                         {entry.hostname}
                         {entry.port === null ? '' : `:${entry.port}`}
                       </code>
-                      {entry.proxyJump && <span className="dshr-badge">{t('settings.discovered.proxy')}</span>}
+                      {entry.proxyJump && <span className="dshwp-badge">{t('settings.discovered.proxy')}</span>}
                     </div>
                     {entry.registeredHostId !== null
-                      ? <span className="dshr-hint">{t('settings.discovered.added')}</span>
+                      ? <span className="dshwp-hint">{t('settings.discovered.added')}</span>
                       : (
                         <button
                           type="button"
-                          className="dshr-button dshr-button-small dshr-button-primary"
+                          className="dshwp-button dshwp-button-small dshwp-button-primary"
                           disabled={busy !== null}
                           onClick={() => { void connectDiscovered(entry) }}
                         >
@@ -810,7 +810,7 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
               </ul>
             )}
         {discovery !== null && discovery.hosts.length === 0 && discovery.error === null && (
-          <p className="dshr-hint">{t('settings.discovered.emptyHint')}</p>
+          <p className="dshwp-hint">{t('settings.discovered.emptyHint')}</p>
         )}
       </section>
 
@@ -821,7 +821,7 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
 function useInjectedStyle(css: string): void {
   useEffect(() => {
     const tag = document.createElement('style')
-    tag.dataset.plugin = 'dsh-remote-local'
+    tag.dataset.plugin = 'dsh-waypoint'
     tag.textContent = css
     document.head.appendChild(tag)
     return () => { tag.remove() }

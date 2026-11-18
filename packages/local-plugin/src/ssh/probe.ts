@@ -4,7 +4,7 @@
  * This is the only command the local plugin runs before a tunnel exists. It
  * is fixed, bounded, and never interpolates user input into shell syntax.
  *
- * @module dsh-remote-local/ssh/probe
+ * @module dsh-waypoint/ssh/probe
  */
 
 import { execFile } from 'node:child_process'
@@ -13,7 +13,7 @@ import {
   isAgentDiscoveryState,
   isAgentLive,
   type AgentDiscoveryState,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 import { LocalError } from '../errors.ts'
 import type { ParsedSshTarget } from './target.ts'
 
@@ -110,7 +110,7 @@ export async function discoverAgent(
     const hint = stderr.trim() === '' ? '' : ` (${stderr.trim().split('\n')[0]})`
     throw new LocalError(
       'agent/unavailable',
-      `remote agent state file was not found at ${options.remoteStateFile}; install dsh-remote-agent and start the remote DSH web host${hint}`,
+      `remote agent state file was not found at ${options.remoteStateFile}; install dsh-waypoint-agent and start the remote DSH web host${hint}`,
       { details: { host: target.canonical, remoteStateFile: options.remoteStateFile } },
     )
   }

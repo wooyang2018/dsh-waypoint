@@ -1,7 +1,7 @@
 /**
- * Executable entry for dsh-remote-install.
+ * Executable entry for dsh-waypoint-install.
  *
- * @module @dsh-remote/installer/bin
+ * @module @dsh-waypoint/installer/bin
  */
 
 import { main } from './cli.ts'

@@ -6,7 +6,7 @@
  * remote agent uses). Keeping the two namespaces separate is what lets a
  * Windows client browse a Linux workspace.
  *
- * @module dsh-remote-local/remote/remote-path
+ * @module dsh-waypoint/remote/remote-path
  */
 
 /** The local and remote forms of one workspace path. */

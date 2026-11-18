@@ -1,7 +1,7 @@
 /**
  * Installer options and argument parsing.
  *
- * @module @dsh-remote/installer/options
+ * @module @dsh-waypoint/installer/options
  */
 
 import { dirname, sep } from 'node:path'
@@ -233,16 +233,16 @@ function parseStrict(raw: string): InstallerOptions['strictHostKeyChecking'] {
   throw new UsageError('--strict-host-key-checking must be yes, no, ask, or accept-new')
 }
 
-/** Help text shown by `dsh-remote-install help`. */
-export const HELP = `dsh-remote-install — install dsh-remote-agent on an SSH host
+/** Help text shown by `dsh-waypoint-install help`. */
+export const HELP = `dsh-waypoint-install — install dsh-waypoint-agent on an SSH host
 
 Usage:
-  dsh-remote-install install --target user@host [options]
-  dsh-remote-install plan --target user@host
-  dsh-remote-install doctor --target user@host
-  dsh-remote-install discover --target user@host
-  dsh-remote-install tunnel --target user@host
-  dsh-remote-install pack
+  dsh-waypoint-install install --target user@host [options]
+  dsh-waypoint-install plan --target user@host
+  dsh-waypoint-install doctor --target user@host
+  dsh-waypoint-install discover --target user@host
+  dsh-waypoint-install tunnel --target user@host
+  dsh-waypoint-install pack
 
 Options:
   --target, --host, -t     SSH destination (user@host[:port] or ssh config alias)
@@ -254,7 +254,7 @@ Options:
   --global-prefix          npm global prefix that owns the remote dsh (default: npm prefix -g)
   --start                  systemd | nohup | none (default: systemd)
   --no-start               Same as --start none
-  --agent-tarball          Use an existing dsh-remote-agent .tgz
+  --agent-tarball          Use an existing dsh-waypoint-agent .tgz
   --ssh                    SSH binary (default: ssh)
   --scp                    scp binary (default: scp beside --ssh)
   --strict-host-key-checking  yes | no | ask | accept-new (default: accept-new)
@@ -268,7 +268,7 @@ The remote host needs Node.js 22.19+ and npm, resolved through the account's
 own shell so nvm/fnm/Volta answer. The installer does not install Node.js: it
 verifies it and stops with an actionable message when it is missing or too old.
 It then installs pnpm and @deepseek-ai/dsh into the npm global prefix
-(npm prefix -g unless --global-prefix says otherwise), adds dsh-remote-agent to
+(npm prefix -g unless --global-prefix says otherwise), adds dsh-waypoint-agent to
 the chosen profile, and starts "dsh web" on 127.0.0.1 using that same dsh.
 
 Model credentials are configured by the local plugin, not by this CLI. Two

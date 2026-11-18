@@ -1,6 +1,6 @@
 {
-  "name": "dsh-remote-local-plugin",
-  "version": "0.8.21",
+  "name": "dsh-waypoint",
+  "version": "1.0.0",
   "description": "DSH remote-development local plugin: host registry, SSH tunnels, remote workspace/session discovery, an authenticated Connection RPC surface, agent tools, and a Settings page.",
   "keywords": [
     "dsh",
@@ -31,6 +31,7 @@
     "lib",
     "assets",
     "cordis.patch.yml",
+    "icon-180.png",
     "README.md"
   ],
   "dsh": {
@@ -53,8 +54,8 @@
     }
   },
   "devDependencies": {
-    "@dsh-remote/installer": "workspace:*",
-    "@dsh-remote/protocol": "workspace:*",
+    "@dsh-waypoint/installer": "workspace:*",
+    "@dsh-waypoint/protocol": "workspace:*",
     "@deepseek-ai/dsh-credentials": "0.2.2-rc.3",
     "@deepseek-ai/dsh-agent": "0.2.2-rc.3",
     "@deepseek-ai/dsh-session": "0.2.2-rc.3",
@@ -64,8 +65,8 @@
     "@deepseek-ai/dsh-user-approval": "0.2.2-rc.3",
     "@deepseek-ai/dsh-api-workspace-files": "0.2.2-rc.3",
     "@deepseek-ai/dsh-api-terminal-controller": "0.2.2-rc.3",
-    "dsh-remote-terminal-controller": "workspace:*",
-    "@goldenpigeon/dsh-remote-agent": "workspace:*",
+    "dsh-waypoint-terminal-controller": "workspace:*",
+    "dsh-waypoint-agent": "workspace:*",
     "@deepseek-ai/dsh-api-session-controller": "0.2.2-rc.3",
     "@deepseek-ai/cordis": "4.1.0",
     "@deepseek-ai/dsh-client-ui-session": "0.2.2-rc.3"
@@ -161,14 +162,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Golden-Pigeon/dsh-remote.git",
+    "url": "git+https://github.com/wooyang2018/dsh-waypoint.git",
     "directory": "packages/local-plugin"
   },
-  "homepage": "https://github.com/Golden-Pigeon/dsh-remote#readme",
+  "homepage": "https://github.com/wooyang2018/dsh-waypoint#readme",
   "bugs": {
-    "url": "https://github.com/Golden-Pigeon/dsh-remote/issues"
+    "url": "https://github.com/wooyang2018/dsh-waypoint/issues"
   },
-  "author": "Golden-Pigeon",
+  "author": "wooyang2018, based on work by Golden-Pigeon",
   "publishConfig": {
     "access": "public"
   }

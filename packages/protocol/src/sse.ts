@@ -7,7 +7,7 @@
  * implements the parts of the EventSource wire format this protocol uses:
  * `event:`, `data:`, `id:`, comments, and blank-line dispatch.
  *
- * @module @dsh-remote/protocol/sse
+ * @module @dsh-waypoint/protocol/sse
  */
 
 /** One dispatched SSE message. */

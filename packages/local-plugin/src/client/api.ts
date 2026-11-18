@@ -2,7 +2,7 @@
  * Browser-side API wrapper around the host's authenticated Fetch route.
  * Components never see `ctx`.
  *
- * @module dsh-remote-local/client/api
+ * @module dsh-waypoint/client/api
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -12,7 +12,7 @@ import type {
   PromptDeliveryMode,
   RemoteWorkspace,
   SessionSnapshot,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 import type { HostCreateSessionResult, MirrorFileResult } from '../host-api/contract.ts'
 import {
   HOST_API_PATH,

@@ -6,7 +6,7 @@
  * before any business call and a mismatch is a hard failure — the design doc
  * explicitly forbids silent downgrade.
  *
- * @module @dsh-remote/protocol/version
+ * @module @dsh-waypoint/protocol/version
  */
 
 /** The protocol revision implemented by this package. */
@@ -18,23 +18,23 @@ export const MIN_SUPPORTED_PROTOCOL_VERSION = 1
 /** Newest protocol revision this client/agent can speak. */
 export const MAX_SUPPORTED_PROTOCOL_VERSION = 1
 
-/** Base path of the API served by `dsh-remote-agent` on the remote DSH host. */
-export const AGENT_API_PREFIX = '/dsh-remote-agent/api/v1'
+/** Base path of the API served by `dsh-waypoint-agent` on the remote DSH host. */
+export const AGENT_API_PREFIX = '/dsh-waypoint-agent/api/v1'
 
 /** Request header carrying the caller's protocol revision. */
-export const HEADER_PROTOCOL_VERSION = 'x-dsh-remote-protocol'
+export const HEADER_PROTOCOL_VERSION = 'x-dsh-waypoint-protocol'
 
 /** Response header carrying the agent's protocol revision. */
-export const HEADER_SERVER_PROTOCOL_VERSION = 'x-dsh-remote-server-protocol'
+export const HEADER_SERVER_PROTOCOL_VERSION = 'x-dsh-waypoint-server-protocol'
 
 /** Request/response header carrying the logical host identity. */
-export const HEADER_HOST_ID = 'x-dsh-remote-host-id'
+export const HEADER_HOST_ID = 'x-dsh-waypoint-host-id'
 
 /** Response header carrying the remote agent package version. */
-export const HEADER_AGENT_VERSION = 'x-dsh-remote-agent-version'
+export const HEADER_AGENT_VERSION = 'x-dsh-waypoint-agent-version'
 
 /** Correlation id echoed by both sides, useful in logs and audit records. */
-export const HEADER_REQUEST_ID = 'x-dsh-remote-request-id'
+export const HEADER_REQUEST_ID = 'x-dsh-waypoint-request-id'
 
 /** Default per-request timeout for non-streaming agent calls. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000

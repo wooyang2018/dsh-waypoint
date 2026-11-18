@@ -19,7 +19,7 @@
  * `Include`d files that made the host reachable in the first place. Resolved
  * values exist for display only.
  *
- * @module dsh-remote-local/ssh/config
+ * @module dsh-waypoint/ssh/config
  */
 
 import { execFile } from 'node:child_process'

@@ -93,7 +93,7 @@ function session(id: string, meta: Record<string, unknown>, seed: Snapshot['even
 }
 
 export function harness() {
-  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-remote-mirror-subagents-'))
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-waypoint-mirror-subagents-'))
   tempDirs.push(stateDir)
 
   const ctx = new Context()

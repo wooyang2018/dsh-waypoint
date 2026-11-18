@@ -1,11 +1,11 @@
 /**
- * dsh-remote-local-plugin browser entry.
+ * dsh-waypoint browser entry.
  *
  * Registers one Settings section and merges a mirrored Session's model catalog
  * into the shared directory every selector reads. The components talk only to
  * the injected API closure; the Cordis context stays in `apply`.
  *
- * @module dsh-remote-local/client
+ * @module dsh-waypoint/client
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -29,7 +29,7 @@ export const inject = ['slots', 'uiWorkspace', 'uiSession', 'locale']
 export function apply(ctx: Context): void {
   const api = createHostsApi(ctx)
   const locale = (ctx as unknown as { locale: LocaleFace }).locale
-  ctx.effect(() => locale.register(NS, { zh, en }), 'dsh-remote: locale dictionaries')
+  ctx.effect(() => locale.register(NS, { zh, en }), 'dsh-waypoint: locale dictionaries')
   const t = locale.bind(NS)
   ctx.effect(() => {
     const schedule = globalThis.setTimeout
@@ -65,10 +65,10 @@ export function apply(ctx: Context): void {
       active = false
       if (timer !== undefined) clearTimeout(timer)
     }
-  }, 'dsh-remote: reveal promoted draft')
+  }, 'dsh-waypoint: reveal promoted draft')
   installNativeWorkspaceRouting(ctx, api, t)
   installWorkspaceAddMenu(ctx, api, t)
-  ctx.effect(() => installWorkspaceDeleteCopy(api), 'dsh-remote: mirrored workspace delete copy')
+  ctx.effect(() => installWorkspaceDeleteCopy(api), 'dsh-waypoint: mirrored workspace delete copy')
   ctx.inject(['remote.workspaceFiles'], child => {
     installRemoteFiles(child, api)
   })
@@ -89,6 +89,6 @@ export function apply(ctx: Context): void {
     installModelCatalogMerge(ctx, api)
   } catch (error) {
     // A merge failure must not take the rest of the plugin down with it.
-    console.warn('dsh-remote-local: model catalog merge unavailable:', error)
+    console.warn('dsh-waypoint: model catalog merge unavailable:', error)
   }
 }

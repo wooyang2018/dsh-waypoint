@@ -16,7 +16,7 @@ interface Registration {
 describe('client bundle artifact', () => {
   it('registers the package and a Settings section', async () => {
     const loaded = await loadClientBundle()
-    assert.equal(loaded.id, 'dsh-remote-local-plugin')
+    assert.equal(loaded.id, 'dsh-waypoint')
     const exports = loaded.factory((specifier) => {
       if (specifier === 'react') return React
       if (specifier === 'react/jsx-runtime') return jsxRuntime
@@ -53,7 +53,7 @@ describe('client bundle artifact', () => {
     assert.ok(section, 'the Settings section must be registered')
     assert.equal(section.id, 'remote-development')
     assert.equal(section.label?.(), 'settings.title')
-    assert.equal(section.locale, 'dshRemote')
+    assert.equal(section.locale, 'dshWaypoint')
     assert.equal(section.order, 76)
     assert.equal(typeof components.get('settings.section'), 'function')
 

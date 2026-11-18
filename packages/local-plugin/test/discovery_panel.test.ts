@@ -113,7 +113,7 @@ async function render(api: Record<string, unknown>) {
   await act(async () => { renderer = create(React.createElement(component, { api: full, t: (key: string) => key })) })
   // The mount effect fires `scan()` without awaiting it, so a single empty act
   // returns before discovery lands. Drain microtasks until the list is painted.
-  await settle(renderer, text => text.includes('dshr-discovered'))
+  await settle(renderer, text => text.includes('dshwp-discovered'))
   return { renderer, api: full }
 }
 
@@ -153,7 +153,7 @@ describe('SSH config discovery in the Settings panel', () => {
     // React splits one endpoint into several text children, so join them before
     // comparing rather than expecting one contiguous substring in the JSON.
     const endpoints = renderer.root
-      .findAllByProps({ className: 'dshr-discovered-endpoint' })
+      .findAllByProps({ className: 'dshwp-discovered-endpoint' })
       .map(node => node.children.map(child => String(child)).join(''))
     assert.ok(endpoints.includes('weyoungli@9.135.225.137:36000'), `endpoint missing: ${endpoints.join(' | ')}`)
   })
@@ -212,7 +212,7 @@ describe('SSH config discovery in the Settings panel', () => {
   it('renders a sibling alias as a tag beside the primary name', async () => {
     const { renderer } = await render({})
     const tags = renderer.root
-      .findAllByProps({ className: 'dshr-alias-tag' })
+      .findAllByProps({ className: 'dshwp-alias-tag' })
       .map(node => node.children.map(child => String(child)).join(''))
     assert.deepEqual(tags, ['native1'], 'only the secondary alias becomes a tag')
     const text = JSON.stringify(renderer.toJSON())
@@ -222,7 +222,7 @@ describe('SSH config discovery in the Settings panel', () => {
   it('shows the endpoint for the primary alias', async () => {
     const { renderer } = await render({})
     const endpoints = renderer.root
-      .findAllByProps({ className: 'dshr-discovered-endpoint' })
+      .findAllByProps({ className: 'dshwp-discovered-endpoint' })
       .map(node => node.children.map(child => String(child)).join(''))
     assert.ok(endpoints.includes('user00@21.91.16.78:36000'))
   })
@@ -244,7 +244,7 @@ describe('SSH config discovery in the Settings panel', () => {
         mirroredWorkspaces: [],
       }),
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
 
     // Each of these is reachable exactly once, from the row itself.
     for (const label of ['settings.disconnect', 'settings.openWebUi']) {
@@ -283,7 +283,7 @@ describe('SSH config discovery in the Settings panel', () => {
         mirroredWorkspaces: [],
       }),
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
     const headings = renderer.root
       .findAllByType('h3')
       .map(node => node.children.map(child => String(child)).join(''))
@@ -308,7 +308,7 @@ describe('SSH config discovery in the Settings panel', () => {
         mirroredWorkspaces: [],
       }),
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
 
     // Two actions on the row, both rendered as vector art.
     const svgs = renderer.root.findAllByType('svg' as never)
@@ -339,8 +339,8 @@ describe('SSH config discovery in the Settings panel', () => {
         hosts: [hostFor('idle')], mirroredWorkspaceIds: [], mirroredWorkspaces: [],
       }),
     })
-    await settle(idle.renderer, text => text.includes('dshr-host-row'))
-    assert.equal(JSON.stringify(idle.renderer.toJSON()).includes('dshr-host-sub'), false,
+    await settle(idle.renderer, text => text.includes('dshwp-host-row'))
+    assert.equal(JSON.stringify(idle.renderer.toJSON()).includes('dshwp-host-sub'), false,
       'an idle host has no facts, so it must not print "未连接"')
 
     // Installing: the phase explains why the row looks stuck, so keep it.
@@ -349,7 +349,7 @@ describe('SSH config discovery in the Settings panel', () => {
         hosts: [hostFor('installing')], mirroredWorkspaceIds: [], mirroredWorkspaces: [],
       }),
     })
-    await settle(installing.renderer, text => text.includes('dshr-host-row'))
+    await settle(installing.renderer, text => text.includes('dshwp-host-row'))
     assert.ok(JSON.stringify(installing.renderer.toJSON()).includes('phase.installing'),
       'a transitional phase must still be spelled out')
   })
@@ -373,19 +373,19 @@ describe('SSH config discovery in the Settings panel', () => {
       }),
       workspaces: async () => { workspaceCalls += 1; return { workspaces: [] } },
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
 
     // Opening the row of a host that is not connected must not trigger a
     // request that can only fail with "host is not connected".
     const row = renderer.root.findAll(node =>
-      node.props?.className === 'dshr-host-row' && typeof node.props?.onClick === 'function')[0]
+      node.props?.className === 'dshwp-host-row' && typeof node.props?.onClick === 'function')[0]
     await act(async () => { await row!.props.onClick({ preventDefault() {} }) })
 
     assert.equal(workspaceCalls, 0, 'no workspace request for a disconnected host')
     const json = JSON.stringify(renderer.toJSON())
     // The page has no banner area at all: a host operation reports through its
     // own row, never as a page-level line above the list.
-    assert.equal(json.includes('dshr-banner-error'), false,
+    assert.equal(json.includes('dshwp-banner-error'), false,
       'the panel must not render a page-level error banner')
     assert.equal(json.includes('is not connected'), false,
       'expanding a disconnected host must not surface its failure as page text')
@@ -410,17 +410,17 @@ describe('SSH config discovery in the Settings panel', () => {
       // The host reports connected but the agent call fails anyway.
       workspaces: async () => { throw new Error('host is not connected') },
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
 
     const row = renderer.root.findAll(node =>
-      node.props?.className === 'dshr-host-row' && typeof node.props?.onClick === 'function')[0]
+      node.props?.className === 'dshwp-host-row' && typeof node.props?.onClick === 'function')[0]
     await act(async () => { await row!.props.onClick({ preventDefault() {} }) })
     await settle(renderer, () => true, 10)
 
     // A background load the user did not request stays quiet; the row still
     // shows its own state.
     const rendered = JSON.stringify(renderer.toJSON())
-    assert.equal(rendered.includes('dshr-banner-error'), false,
+    assert.equal(rendered.includes('dshwp-banner-error'), false,
       'a failed automatic load must not surface as a page banner')
     assert.equal(rendered.includes('is not connected'), false,
       'the failure message must not leak into the panel as page text')
@@ -444,12 +444,12 @@ describe('SSH config discovery in the Settings panel', () => {
       }),
       workspaces: async () => ({ workspaces: [] }),
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
 
     const row = renderer.root.findAll(node =>
-      node.props?.className === 'dshr-host-row' && typeof node.props?.onClick === 'function')[0]
+      node.props?.className === 'dshwp-host-row' && typeof node.props?.onClick === 'function')[0]
     await act(async () => { await row!.props.onClick({ preventDefault() {} }) })
-    await settle(renderer, text => text.includes('dshr-workspace-add'))
+    await settle(renderer, text => text.includes('dshwp-workspace-add'))
 
     const texts = renderer.root.findAllByType('button')
       .map(entry => entry.children.map(child => typeof child === 'string' ? child : '').join(''))
@@ -481,12 +481,12 @@ describe('SSH config discovery in the Settings panel', () => {
         return { workspaceId: 'ws-new', title: input.title ?? '', path: input.path, sessionIds: [] }
       },
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
 
     const row = renderer.root.findAll(node =>
-      node.props?.className === 'dshr-host-row' && typeof node.props?.onClick === 'function')[0]
+      node.props?.className === 'dshwp-host-row' && typeof node.props?.onClick === 'function')[0]
     await act(async () => { await row!.props.onClick({ preventDefault() {} }) })
-    await settle(renderer, text => text.includes('dshr-workspace-add'))
+    await settle(renderer, text => text.includes('dshwp-workspace-add'))
 
     // Type a nested path, then add it.
     const input = renderer.root.findAllByType('input')
@@ -526,7 +526,7 @@ describe('SSH config discovery in the Settings panel', () => {
         mirroredWorkspaces: [],
       }),
     })
-    await settle(connected.renderer, text => text.includes('dshr-host-row'))
+    await settle(connected.renderer, text => text.includes('dshwp-host-row'))
     const connectedText = JSON.stringify(connected.renderer.toJSON())
     for (const key of ['detail.connectedProxy', 'detail.connectedDirect', 'detail.connectedRemote']) {
       assert.equal(connectedText.includes(key), false, `${key} must not be rendered`)
@@ -540,11 +540,11 @@ describe('SSH config discovery in the Settings panel', () => {
         mirroredWorkspaces: [],
       }),
     })
-    await settle(working.renderer, text => text.includes('dshr-host-row'))
+    await settle(working.renderer, text => text.includes('dshwp-host-row'))
     const row = working.renderer.root.findAll(node =>
-      node.props?.className === 'dshr-host-row' && typeof node.props?.onClick === 'function')[0]
+      node.props?.className === 'dshwp-host-row' && typeof node.props?.onClick === 'function')[0]
     await act(async () => { await row!.props.onClick({ preventDefault() {} }) })
-    await settle(working.renderer, text => text.includes('dshr-host-detail'))
+    await settle(working.renderer, text => text.includes('dshwp-host-detail'))
     assert.ok(JSON.stringify(working.renderer.toJSON()).includes('detail.installing'),
       'a progress sentence still shows while the host is working')
   })
@@ -566,7 +566,7 @@ describe('SSH config discovery in the Settings panel', () => {
         mirroredWorkspaces: [],
       }),
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
 
     // The row itself toggles, so a dedicated chevron would be a second control
     // for the same thing.
@@ -577,10 +577,10 @@ describe('SSH config discovery in the Settings panel', () => {
 
     // Expanding still works through the row.
     const row = renderer.root.findAll(node =>
-      node.props?.className === 'dshr-host-row' && typeof node.props?.onClick === 'function')[0]
+      node.props?.className === 'dshwp-host-row' && typeof node.props?.onClick === 'function')[0]
     assert.ok(row, 'the summary row must exist')
     await act(async () => { await row!.props.onClick({ preventDefault() {} }) })
-    assert.ok(JSON.stringify(renderer.toJSON()).includes('dshr-host-detail'),
+    assert.ok(JSON.stringify(renderer.toJSON()).includes('dshwp-host-detail'),
       'clicking the row still opens the details')
   })
 
@@ -601,7 +601,7 @@ describe('SSH config discovery in the Settings panel', () => {
         mirroredWorkspaces: [],
       }),
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
 
     const trigger = renderer.root.findAllByType('button')
       .find(entry => entry.props['aria-haspopup'] === 'menu')
@@ -617,9 +617,9 @@ describe('SSH config discovery in the Settings panel', () => {
       })
     })
     assert.equal(propagated, true, 'the trigger must stop the click from reaching the row')
-    assert.equal(JSON.stringify(renderer.toJSON()).includes('dshr-host-detail'), false,
+    assert.equal(JSON.stringify(renderer.toJSON()).includes('dshwp-host-detail'), false,
       'the host must stay collapsed when only the menu was opened')
-    assert.ok(JSON.stringify(renderer.toJSON()).includes('dshr-menu'),
+    assert.ok(JSON.stringify(renderer.toJSON()).includes('dshwp-menu'),
       'the menu itself must open')
   })
 
@@ -646,18 +646,18 @@ describe('SSH config discovery in the Settings panel', () => {
         }],
       }),
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
 
     // Expand the host so the workspace summary renders.
     const row = renderer.root.findAll(node =>
-      node.props?.className === 'dshr-host-row' && typeof node.props?.onClick === 'function')[0]
+      node.props?.className === 'dshwp-host-row' && typeof node.props?.onClick === 'function')[0]
     await act(async () => { await row!.props.onClick({ preventDefault() {} }) })
-    await settle(renderer, text => text.includes('dshr-workspace-list'))
+    await settle(renderer, text => text.includes('dshwp-workspace-list'))
 
     const json = JSON.stringify(renderer.toJSON())
-    assert.ok(json.includes('dshr-workspace-list'), 'workspaces are listed')
+    assert.ok(json.includes('dshwp-workspace-list'), 'workspaces are listed')
     // Settings summarises workspaces; sessions are opened in the conversation view.
-    assert.equal(json.includes('dshr-sessions'), false, 'no session tree here')
+    assert.equal(json.includes('dshwp-sessions'), false, 'no session tree here')
     assert.equal(json.includes('settings.newSession'), false, 'no new-session button here')
   })
 
@@ -692,7 +692,7 @@ describe('SSH config discovery in the Settings panel', () => {
         mirroredWorkspaces: [],
       }),
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
     // The title holds nested elements, so collect text recursively rather than
     // stringifying the children.
     const collect = (node: unknown): string => {
@@ -703,7 +703,7 @@ describe('SSH config discovery in the Settings panel', () => {
       return Array.isArray(candidate.children) ? candidate.children.map(collect).join('') : ''
     }
     const shown = renderer.root
-      .findAllByProps({ className: 'dshr-host-title' })
+      .findAllByProps({ className: 'dshwp-host-title' })
       .map(node => collect(node.children))
     assert.equal(shown.length, 1)
     // `native2` appears once as the label; the endpoint is suppressed because it
@@ -729,7 +729,7 @@ describe('SSH config discovery in the Settings panel', () => {
         mirroredWorkspaces: [],
       }),
     })
-    await settle(renderer, text => text.includes('dshr-host-row'))
+    await settle(renderer, text => text.includes('dshwp-host-row'))
     const text = JSON.stringify(renderer.toJSON())
     assert.ok(text.includes('Native two'))
     assert.ok(text.includes('native2'), 'a distinct endpoint must still be shown')

@@ -3,13 +3,13 @@ import { chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readF
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { chromium, type Browser, type Page } from '@playwright/test'
-import { startFakeHost, type FakeRemoteHost } from '@dsh-remote/testkit'
+import { startFakeHost, type FakeRemoteHost } from '@dsh-waypoint/testkit'
 
 const ROOT = resolve(import.meta.dirname, '../..')
 export const APP = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
 export const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 export const FAKE_SSH = join(ROOT, 'test/playwright/fake-ssh.mjs')
-const DSH_VERSION = process.env.DSH_REMOTE_E2E_DSH_VERSION ?? '0.2.2-rc.3'
+const DSH_VERSION = process.env.DSH_WAYPOINT_E2E_DSH_VERSION ?? '0.2.2-rc.3'
 
 /**
  * The tarball `pnpm test:e2e` just built.
@@ -18,8 +18,8 @@ const DSH_VERSION = process.env.DSH_REMOTE_E2E_DSH_VERSION ?? '0.2.2-rc.3'
  * name cannot be derived from the manifest. `test:e2e` writes the real path
  * here; the manifest-derived name is only a fallback for a `--release` pack.
  */
-export const PLUGIN_TARBALL = process.env.DSH_REMOTE_PLUGIN_TARBALL
-  ?? join(ROOT, `packages/local-plugin/dsh-remote-local-plugin-${
+export const PLUGIN_TARBALL = process.env.DSH_WAYPOINT_PLUGIN_TARBALL
+  ?? join(ROOT, `packages/local-plugin/dsh-waypoint-${
     (JSON.parse(readFileSync(join(ROOT, 'packages/local-plugin/package.json'), 'utf8')) as { version: string }).version
   }.tgz`)
 
@@ -76,7 +76,7 @@ function waitForUrl(child: ChildProcess): Promise<string> {
 
 /** Start an isolated DSH web host wired to a fake remote agent through a fake ssh binary. */
 export async function startE2EHost(options: E2EHostOptions = {}): Promise<E2EHost> {
-  const home = mkdtempSync(join(tmpdir(), 'dsh-remote-playwright-'))
+  const home = mkdtempSync(join(tmpdir(), 'dsh-waypoint-playwright-'))
   options.prepareHome?.(home)
   const token = 'playwright-token-0123456789'
   const started = await startFakeHost({ hostId: 'playwright-host', token })
@@ -122,7 +122,7 @@ export async function startE2EHost(options: E2EHostOptions = {}): Promise<E2EHos
     }],
   }, null, 2))
   writeFileSync(join(home, 'profiles', 'web', 'cordis.patch.yml'), [
-    '- id: dsh-remote-local',
+    '- id: dsh-waypoint',
     '  config:',
     `    sshBinary: ${JSON.stringify(FAKE_SSH)}`,
     '    autoProvision: false',
@@ -140,7 +140,7 @@ export async function startE2EHost(options: E2EHostOptions = {}): Promise<E2EHos
   const startHost = (): ChildProcess => {
     const spawned = spawn(APP, ['--profile', 'web', '--host', '127.0.0.1', '--port', '0', '--no-open'], {
       cwd: home,
-      env: { ...process.env, DSH_HOME: home, DSH_REMOTE_FAKE_STATE: stateFile, DSH_REMOTE_FAKE_LOG: fakeSshLog, DEEPSEEK_API_KEY: 'playwright-test-key' },
+      env: { ...process.env, DSH_HOME: home, DSH_WAYPOINT_FAKE_STATE: stateFile, DSH_WAYPOINT_FAKE_LOG: fakeSshLog, DEEPSEEK_API_KEY: 'playwright-test-key' },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     spawned.stdout?.pipe(logStream)

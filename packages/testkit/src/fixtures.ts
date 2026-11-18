@@ -1,7 +1,7 @@
 /**
  * Deterministic fixtures for the fake remote host.
  *
- * @module @dsh-remote/testkit/fixtures
+ * @module @dsh-waypoint/testkit/fixtures
  */
 
 import type {
@@ -10,7 +10,7 @@ import type {
   RemoteSessionEvent,
   RemoteSessionSummary,
   RemoteWorkspace,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 
 /** One fake workspace. */
 export interface FakeWorkspace extends RemoteWorkspace {}

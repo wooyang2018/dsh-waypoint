@@ -3,7 +3,7 @@
  * the same declarations can be consumed by the host plugin, the installer,
  * tests, and (type-only) the browser bundle.
  *
- * @module @dsh-remote/protocol/types
+ * @module @dsh-waypoint/protocol/types
  */
 
 /** JSON primitive. */

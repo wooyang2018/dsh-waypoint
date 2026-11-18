@@ -6,7 +6,7 @@
  * `commands.ts`. The script intentionally prints no token and never copies
  * model API keys.
  *
- * @module @dsh-remote/installer/bootstrap
+ * @module @dsh-waypoint/installer/bootstrap
  */
 
 import type { InstallerOptions, StartMode } from './options.ts'
@@ -74,7 +74,7 @@ export function renderSystemdUnit(options: BootstrapOptions): string {
     // bin directory and the npm global prefix that owns `dsh`.
     'Environment="PATH=$DSH_PREFIX/bin:$DSH_NODE_BIN_DIR:/usr/local/bin:/usr/bin:/bin:$PATH"',
     '${PROXY_ENV_LINES}',
-    'Environment="DSH_REMOTE_DSH_VERSION=$DSH_VERSION"',
+    'Environment="DSH_WAYPOINT_DSH_VERSION=$DSH_VERSION"',
     ...options.modelBaseUrl === undefined ? [] : ['Environment="DEEPSEEK_BASE_URL=$MODEL_BASE_URL"'],
     ...options.modelApiKey === undefined ? [] : ['Environment="DEEPSEEK_API_KEY=$MODEL_API_KEY"'],
     'ExecStart="$DSH_BIN" web --host 127.0.0.1 --port $PORT --no-open',
@@ -183,7 +183,7 @@ export function globalPrefixPrelude(configured?: string): string {
   const resolve = trimmed === ''
     ? `PREFIX_OUTPUT="$(npm prefix -g 2>/dev/null | tr -d '\\r' | tail -n 1 || true)"
 if [ -z "$PREFIX_OUTPUT" ]; then
-  echo "dsh-remote: could not read the npm global prefix; 'npm prefix -g' returned nothing" >&2
+  echo "dsh-waypoint: could not read the npm global prefix; 'npm prefix -g' returned nothing" >&2
   exit 24
 fi
 DSH_PREFIX="$PREFIX_OUTPUT"`
@@ -198,7 +198,7 @@ export DSH_PREFIX DSH_BIN DSH_NODE_BIN_DIR`
 export function renderBootstrapScript(options: BootstrapOptions): string {
   const startBlock = renderStartBlock(options)
   return `#!/usr/bin/env bash
-# dsh-remote installer bootstrap — generated, no secrets embedded.
+# dsh-waypoint installer bootstrap — generated, no secrets embedded.
 set -euo pipefail
 
 DSH_HOME=${shellPath(options.dshHome)}
@@ -213,12 +213,12 @@ MODEL_BASE_URL=${options.modelBaseUrl === undefined ? "''" : shellLiteral(option
 MODEL_API_KEY=${options.modelApiKey === undefined ? "''" : shellLiteral(options.modelApiKey)}
 PROXY_URL=${options.proxyUrl === undefined ? "''" : shellLiteral(options.proxyUrl)}
 PROXY_NO_PROXY=${options.noProxy === undefined ? "''" : shellLiteral(options.noProxy)}
-STATE_FILE="$DSH_HOME/remote-agent/agent.json"
+STATE_FILE="$DSH_HOME/waypoint-agent/agent.json"
 WAIT_FOR_STATE=${options.start === 'none' ? 0 : 1}
 
 export DSH_HOME
-mkdir -p "$DSH_HOME/remote-agent"
-echo "dsh-remote: preparing remote install"
+mkdir -p "$DSH_HOME/waypoint-agent"
+echo "dsh-waypoint: preparing remote install"
 if [ -z "$PROXY_URL" ]; then
   # Reuse a proxy already configured by the account's actual login shell.
   LOGIN_SHELL="\${SHELL:-}"
@@ -270,7 +270,7 @@ if [ -n "$PROXY_URL" ]; then
   if [ -n "$PROXY_NO_PROXY" ]; then
     export NO_PROXY="$PROXY_NO_PROXY" no_proxy="$PROXY_NO_PROXY"
   fi
-  echo "dsh-remote: install proxy configured"
+  echo "dsh-waypoint: install proxy configured"
 fi
 PROXY_ENV_LINES=""
 if [ -n "$PROXY_URL" ]; then
@@ -290,19 +290,19 @@ ${nodePathPrelude()}
 # deliberately, and a silently chosen version is exactly what leaves two
 # runtimes fighting over one command.
 if ! command -v node >/dev/null 2>&1; then
-  echo "dsh-remote: Node.js was not found through this account's shell." >&2
-  echo "dsh-remote: install Node.js 22.19+ (nvm/fnm/Volta are all detected) and retry." >&2
+  echo "dsh-waypoint: Node.js was not found through this account's shell." >&2
+  echo "dsh-waypoint: install Node.js 22.19+ (nvm/fnm/Volta are all detected) and retry." >&2
   exit 21
 fi
 if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)'; then
-  echo "dsh-remote: Node.js 22.19+ is required (found $(node --version))" >&2
+  echo "dsh-waypoint: Node.js 22.19+ is required (found $(node --version))" >&2
   exit 22
 fi
 if ! command -v npm >/dev/null 2>&1; then
-  echo "dsh-remote: npm is required; install a Node.js distribution that includes npm" >&2
+  echo "dsh-waypoint: npm is required; install a Node.js distribution that includes npm" >&2
   exit 23
 fi
-echo "dsh-remote: node ready ($(node --version))"
+echo "dsh-waypoint: node ready ($(node --version))"
 
 # Everything below installs exactly once, globally. There is no per-case
 # branch: an unwritable prefix must fail here instead of quietly landing the
@@ -311,36 +311,36 @@ ${globalPrefixPrelude(options.globalPrefix?.trim())}
 export PATH="$DSH_PREFIX/bin:$PATH"
 
 if [ "$DSH_UPGRADE" -eq 1 ]; then
-  echo "dsh-remote: stopping the remote DSH service before upgrading"
-  if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet dsh-remote-agent.service 2>/dev/null; then
-    systemctl --user stop dsh-remote-agent.service || true
+  echo "dsh-waypoint: stopping the remote DSH service before upgrading"
+  if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet dsh-waypoint-agent.service 2>/dev/null; then
+    systemctl --user stop dsh-waypoint-agent.service || true
   fi
-  if [ -f "$DSH_HOME/remote-agent/web.pid" ]; then
-    kill "$(cat "$DSH_HOME/remote-agent/web.pid")" 2>/dev/null || true
-    rm -f "$DSH_HOME/remote-agent/web.pid"
+  if [ -f "$DSH_HOME/waypoint-agent/web.pid" ]; then
+    kill "$(cat "$DSH_HOME/waypoint-agent/web.pid")" 2>/dev/null || true
+    rm -f "$DSH_HOME/waypoint-agent/web.pid"
   fi
   # A stale state file would let the local plugin connect to the old listener
   # before the upgraded service publishes its new port and credentials.
   rm -f "$STATE_FILE"
 fi
 
-echo "dsh-remote: installing pnpm@$PNPM_VERSION globally into $DSH_PREFIX"
+echo "dsh-waypoint: installing pnpm@$PNPM_VERSION globally into $DSH_PREFIX"
 if ! npm install --global --prefix "$DSH_PREFIX" --no-audit --no-fund "pnpm@$PNPM_VERSION"; then
-  echo "dsh-remote: npm could not install pnpm into $DSH_PREFIX" >&2
-  echo "dsh-remote: point remoteGlobalPrefix at a directory you own (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
+  echo "dsh-waypoint: npm could not install pnpm into $DSH_PREFIX" >&2
+  echo "dsh-waypoint: point remoteGlobalPrefix at a directory you own (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
   # The common cause on hosts that ship corepack: <prefix>/bin/pnpm is a symlink
   # into corepack, and npm refuses to replace it ("EEXIST: file already exists")
   # without --force. dsh is never attempted, so this must not report itself as a
   # dsh failure.
-  echo "dsh-remote: if <prefix>/bin/pnpm or pnpx already exist (corepack shims), remove them and retry:" >&2
-  echo "dsh-remote:   rm -f \"$DSH_PREFIX/bin/pnpm\" \"$DSH_PREFIX/bin/pnpx\"" >&2
+  echo "dsh-waypoint: if <prefix>/bin/pnpm or pnpx already exist (corepack shims), remove them and retry:" >&2
+  echo "dsh-waypoint:   rm -f \"$DSH_PREFIX/bin/pnpm\" \"$DSH_PREFIX/bin/pnpx\"" >&2
   exit 25
 fi
 
-echo "dsh-remote: installing @deepseek-ai/dsh@$DSH_VERSION globally into $DSH_PREFIX"
+echo "dsh-waypoint: installing @deepseek-ai/dsh@$DSH_VERSION globally into $DSH_PREFIX"
 if ! npm install --global --prefix "$DSH_PREFIX" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"; then
-  echo "dsh-remote: npm could not install @deepseek-ai/dsh into $DSH_PREFIX" >&2
-  echo "dsh-remote: point remoteGlobalPrefix at a directory you own (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
+  echo "dsh-waypoint: npm could not install @deepseek-ai/dsh into $DSH_PREFIX" >&2
+  echo "dsh-waypoint: point remoteGlobalPrefix at a directory you own (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
   exit 24
 fi
 
@@ -352,31 +352,38 @@ fi
 # otherwise become the "last line" and be reported as a version mismatch.
 DSH_ACTUAL="$(PATH="$DSH_NODE_BIN_DIR:$PATH" "$DSH_BIN" -V 2>/dev/null | tail -n 1 || true)"
 if [ "$DSH_ACTUAL" != "$DSH_VERSION" ]; then
-  echo "dsh-remote: $DSH_BIN did not report $DSH_VERSION (got: \${DSH_ACTUAL:-no output})" >&2
-  echo "dsh-remote: check that node is on PATH for this account and that it satisfies the @deepseek-ai/dsh engines range (found $(node --version 2>/dev/null || echo none))" >&2
+  echo "dsh-waypoint: $DSH_BIN did not report $DSH_VERSION (got: \${DSH_ACTUAL:-no output})" >&2
+  echo "dsh-waypoint: check that node is on PATH for this account and that it satisfies the @deepseek-ai/dsh engines range (found $(node --version 2>/dev/null || echo none))" >&2
   # Echo whatever the command actually printed, so the cause is visible once.
   PATH="$DSH_NODE_BIN_DIR:$PATH" "$DSH_BIN" -V || true
   exit 24
 fi
-echo "dsh-remote: dsh command is $DSH_BIN"
-echo "dsh-remote: to run dsh in your own shell: export PATH=\\"$DSH_PREFIX/bin:\\$PATH\\""
+echo "dsh-waypoint: dsh command is $DSH_BIN"
+echo "dsh-waypoint: to run dsh in your own shell: export PATH=\\"$DSH_PREFIX/bin:\\$PATH\\""
 
 PROFILE_DIR="$DSH_HOME/profiles/$PROFILE"
 LEGACY_CHANGED=0
 if [ -f "$PROFILE_DIR/package.json" ]; then
-  if node - "$PROFILE_DIR/package.json" <<'DSH_REMOTE_MIGRATE'
+  if node - "$PROFILE_DIR/package.json" <<'DSH_WAYPOINT_MIGRATE'
 const fs = require('node:fs')
 const file = process.argv[2]
 const raw = fs.readFileSync(file, 'utf8')
 const data = JSON.parse(raw)
+// Older remote agents were published under the unscoped name and, after that,
+// under a scope belonging to this project's upstream. Both are stale entries
+// this run replaces; the name this installer is about to add is deliberately
+// not in this list, or the cleanup would delete the install it precedes.
+const LEGACY_AGENTS = ['dsh-remote-agent', '@goldenpigeon/dsh-remote-agent', '@dsh-waypoint/dsh-remote-agent']
 let changed = false
-if (data.dependencies !== undefined && Object.hasOwn(data.dependencies, 'dsh-remote-agent')) {
-  delete data.dependencies['dsh-remote-agent']
-  changed = true
+for (const name of LEGACY_AGENTS) {
+  if (data.dependencies !== undefined && Object.hasOwn(data.dependencies, name)) {
+    delete data.dependencies[name]
+    changed = true
+  }
 }
 const bundles = data.dsh?.profile?.bundles
 if (Array.isArray(bundles)) {
-  const next = bundles.filter(name => name !== 'dsh-remote-agent')
+  const next = bundles.filter(name => !LEGACY_AGENTS.includes(name))
   if (next.length !== bundles.length) {
     data.dsh.profile.bundles = next
     changed = true
@@ -385,13 +392,13 @@ if (Array.isArray(bundles)) {
 if (!changed) process.exit(1)
 fs.writeFileSync(file + '.legacy-backup', raw)
 fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\\n')
-DSH_REMOTE_MIGRATE
+DSH_WAYPOINT_MIGRATE
   then
     LEGACY_CHANGED=1
   else
     MIGRATE_STATUS=$?
     if [ "$MIGRATE_STATUS" -ne 1 ]; then
-      echo "dsh-remote: could not migrate the legacy remote-agent profile entry" >&2
+      echo "dsh-waypoint: could not migrate the legacy remote-agent profile entry" >&2
       exit 26
     fi
   fi
@@ -400,10 +407,10 @@ if [ "$LEGACY_CHANGED" -eq 1 ]; then
   if [ -f "$PROFILE_DIR/pnpm-lock.yaml" ]; then
     mv "$PROFILE_DIR/pnpm-lock.yaml" "$PROFILE_DIR/pnpm-lock.yaml.legacy-backup"
   fi
-  echo "dsh-remote: removed the legacy dsh-remote-agent profile entry"
+  echo "dsh-waypoint: removed the legacy remote-agent profile entry"
 fi
 
-echo "dsh-remote: adding plugin to profile $PROFILE"
+echo "dsh-waypoint: adding plugin to profile $PROFILE"
 # The upload path carries this run's timestamp, so the dependency spec differs
 # on every provisioning and "dsh plugin add" cannot treat it as already met.
 #
@@ -413,11 +420,11 @@ echo "dsh-remote: adding plugin to profile $PROFILE"
 # dependency without ever needing the removal step.
 "$DSH_BIN" plugin --profile "$PROFILE" add "$AGENT_TARBALL"
 
-echo "dsh-remote: starting dsh web"
+echo "dsh-waypoint: starting dsh web"
 ${startBlock}
 
 if [ "$WAIT_FOR_STATE" -eq 1 ]; then
-  echo "dsh-remote: waiting for agent state"
+  echo "dsh-waypoint: waiting for agent state"
   i=0
   while [ "$i" -lt 60 ]; do
     if [ -s "$STATE_FILE" ]; then break; fi
@@ -426,21 +433,21 @@ if [ "$WAIT_FOR_STATE" -eq 1 ]; then
   done
 fi
 
-echo "dsh-remote: installed"
-echo "dsh-remote: state file $STATE_FILE"
+echo "dsh-waypoint: installed"
+echo "dsh-waypoint: state file $STATE_FILE"
 if [ "$WAIT_FOR_STATE" -eq 1 ] && [ -s "$STATE_FILE" ]; then
-  echo "dsh-remote: agent ready"
+  echo "dsh-waypoint: agent ready"
   PORT_VALUE=$(sed -n 's/.*"port": *\\([0-9][0-9]*\\).*/\\1/p' "$STATE_FILE" | head -1)
-  echo "dsh-remote: remote agent port \${PORT_VALUE:-unknown}"
+  echo "dsh-waypoint: remote agent port \${PORT_VALUE:-unknown}"
 else
-  echo "dsh-remote: warning: the agent state file is not ready yet; inspect the remote DSH log" >&2
+  echo "dsh-waypoint: warning: the agent state file is not ready yet; inspect the remote DSH log" >&2
 fi
 `
 }
 
 function renderStartBlock(options: BootstrapOptions): string {
   if (options.start === 'none') {
-    return 'echo "dsh-remote: start mode none; start dsh web yourself"'
+    return 'echo "dsh-waypoint: start mode none; start dsh web yourself"'
   }
   if (options.start === 'nohup') {
     return renderNohup(options)
@@ -449,21 +456,21 @@ function renderStartBlock(options: BootstrapOptions): string {
   return `UNIT_DIR="$HOME/.config/systemd/user"
 mkdir -p "$UNIT_DIR"
 umask 077
-cat > "$UNIT_DIR/dsh-remote-agent.service" <<DSH_REMOTE_UNIT
-${unit}DSH_REMOTE_UNIT
-chmod 600 "$UNIT_DIR/dsh-remote-agent.service"
+cat > "$UNIT_DIR/dsh-waypoint-agent.service" <<DSH_WAYPOINT_UNIT
+${unit}DSH_WAYPOINT_UNIT
+chmod 600 "$UNIT_DIR/dsh-waypoint-agent.service"
 
-echo "dsh-remote: restarting systemd user unit"
+echo "dsh-waypoint: restarting systemd user unit"
 if command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload >/dev/null 2>&1; then
-  if systemctl --user enable dsh-remote-agent.service >/dev/null 2>&1 \
-    && systemctl --user restart dsh-remote-agent.service; then
-    echo "dsh-remote: restarted systemd user unit dsh-remote-agent.service"
+  if systemctl --user enable dsh-waypoint-agent.service >/dev/null 2>&1 \
+    && systemctl --user restart dsh-waypoint-agent.service; then
+    echo "dsh-waypoint: restarted systemd user unit dsh-waypoint-agent.service"
   else
-    echo "dsh-remote: systemd user unit failed; falling back to nohup" >&2
+    echo "dsh-waypoint: systemd user unit failed; falling back to nohup" >&2
     ${renderNohup(options)}
   fi
 else
-  echo "dsh-remote: systemd user manager unavailable; falling back to nohup" >&2
+  echo "dsh-waypoint: systemd user manager unavailable; falling back to nohup" >&2
   ${renderNohup(options)}
 fi`
 }
@@ -472,16 +479,16 @@ function renderNohup(options: BootstrapOptions): string {
   const modelEnv = options.modelBaseUrl === undefined
     ? ''
     : `DEEPSEEK_BASE_URL="$MODEL_BASE_URL" DEEPSEEK_API_KEY="$MODEL_API_KEY" `
-  return `if [ -f "$DSH_HOME/remote-agent/web.pid" ]; then
-  kill "$(cat "$DSH_HOME/remote-agent/web.pid")" 2>/dev/null || true
+  return `if [ -f "$DSH_HOME/waypoint-agent/web.pid" ]; then
+  kill "$(cat "$DSH_HOME/waypoint-agent/web.pid")" 2>/dev/null || true
 fi
-echo "dsh-remote: starting dsh web under nohup"
+echo "dsh-waypoint: starting dsh web under nohup"
 # $DSH_NODE_BIN_DIR is explicit because dsh runs under a "#!/usr/bin/env node"
 # shebang, and a non-login SSH session need not have that directory on PATH.
-${modelEnv}DSH_REMOTE_DSH_VERSION="$DSH_VERSION" PATH="$DSH_PREFIX/bin:$DSH_NODE_BIN_DIR:$PATH" \\
-  nohup "$DSH_BIN" web --host 127.0.0.1 --port "$PORT" --no-open > "$DSH_HOME/remote-agent/web.log" 2>&1 &
-echo $! > "$DSH_HOME/remote-agent/web.pid"
-echo "dsh-remote: started dsh web under nohup (pid $(cat "$DSH_HOME/remote-agent/web.pid"))"`
+${modelEnv}DSH_WAYPOINT_DSH_VERSION="$DSH_VERSION" PATH="$DSH_PREFIX/bin:$DSH_NODE_BIN_DIR:$PATH" \\
+  nohup "$DSH_BIN" web --host 127.0.0.1 --port "$PORT" --no-open > "$DSH_HOME/waypoint-agent/web.log" 2>&1 &
+echo $! > "$DSH_HOME/waypoint-agent/web.pid"
+echo "dsh-waypoint: started dsh web under nohup (pid $(cat "$DSH_HOME/waypoint-agent/web.pid"))"`
 }
 
 /** Render from parsed CLI options; `agentTarball` must be the remote path. */

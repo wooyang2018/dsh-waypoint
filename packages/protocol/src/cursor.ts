@@ -6,7 +6,7 @@
  * no-op and a forward jump is a gap that must be repaired with a fresh
  * snapshot rather than silently ignored.
  *
- * @module @dsh-remote/protocol/cursor
+ * @module @dsh-waypoint/protocol/cursor
  */
 
 import type { RemoteSessionEvent } from './types.ts'

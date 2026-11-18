@@ -11,7 +11,7 @@ import { listRemoteDirectories } from '../src/remote/directory.ts'
  * fixture must build it with the platform's own path rules — a POSIX literal
  * here would be interpreted as a Windows drive-relative path.
  */
-const anchor = join(tmpdir(), 'dsh-remote-anchor')
+const anchor = join(tmpdir(), 'dsh-waypoint-anchor')
 
 describe('remote workspace files over the agent', () => {
   it('routes read/stat/list/bytes/watch through the agent when capabilities exist', async () => {

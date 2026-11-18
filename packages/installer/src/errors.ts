@@ -7,7 +7,7 @@
  * one place that turns a code into a human-readable cause plus a stable
  * machine code the local plugin can map to localized UI text.
  *
- * @module @dsh-remote/installer/errors
+ * @module @dsh-waypoint/installer/errors
  */
 
 /** Stable installer failure codes surfaced to the local plugin. */
@@ -22,7 +22,7 @@ export type InstallerErrorCode =
   | 'install/pnpm-missing'
   /** `npm install @deepseek-ai/dsh` ran but produced no working `dsh`. */
   | 'install/dsh-missing'
-  /** A legacy `dsh-remote-agent` profile entry could not be migrated. */
+  /** A legacy `dsh-waypoint-agent` profile entry could not be migrated. */
   | 'install/profile-migrate-failed'
 
 /** One bootstrap exit code and what it means. */
@@ -68,7 +68,7 @@ export const BOOTSTRAP_EXIT_CODES: readonly BootstrapExitCode[] = [
   {
     code: 26,
     installerCode: 'install/profile-migrate-failed',
-    message: 'a legacy dsh-remote-agent profile entry could not be migrated',
+    message: 'a legacy dsh-waypoint-agent profile entry could not be migrated',
   },
 ]
 

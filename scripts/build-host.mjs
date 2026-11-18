@@ -4,7 +4,7 @@
  * DSH host plugins run inside the profile's Node process. The only imports
  * that may remain external are DSH/Cordis peers, which the Loader resolves
  * from the running Harness installation. The plugin's own workspace packages
- * (@dsh-remote/protocol) are bundled so a packed tarball is installable
+ * (@dsh-waypoint/protocol) are bundled so a packed tarball is installable
  * without publishing those internal packages.
  */
 import { build } from 'esbuild'
@@ -55,9 +55,9 @@ function flagValue(name) {
   return typeof value === 'string' ? value : undefined
 }
 
-const entry = flagValue('entry') ?? process.env.DSH_REMOTE_HOST_ENTRY ?? 'src/index.ts'
-const outfile = flagValue('out') ?? process.env.DSH_REMOTE_HOST_OUT ?? 'lib/index.js'
-const isCli = flags.has('cli') || process.env.DSH_REMOTE_CLI === '1'
+const entry = flagValue('entry') ?? process.env.DSH_WAYPOINT_HOST_ENTRY ?? 'src/index.ts'
+const outfile = flagValue('out') ?? process.env.DSH_WAYPOINT_HOST_OUT ?? 'lib/index.js'
+const isCli = flags.has('cli') || process.env.DSH_WAYPOINT_CLI === '1'
 
 if (!existsSync(join(packageDir, entry))) {
   throw new Error(`build-host: ${manifest.name} has no ${entry}; pass --entry or run this from the package directory`)

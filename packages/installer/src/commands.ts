@@ -1,7 +1,7 @@
 /**
  * Installer commands: plan, pack, install, doctor, discover, tunnel.
  *
- * @module @dsh-remote/installer/commands
+ * @module @dsh-waypoint/installer/commands
  */
 
 import { execFile } from 'node:child_process'
@@ -15,7 +15,7 @@ import {
   isAgentDiscoveryState,
   isAgentLive,
   type AgentDiscoveryState,
-} from '@dsh-remote/protocol'
+} from '@dsh-waypoint/protocol'
 import { fromOptions, nodePathPrelude, shellPath } from './bootstrap.ts'
 import { npmInvocation } from './npm.ts'
 import type { InstallerOptions } from './options.ts'
@@ -33,12 +33,12 @@ const execFileAsync = promisify(execFile)
 /** Remote directory used for the uploaded plugin tarball. */
 const REMOTE_TMP_DIR = '/tmp'
 
-/** Package root of dsh-remote-agent, resolved from source or bundled CLI. */
+/** Package root of dsh-waypoint-agent, resolved from source or bundled CLI. */
 function agentPackageDir(): string {
   return fileURLToPath(new URL('../../remote-agent', import.meta.url))
 }
 
-/** Version of the bundled dsh-remote-agent, or `undefined` when unreadable. */
+/** Version of the bundled dsh-waypoint-agent, or `undefined` when unreadable. */
 export function agentVersion(): string | undefined {
   try {
     const manifest = JSON.parse(readFileSync(join(agentPackageDir(), 'package.json'), 'utf8')) as { version?: unknown }
@@ -57,8 +57,8 @@ export function agentVersion(): string | undefined {
 function plannedTarballName(): string {
   const version = agentVersion()
   return version === undefined
-    ? `${REMOTE_TMP_DIR}/dsh-remote-agent.tgz`
-    : `${REMOTE_TMP_DIR}/dsh-remote-agent-${version}.tgz`
+    ? `${REMOTE_TMP_DIR}/dsh-waypoint-agent.tgz`
+    : `${REMOTE_TMP_DIR}/dsh-waypoint-agent-${version}.tgz`
 }
 
 function sshOptions(options: InstallerOptions): SshOptions {
@@ -70,9 +70,9 @@ function sshOptions(options: InstallerOptions): SshOptions {
   }
 }
 
-/** Pack dsh-remote-agent into a temporary directory. */
+/** Pack dsh-waypoint-agent into a temporary directory. */
 export async function packAgent(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'dsh-remote-agent-pack-'))
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-agent-pack-'))
   const npm = npmInvocation()
   const { stdout } = await execFileAsync(
     npm.command,
@@ -110,7 +110,7 @@ export async function commandPack(options: InstallerOptions): Promise<string> {
 export async function commandInstall(options: InstallerOptions): Promise<string> {
   const target = requireTarget(options)
   const tarball = options.agentTarball ?? await packAgent()
-  const remoteTarball = `${REMOTE_TMP_DIR}/dsh-remote-agent-${Date.now()}.tgz`
+  const remoteTarball = `${REMOTE_TMP_DIR}/dsh-waypoint-agent-${Date.now()}.tgz`
   if (options.verbose) process.stderr.write(`uploading ${tarball} -> ${target.canonical}:${remoteTarball}\n`)
   await uploadFile(tarball, remoteTarball, target, {
     binary: options.scpBinary,
@@ -258,12 +258,12 @@ function requireTarget(options: InstallerOptions): ParsedTarget {
 }
 
 function remoteStatePath(options: InstallerOptions): string {
-  return `${shellPath(options.dshHome)}/"remote-agent/agent.json"`
+  return `${shellPath(options.dshHome)}/"waypoint-agent/agent.json"`
 }
 
 function displayStatePath(options: InstallerOptions): string {
   const home = options.dshHome.trim()
-  const suffix = 'remote-agent/agent.json'
+  const suffix = 'waypoint-agent/agent.json'
   if (home === '~' || home === '$HOME') return `$HOME/${suffix}`
   if (home.startsWith('~/')) return `$HOME/${home.slice(2)}/${suffix}`
   if (home.startsWith('$HOME/')) return `${home}/${suffix}`

@@ -25,7 +25,7 @@ test.describe('remote new-session mode selection', () => {
     const newSession = page.getByRole('button', { name: /New session in / })
     await expect(newSession).toBeVisible({ timeout: 10_000 })
     const blankResponse = page.waitForResponse(response =>
-      response.url().includes('/api/dsh-remote')
+      response.url().includes('/api/dsh-waypoint')
       && (response.request().postData() ?? '').includes('"endpoint":"host/session/blank"'),
     { timeout: 20_000 })
     await newSession.click()
@@ -94,7 +94,7 @@ test.describe('remote new-session mode selection', () => {
     const page = host.page
     const before = host.fake.createRequests.length
     const blankResponse = page.waitForResponse(response =>
-      response.url().includes('/api/dsh-remote')
+      response.url().includes('/api/dsh-waypoint')
       && (response.request().postData() ?? '').includes('"endpoint":"host/session/blank"'),
     { timeout: 20_000 })
     await page.getByRole('button', { name: /^New session$/ }).first().click()
@@ -143,23 +143,23 @@ test.describe('remote new-session mode selection', () => {
     await page.getByRole('button', { name: 'Add workspace' }).click()
     const dialog = page.getByRole('dialog', { name: /New workspace|新建工作区/ })
     await expect(dialog).toBeVisible()
-    await dialog.locator('.dshr-workspace-add-dialog-source-trigger').click()
-    await page.locator('.dshr-workspace-add-dialog-destination-item').filter({ hasText: 'Playwright Remote' }).click()
-    await dialog.locator('.dshr-workspace-add-dialog-add-folder').click()
+    await dialog.locator('.dshwp-workspace-add-dialog-source-trigger').click()
+    await page.locator('.dshwp-workspace-add-dialog-destination-item').filter({ hasText: 'Playwright Remote' }).click()
+    await dialog.locator('.dshwp-workspace-add-dialog-add-folder').click()
     const folderDialog = page.getByRole('dialog', { name: /Choose a source folder|选择源目录/ })
     await expect(folderDialog).toBeVisible()
     await folderDialog.getByRole('button', { name: 'project' }).click()
     await folderDialog.getByRole('button', { name: /Use folder|使用此目录/ }).click()
-    await dialog.locator('.dshr-workspace-add-dialog-input').fill('UIDebug')
+    await dialog.locator('.dshwp-workspace-add-dialog-input').fill('UIDebug')
     const blankResponse = page.waitForResponse(response =>
-      response.url().includes('/api/dsh-remote')
+      response.url().includes('/api/dsh-waypoint')
       && (response.request().postData() ?? '').includes('"endpoint":"host/session/blank"'),
     { timeout: 30_000 })
     const createResponse = page.waitForResponse(response =>
-      response.url().includes('/api/dsh-remote')
+      response.url().includes('/api/dsh-waypoint')
       && (response.request().postData() ?? '').includes('"endpoint":"host/workspace/create"'),
     { timeout: 30_000 })
-    await dialog.locator('.dshr-workspace-add-dialog-button.dshr-workspace-add-dialog-primary').click()
+    await dialog.locator('.dshwp-workspace-add-dialog-button.dshwp-workspace-add-dialog-primary').click()
     const created = await createResponse
     expect(created.ok()).toBeTruthy()
     const blank = await blankResponse
@@ -171,7 +171,7 @@ test.describe('remote new-session mode selection', () => {
     const page = host.page
     await dismissOverlays()
     const created = await page.evaluate(async () => {
-      const response = await fetch('/api/dsh-remote', {
+      const response = await fetch('/api/dsh-waypoint', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -200,7 +200,7 @@ test.describe('remote new-session mode selection', () => {
     const before = host.fake.createRequests.length
     let blankRequests = 0
     page.on('request', request => {
-      if (request.url().includes('/api/dsh-remote') && (request.postData() ?? '').includes('"endpoint":"host/session/blank"')) blankRequests += 1
+      if (request.url().includes('/api/dsh-waypoint') && (request.postData() ?? '').includes('"endpoint":"host/session/blank"')) blankRequests += 1
     })
     await workspace.hover()
     await page.getByRole('button', { name: /New session in .*Default workspace/ }).click()
@@ -214,7 +214,7 @@ test.describe('remote new-session mode selection', () => {
     const page = host.page
     await dismissOverlays()
     const created = await page.evaluate(async () => {
-      const response = await fetch('/api/dsh-remote', {
+      const response = await fetch('/api/dsh-waypoint', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -231,7 +231,7 @@ test.describe('remote new-session mode selection', () => {
     await expect(workspace).toBeVisible({ timeout: 30_000 })
     await workspace.hover()
     const blankResponse = page.waitForResponse(response =>
-      response.url().includes('/api/dsh-remote')
+      response.url().includes('/api/dsh-waypoint')
       && (response.request().postData() ?? '').includes('"endpoint":"host/session/blank"'),
     { timeout: 20_000 })
     await page.getByRole('button', { name: /New session in .*Alpha/ }).click()
@@ -249,7 +249,7 @@ test.describe('remote new-session mode selection', () => {
   test('retries a failed native promotion without creating a second remote Session or running locally', async () => {
     const page = host.page
     const created = await page.evaluate(async () => {
-      const response = await fetch('/api/dsh-remote', {
+      const response = await fetch('/api/dsh-waypoint', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -291,7 +291,7 @@ test.describe('remote new-session mode selection', () => {
     const workspace = page.getByRole('treeitem', { name: /Playwright Remote · Alpha/ })
     await expect(workspace).toBeVisible({ timeout: 30_000 })
     const disconnected = await page.evaluate(async () => {
-      const response = await fetch('/api/dsh-remote', {
+      const response = await fetch('/api/dsh-waypoint', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -307,7 +307,7 @@ test.describe('remote new-session mode selection', () => {
     await expect(page.getByText(/Could not create a session on the remote workspace|无法在远端工作区创建会话/)).toBeVisible({ timeout: 10_000 })
     expect(host.fake.createRequests).toHaveLength(before)
     const reconnected = await page.evaluate(async () => {
-      const response = await fetch('/api/dsh-remote', {
+      const response = await fetch('/api/dsh-waypoint', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -322,7 +322,7 @@ test.describe('remote new-session mode selection', () => {
   test('lets only one of two windows claim a promoted mirror', async () => {
     const page = host.page
     const created = await page.evaluate(async () => {
-      const response = await fetch('/api/dsh-remote', {
+      const response = await fetch('/api/dsh-waypoint', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -347,7 +347,7 @@ test.describe('remote new-session mode selection', () => {
     const claims: string[] = []
     for (const client of [page, page2]) {
       client.on('response', response => {
-        if (!response.url().includes('/api/dsh-remote')) return
+        if (!response.url().includes('/api/dsh-waypoint')) return
         const post = response.request().postData() ?? ''
         if (!post.includes('"endpoint":"host/session/open/claim"')) return
         void response.json().then((body: unknown) => {

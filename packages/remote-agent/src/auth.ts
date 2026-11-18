@@ -1,7 +1,7 @@
 /**
  * Bearer-token and peer-address checks for the agent surface.
  *
- * @module dsh-remote-agent/auth
+ * @module dsh-waypoint-agent/auth
  */
 
 import { randomBytes, timingSafeEqual } from 'node:crypto'

@@ -146,7 +146,7 @@ describe('bootstrap rendering', () => {
     // The global prefix comes first, and the node bin dir follows because dsh
     // runs under a `#!/usr/bin/env node` shebang.
     assert.match(unit, /Environment="PATH=\$DSH_PREFIX\/bin:\$DSH_NODE_BIN_DIR:.*:\$PATH"/)
-    assert.match(unit, /Environment="DSH_REMOTE_DSH_VERSION=\$DSH_VERSION"/)
+    assert.match(unit, /Environment="DSH_WAYPOINT_DSH_VERSION=\$DSH_VERSION"/)
     assert.match(unit, /ExecStart="\$DSH_BIN" web --host 127\.0\.0\.1 --port \$PORT --no-open/)
   })
 
@@ -156,7 +156,7 @@ describe('bootstrap rendering', () => {
       dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', start: 'nohup',
       agentTarball: '/tmp/a.tgz', modelBaseUrl: 'http://127.0.0.1:47821', modelApiKey: 'placeholder',
     })
-    assert.match(script, /DEEPSEEK_BASE_URL="\$MODEL_BASE_URL" DEEPSEEK_API_KEY="\$MODEL_API_KEY" DSH_REMOTE_DSH_VERSION=/)
+    assert.match(script, /DEEPSEEK_BASE_URL="\$MODEL_BASE_URL" DEEPSEEK_API_KEY="\$MODEL_API_KEY" DSH_WAYPOINT_DSH_VERSION=/)
     assert.match(script, /nohup "\$DSH_BIN" web/)
   })
 
@@ -191,7 +191,7 @@ describe('bootstrap rendering', () => {
     })
     assert.match(script, /DSH_UPGRADE=1/)
     assert.match(script, /stopping the remote DSH service before upgrading/)
-    assert.match(script, /systemctl --user stop dsh-remote-agent\.service/)
+    assert.match(script, /systemctl --user stop dsh-waypoint-agent\.service/)
     assert.match(script, /rm -f "\$STATE_FILE"/)
   })
 
@@ -232,7 +232,7 @@ describe('bootstrap rendering', () => {
     assert.match(script, /DSH_ACTUAL="\$\(PATH="\$DSH_NODE_BIN_DIR:\$PATH" "\$DSH_BIN" -V 2>\/dev\/null \| tail -n 1 \|\| true\)"/)
     assert.match(script, /\[ "\$DSH_ACTUAL" != "\$DSH_VERSION" \]/)
     assert.match(script, /exit 24/)
-    assert.match(script, /dsh-remote: dsh command is \$DSH_BIN/)
+    assert.match(script, /dsh-waypoint: dsh command is \$DSH_BIN/)
     assert.match(script, /export PATH=\\"\$DSH_PREFIX\/bin:/)
   })
 
@@ -254,12 +254,12 @@ describe('bootstrap rendering', () => {
     const script = fromOptions(options, '/tmp/agent.tgz')
     assert.match(script, /set -euo pipefail/)
     assert.match(script, /umask 077/)
-    assert.match(script, /chmod 600 "\$UNIT_DIR\/dsh-remote-agent\.service"/)
+    assert.match(script, /chmod 600 "\$UNIT_DIR\/dsh-waypoint-agent\.service"/)
     assert.match(script, /npm install --global --prefix "\$DSH_PREFIX"/)
     assert.match(script, /plugin --profile "\$PROFILE" add "\$AGENT_TARBALL"/)
     assert.match(script, /systemd/)
     assert.doesNotMatch(script, /token/i)
-    assert.match(script, /remote-agent\/agent\.json/)
+    assert.match(script, /waypoint-agent\/agent\.json/)
   })
 
   it('separates a pnpm install failure from a dsh install failure', () => {
@@ -305,7 +305,7 @@ describe('bootstrap rendering', () => {
     // the profile, `dsh plugin add` replaces nothing — so a corrected bundle
     // kept running old behaviour while every log line said "installed".
     assert.doesNotMatch(script, /AGENT_NPM_SPEC/)
-    assert.doesNotMatch(script, /@goldenpigeon\/dsh-remote-agent@/)
+    assert.doesNotMatch(script, /dsh-waypoint-agent@/)
     assert.doesNotMatch(script, /installed agent from npm/)
     assert.match(script, /plugin --profile "\$PROFILE" add "\$AGENT_TARBALL"/)
     // No `remove` first: on this profile it hangs inside pnpm after rewriting
@@ -316,10 +316,15 @@ describe('bootstrap rendering', () => {
 
   it('migrates legacy agent profile entries before installing', () => {
     const script = fromOptions(parseArgs(baseArgs), '/tmp/agent.tgz')
-    assert.match(script, /DSH_REMOTE_MIGRATE/)
-    assert.match(script, /delete data.dependencies\['dsh-remote-agent'\]/)
-    assert.match(script, /removed the legacy dsh-remote-agent profile entry/)
-    assert.match(script, /pnpm-lock.yaml.legacy-backup/)
+    assert.match(script, /DSH_WAYPOINT_MIGRATE/)
+    // The upstream names, never the one this run installs: a cleanup that
+    // deleted `dsh-waypoint-agent` would remove the dependency it is about to
+    // add, and the agent would report "installed" while running nothing.
+    assert.match(script, /delete data.dependencies\[name\]/)
+    assert.match(script, /'@goldenpigeon\/dsh-remote-agent'/)
+    assert.match(script, /removed the legacy remote-agent profile entry/)
+    assert.match(script, /pnpm-lock\.yaml\.legacy-backup/)
+    assert.doesNotMatch(script, /LEGACY_AGENTS = \[[^\]]*'dsh-waypoint-agent'/)
   })
 
   it('supports nohup and none start modes', () => {
@@ -332,7 +337,7 @@ describe('bootstrap rendering', () => {
     assert.match(none, /start mode none/)
     assert.doesNotMatch(none, /systemctl --user enable/)
     const systemd = fromOptions(options, '/tmp/agent.tgz')
-    assert.match(systemd, /systemctl --user restart dsh-remote-agent\.service/)
+    assert.match(systemd, /systemctl --user restart dsh-waypoint-agent\.service/)
   })
 
   it('expands tilde paths only at remote runtime', () => {
@@ -363,11 +368,11 @@ describe('bootstrap rendering', () => {
     const script = commandPlan(parseArgs(baseArgs))
     if (version === undefined) {
       // An unreadable manifest must drop the version rather than invent one.
-      assert.match(script, /AGENT_TARBALL='\/tmp\/dsh-remote-agent\.tgz'/u)
+      assert.match(script, /AGENT_TARBALL='\/tmp\/dsh-waypoint-agent\.tgz'/u)
       return
     }
     assert.notEqual(version, '0.2.0')
-    assert.ok(script.includes(`AGENT_TARBALL='/tmp/dsh-remote-agent-${version}.tgz'`), script.slice(0, 600))
+    assert.ok(script.includes(`AGENT_TARBALL='/tmp/dsh-waypoint-agent-${version}.tgz'`), script.slice(0, 600))
   })
 
   it('passes a requested port through the programmatic provisioner', () => {

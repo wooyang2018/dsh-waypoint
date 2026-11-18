@@ -1,7 +1,7 @@
 /**
  * Programmatic installer surface.
  *
- * @module @dsh-remote/installer
+ * @module @dsh-waypoint/installer
  */
 
 export { main } from './cli.ts'

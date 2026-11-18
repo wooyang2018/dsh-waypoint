@@ -6,7 +6,7 @@
  * the remote workspace root and serves every operation from the remote agent
  * over the existing SSH tunnel.
  *
- * @module dsh-remote-local/remote/files
+ * @module dsh-waypoint/remote/files
  */
 
 import * as localPath from 'node:path'
@@ -22,7 +22,7 @@ import type {
   WorkspaceFileText,
   WorkspaceFileWatchFrame,
 } from '@deepseek-ai/dsh-api-workspace-files'
-import type { AgentCapability, RemoteAgentClient } from '@dsh-remote/protocol'
+import type { AgentCapability, RemoteAgentClient } from '@dsh-waypoint/protocol'
 import { LocalError } from '../errors.ts'
 import type { RemoteHostsService } from '../service.ts'
 import type { RemoteMirrorService } from '../mirror/service.ts'

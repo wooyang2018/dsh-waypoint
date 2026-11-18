@@ -1,7 +1,7 @@
-# dsh-remote
+# dsh-waypoint
 
-[![CI](https://github.com/Golden-Pigeon/dsh-remote/actions/workflows/ci.yml/badge.svg)](https://github.com/Golden-Pigeon/dsh-remote/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/dsh-remote-local-plugin.svg)](https://www.npmjs.com/package/dsh-remote-local-plugin)
+[![CI](https://github.com/wooyang2018/dsh-waypoint/actions/workflows/ci.yml/badge.svg)](https://github.com/wooyang2018/dsh-waypoint/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-waypoint.svg)](https://www.npmjs.com/package/dsh-waypoint)
 
 English | [Chinese](README.zh.md)
 
@@ -15,7 +15,7 @@ same transcript, composer, tool cards, stop control, and session list as a local
 Local DSH                                         Remote host
 ┌──────────────────────────────────────┐          ┌──────────────────────────────┐
 │ normal sidebar + Conversation UI     │          │ dsh web (installed by plugin)│
-│  local mirror Session + Agent façade │  SSH     │ dsh-remote-agent             │
+│  local mirror Session + Agent façade │  SSH     │ dsh-waypoint-agent             │
 │  host registry / auto provisioning   │◀────────▶│  workspace/session write     │
 │  direct key or local key proxy        │          │  remote tools + model calls  │
 │  authenticated /api route            │  tunnel  │                              │
@@ -29,7 +29,7 @@ This plugin is developed for the **official DSH Desktop application**. Supported
 | Component | Version |
 |---|---|
 | [DSH Desktop / official client](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested) |
-| Plugin | [**0.8.21**](https://www.npmjs.com/package/dsh-remote-local-plugin) |
+| Plugin | [**1.0.0**](https://www.npmjs.com/package/dsh-waypoint) |
 | Remote DSH runtime | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested; new installs follow the local DSH version) |
 | Remote Node.js | [**22.19+**](https://nodejs.org/en/download) |
 | Remote OS | Linux or macOS |
@@ -71,10 +71,10 @@ pinned with `remoteDshVersion`.
 Open **Plugins → Add plugin** and enter:
 
 ```text
-dsh-remote-local-plugin
+dsh-waypoint
 ```
 
-The package is published on [npm](https://www.npmjs.com/package/dsh-remote-local-plugin); DSH installs the bundle from the registry. The package includes the remote agent asset and the
+The package is published on [npm](https://www.npmjs.com/package/dsh-waypoint); DSH installs the bundle from the registry. The package includes the remote agent asset and the
 terminal-controller fork, so there is nothing else to install. Restart DSH when the plugin page asks
 for it; **Settings → Remote development** then appears.
 
@@ -82,7 +82,7 @@ If npmjs.com still resolves an older `latest` tag for a newly published release,
 current version instead:
 
 ```text
-dsh-remote-local-plugin@0.8.21
+dsh-waypoint@1.0.0
 ```
 
 Keep this pinned version in sync with each release.
@@ -92,7 +92,7 @@ Keep this pinned version in sync with each release.
 For development, clone the repository and run the installer:
 
 ```sh
-cd /path/to/dsh-remote
+cd /path/to/dsh-waypoint
 pnpm install
 pnpm -r build
 ./scripts/install-local.sh
@@ -145,11 +145,11 @@ Test isolation is controlled by a test-only manifest in the test DSH home, not b
 an agent tool:
 
 ```text
-$DSH_HOME/remote/test-visibility.json
+$DSH_HOME/waypoint/test-visibility.json
 ```
 
 ```json
-{"hiddenPaths": ["/tmp/dsh-remote-tests"], "hiddenWorkspaceIds": ["remote-workspace-id"]}
+{"hiddenPaths": ["/tmp/dsh-waypoint-tests"], "hiddenWorkspaceIds": ["remote-workspace-id"]}
 ```
 
 `hiddenPaths` prevents local registration at creation. `hiddenWorkspaceIds` hides an existing visible
@@ -243,7 +243,7 @@ login shell's `PATH`, the install log prints the one `export PATH=…` line to a
 your shell startup files. A prefix npm cannot write fails the install with npm's own error instead of
 installing somewhere else; note that npm writes
 `<prefix>/lib/node_modules` and `<prefix>/bin`, so a machine can have one writable and not the other, which
-is what `dsh-remote-install doctor` is for.
+is what `dsh-waypoint-install doctor` is for.
 
 If the remote host needs a proxy, set `remoteInstallProxy` to a URL that is reachable **from the
 remote host**, for example `http://127.0.0.1:17890` when a port forward serves the proxy there. The
@@ -272,7 +272,7 @@ remote model requests use it as well, not just the installer.
 ## Configuration
 
 ```yaml
-- id: dsh-remote-local
+- id: dsh-waypoint
   config:
     autoProvision: true
     remoteDshHome: ~/.dsh
@@ -303,7 +303,7 @@ remote model requests use it as well, not just the installer.
 The remote agent config remains available for advanced deployments:
 
 ```yaml
-- id: dsh-remote-agent
+- id: dsh-waypoint-agent
   config:
     stateFile: ''
     token: ''
@@ -343,10 +343,10 @@ The remote agent config remains available for advanced deployments:
 | Port changed after remote restart | Click **Rediscover** |
 | Install fails while reporting the npm global prefix | npm cannot write `<prefix>/lib/node_modules` or `<prefix>/bin` for this account, or `npm prefix -g` printed nothing. Point `remoteGlobalPrefix` at a directory you own (for example `~/npm-global`) and retry |
 | `dsh` not found in your own shell after installing | The install log printed the `export PATH=…` line to add to your shell startup. The installer does not edit those files itself |
-| Remote DSH stopped starting after you switched Node.js versions | An nvm/Volta switch moves the npm global prefix with it, so the service's baked-in `dsh` path no longer exists. Click **Reinstall**; `dsh-remote-install doctor --target …` reports `global_dsh` and `login_path_has_dsh` |
+| Remote DSH stopped starting after you switched Node.js versions | An nvm/Volta switch moves the npm global prefix with it, so the service's baked-in `dsh` path no longer exists. Click **Reinstall**; `dsh-waypoint-install doctor --target …` reports `global_dsh` and `login_path_has_dsh` |
 | Remote agent port jumps around or the host keeps disconnecting | Two `dsh web` processes are writing the same `agent.json`. Run one per `DSH_HOME`; `doctor` reports `dsh_web_processes` |
 
-Remote logs: `journalctl --user -u dsh-remote-agent -f` or `$DSH_HOME/remote-agent/web.log`.
+Remote logs: `journalctl --user -u dsh-waypoint-agent -f` or `$DSH_HOME/waypoint-agent/web.log`.
 
 ## Verify
 
@@ -359,6 +359,29 @@ client bundle. The native path was validated against a real Linux remote host: p
 remote workspace/session creation, a remote prompt through the local key proxy, live event mirroring
 into the ordinary Conversation UI, a second follow-up, and a remote tool call/result.
 
+## Relationship to upstream
+
+`dsh-waypoint` started as a fork of [Golden-Pigeon/dsh-remote](https://github.com/Golden-Pigeon/dsh-remote).
+The changes below were offered back upstream, the offer was declined, and the work continues here as
+an independent project under its own name. Both are MIT licensed, the original authors keep their
+attribution in [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and the
+repository history — including every upstream commit — is preserved unchanged.
+
+Because the rename also changes the identity DSH persists, the two are **separate installs** and
+neither reads the other's state:
+
+| | Upstream `dsh-remote` | This project |
+|---|---|---|
+| Bundle | `dsh-remote-local-plugin` | `dsh-waypoint` |
+| Remote agent | `@goldenpigeon/dsh-remote-agent` | `dsh-waypoint-agent` |
+| Host registry | `$DSH_HOME/remote` | `$DSH_HOME/waypoint` |
+| Agent state (remote) | `$DSH_HOME/remote-agent` | `$DSH_HOME/waypoint-agent` |
+
+Nothing is migrated automatically. If you are switching over, remove the old bundle
+(`dsh plugin --profile <p> remove dsh-remote-local-plugin`) so two Settings sections cannot appear,
+then follow `docs/operations.md` for moving the host registry and cleaning up the old
+`dsh-remote-agent.service` on the remote host.
+
 ## Documentation
 
 - [Wire protocol](docs/protocol.md)
@@ -369,18 +392,19 @@ into the ordinary Conversation UI, a second follow-up, and a remote tool call/re
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [Design document copy](docs/remote-development-design.md)
 
 ## Packages
 
 | Package | Role |
 |---|---|
-| [`@dsh-remote/protocol`](packages/protocol) | Wire types, surface metadata, cursor, SSE, typed client |
-| [`dsh-remote-local-plugin`](packages/local-plugin) | Provisioning, tunnel, proxy, **native session mirror**, tools, Settings |
-| [`dsh-remote-agent`](packages/remote-agent) | Remote host plugin for workspaces, sessions, prompts, SSE |
-| [`dsh-remote-terminal-controller`](packages/terminal-controller) | Profile fork routing local vs mirrored terminals |
-| [`@dsh-remote/installer`](packages/installer) | Bootstrap library/CLI used by the plugin |
-| [`@dsh-remote/testkit`](packages/testkit) | Fake host and wire contract tests |
+| [`@dsh-waypoint/protocol`](packages/protocol) | Wire types, surface metadata, cursor, SSE, typed client |
+| [`dsh-waypoint`](packages/local-plugin) | Provisioning, tunnel, proxy, **native session mirror**, tools, Settings |
+| [`dsh-waypoint-agent`](packages/remote-agent) | Remote host plugin for workspaces, sessions, prompts, SSE |
+| [`dsh-waypoint-terminal-controller`](packages/terminal-controller) | Profile fork routing local vs mirrored terminals |
+| [`@dsh-waypoint/installer`](packages/installer) | Bootstrap library/CLI used by the plugin |
+| [`@dsh-waypoint/testkit`](packages/testkit) | Fake host and wire contract tests |
 
 ## License
 

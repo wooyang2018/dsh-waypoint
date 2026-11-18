@@ -5,7 +5,7 @@
  * tunnel. It is intentionally small and contains only the token, the live
  * loopback port, and liveness metadata.
  *
- * @module @dsh-remote/protocol/discovery
+ * @module @dsh-waypoint/protocol/discovery
  */
 
 /** Current discovery-state schema version. */

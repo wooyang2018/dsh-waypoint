@@ -209,7 +209,7 @@ describe('ssh -G resolution', () => {
 
 describe('SSH config scan', () => {
   it('overlays resolved values on the declared ones and bounds concurrency', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'dshr-sshcfg-'))
+    const dir = await mkdtemp(join(tmpdir(), 'dshwp-sshcfg-'))
     try {
       const configPath = join(dir, 'config')
       await writeFile(configPath, [
@@ -251,7 +251,7 @@ describe('SSH config scan', () => {
   })
 
   it('keeps the declared values when ssh -G cannot resolve an alias', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'dshr-sshcfg-'))
+    const dir = await mkdtemp(join(tmpdir(), 'dshwp-sshcfg-'))
     try {
       const configPath = join(dir, 'config')
       await writeFile(configPath, 'Host alpha\n  HostName declared-alpha\n  User declared\n')
@@ -285,7 +285,7 @@ describe('SSH config scan', () => {
   })
 
   it('surfaces an unreadable config as an error', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'dshr-sshcfg-'))
+    const dir = await mkdtemp(join(tmpdir(), 'dshwp-sshcfg-'))
     try {
       // A directory in the config's place fails with something other than ENOENT.
       const asDirectory = join(dir, 'config')

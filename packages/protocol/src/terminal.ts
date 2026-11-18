@@ -5,7 +5,7 @@
  * but live in the protocol package so the remote agent and local plugin can
  * version them together without importing each other's runtime packages.
  *
- * @module @dsh-remote/protocol/terminal
+ * @module @dsh-waypoint/protocol/terminal
  */
 
 /** One shell candidate offered by the remote agent. */

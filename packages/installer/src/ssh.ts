@@ -3,9 +3,9 @@
  *
  * The installer is not a long-lived service; it needs one validated
  * destination, bounded commands, and streaming output. Runtime host control
- * lives in dsh-remote-local-plugin's more complete SSH layer.
+ * lives in dsh-waypoint's more complete SSH layer.
  *
- * @module @dsh-remote/installer/ssh
+ * @module @dsh-waypoint/installer/ssh
  */
 
 import { spawn } from 'node:child_process'

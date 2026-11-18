@@ -4,5 +4,5 @@
 - id: terminal-controller
   disabled: true
 - insert:
-    - id: terminal-controller-remote
-      name: dsh-remote-terminal-controller
+    - id: terminal-controller-waypoint
+      name: dsh-waypoint-terminal-controller

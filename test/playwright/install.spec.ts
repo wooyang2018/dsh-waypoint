@@ -20,15 +20,15 @@ test.describe('plugin install and upgrade', () => {
   test.skip(!appAvailable(), 'requires the official DSH Desktop app and Chrome on macOS')
 
   test('replaces the registry 0.8.19 bundle with the current build', async () => {
-    const staging = mkdtempSync(join(tmpdir(), 'dsh-remote-dev-'))
-    const devTarball = join(staging, `dsh-remote-local-plugin-0.8.19-dev-${Date.now()}.tgz`)
+    const staging = mkdtempSync(join(tmpdir(), 'dsh-waypoint-dev-'))
+    const devTarball = join(staging, `dsh-waypoint-0.8.19-dev-${Date.now()}.tgz`)
     copyFileSync(PLUGIN_TARBALL, devTarball)
 
     let oldManifest: Manifest | undefined
     const host = await startE2EHost({
       prepareHome: home => {
-        installPlugin('web', 'dsh-remote-local-plugin@0.8.19', home)
-        oldManifest = JSON.parse(readFileSync(join(home, 'profiles/web/node_modules/dsh-remote-local-plugin/package.json'), 'utf8')) as Manifest
+        installPlugin('web', 'dsh-waypoint@0.8.19', home)
+        oldManifest = JSON.parse(readFileSync(join(home, 'profiles/web/node_modules/dsh-waypoint/package.json'), 'utf8')) as Manifest
       },
       pluginSpec: devTarball,
     })
@@ -39,13 +39,13 @@ test.describe('plugin install and upgrade', () => {
       expect(oldManifest?.dsh?.compatibility?.dsh).toBe('>=0.2.1-rc.1 <0.3.0-0')
 
       const profile = JSON.parse(readFileSync(join(host.home, 'profiles/web/package.json'), 'utf8')) as ProfileManifest
-      expect(profile.dependencies?.['dsh-remote-local-plugin']).toContain('dsh-remote-local-plugin-0.8.19-dev-')
+      expect(profile.dependencies?.['dsh-waypoint']).toContain('dsh-waypoint-0.8.19-dev-')
 
-      const installed = JSON.parse(readFileSync(join(host.home, 'profiles/web/node_modules/dsh-remote-local-plugin/package.json'), 'utf8')) as Manifest
+      const installed = JSON.parse(readFileSync(join(host.home, 'profiles/web/node_modules/dsh-waypoint/package.json'), 'utf8')) as Manifest
       expect(installed.engines?.dsh).toBe('>=0.2.2-rc.2 <0.3.0-0')
 
       const forkClient = join(host.home,
-        'profiles/web/node_modules/dsh-remote-local-plugin/node_modules/dsh-remote-terminal-controller/lib/client.js')
+        'profiles/web/node_modules/dsh-waypoint/node_modules/dsh-waypoint-terminal-controller/lib/client.js')
       expect(existsSync(forkClient)).toBe(true)
       expect(readFileSync(forkClient, 'utf8')).toContain('watch(')
 

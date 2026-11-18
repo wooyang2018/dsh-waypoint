@@ -15,7 +15,7 @@
  * machine twice. Grouping has to happen after `ssh -G` resolution, because only
  * then do two aliases reveal that they point at the same target.
  *
- * @module dsh-remote-local/ssh/alias-groups
+ * @module dsh-waypoint/ssh/alias-groups
  */
 
 /** The fields grouping needs, satisfied by a resolved scan entry. */

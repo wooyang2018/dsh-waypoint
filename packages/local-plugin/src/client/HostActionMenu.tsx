@@ -6,7 +6,7 @@
  * host card. Fixed placement costs a reposition on scroll and resize, which is
  * cheaper than depending on the host container's overflow.
  *
- * @module dsh-remote-local/client/HostActionMenu
+ * @module dsh-waypoint/client/HostActionMenu
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -108,7 +108,7 @@ export function HostActionMenu({ label, actions }: HostActionMenuProps) {
       <button
         ref={triggerRef}
         type="button"
-        className="dshr-button dshr-button-small dshr-menu-trigger"
+        className="dshwp-button dshwp-button-small dshwp-menu-trigger"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label}
@@ -125,7 +125,7 @@ export function HostActionMenu({ label, actions }: HostActionMenuProps) {
       {open && (
         <div
           ref={popupRef}
-          className="dshr-menu"
+          className="dshwp-menu"
           role="menu"
           aria-label={label}
           style={position === null
@@ -138,9 +138,9 @@ export function HostActionMenu({ label, actions }: HostActionMenuProps) {
               type="button"
               role="menuitem"
               className={[
-                'dshr-menu-item',
-                action.danger === true ? 'dshr-menu-item-danger' : '',
-                action.separated === true ? 'dshr-menu-item-separated' : '',
+                'dshwp-menu-item',
+                action.danger === true ? 'dshwp-menu-item-danger' : '',
+                action.separated === true ? 'dshwp-menu-item-separated' : '',
               ].filter(Boolean).join(' ')}
               disabled={action.disabled === true}
               onClick={() => {

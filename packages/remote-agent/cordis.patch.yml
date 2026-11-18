@@ -12,13 +12,13 @@
 # — the bridge now registers with `{ prepend: true }` (see `src/service.ts`),
 # so it always runs first and `api-remotes` still serves the browser surface.
 
-# dsh-remote-agent is a host-only bundle. The row is inserted above the
+# dsh-waypoint-agent is a host-only bundle. The row is inserted above the
 # dsh-base layer and is addressable by id from a later profile patch layer.
 - insert:
-    - id: dsh-remote-agent
-      name: "@goldenpigeon/dsh-remote-agent"
+    - id: dsh-waypoint-agent
+      name: "dsh-waypoint-agent"
       config:
-        # Empty means $DSH_HOME/remote-agent/agent.json.
+        # Empty means $DSH_HOME/waypoint-agent/agent.json.
         stateFile: ''
         # Empty means "reuse the state file's token, or mint one on first run".
         token: ''

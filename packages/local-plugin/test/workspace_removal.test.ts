@@ -391,7 +391,7 @@ describe('local remote-workspace removal', () => {
     try {
       await f.service.start()
       await f.registry.delete(f.service.localWorkspaceId(f.host.id, f.workspace.workspaceId)!)
-      const response = await fetch(new Request('http://localhost/api/dsh-remote', {
+      const response = await fetch(new Request('http://localhost/api/dsh-waypoint', {
         method: 'POST', body: JSON.stringify({ endpoint: 'host/session/create',
           payload: { hostId: f.host.id, workspaceId: f.workspace.workspaceId } }),
       }))
@@ -399,7 +399,7 @@ describe('local remote-workspace removal', () => {
       assert.equal(result.ok, false)
       assert.equal(result.error.code, 'request/invalid')
       assert.match(result.error.message, /Add it again/)
-      const subResponse = await fetch(new Request('http://localhost/api/dsh-remote', {
+      const subResponse = await fetch(new Request('http://localhost/api/dsh-waypoint', {
         method: 'POST', body: JSON.stringify({ endpoint: 'host/session/create',
           payload: { hostId: f.host.id, cwd: `${f.workspace.path}/sub` } }),
       }))

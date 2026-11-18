@@ -2,10 +2,10 @@
  * Read-only remote directory browser used by the workspace creation UI.
  * It calls the remote agent over the existing SSH tunnel.
  *
- * @module dsh-remote-local/remote/directory
+ * @module dsh-waypoint/remote/directory
  */
 
-import type { RemoteDirectoryListing } from '@dsh-remote/protocol'
+import type { RemoteDirectoryListing } from '@dsh-waypoint/protocol'
 import { LocalError } from '../errors.ts'
 import type { RemoteHostsService } from '../service.ts'
 

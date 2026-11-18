@@ -1,7 +1,7 @@
 # Example: remote agent profile patch
 #
 # The bundle already inserts the row; use this patch only to override defaults.
-- id: dsh-remote-agent
+- id: dsh-waypoint-agent
   config:
     stateFile: ''
     token: ''

@@ -34,13 +34,13 @@ const TYPERT = RAW as Manifest
 
 describe('terminal-controller host face', () => {
   it('re-owns the stock terminal manifest for the fork package', () => {
-    assert.equal(TYPERT.package, 'dsh-remote-terminal-controller')
+    assert.equal(TYPERT.package, 'dsh-waypoint-terminal-controller')
     assert.equal(TYPERT.face, 'host')
     assert.equal(TYPERT.model.services[0]?.key, 'terminalController')
   })
 
   it('exports the host face the typert loader discovers', () => {
-    assert.equal(packageJson.name, 'dsh-remote-terminal-controller')
+    assert.equal(packageJson.name, 'dsh-waypoint-terminal-controller')
     assert.equal(packageJson.exports['./typert']?.default, './lib/typert.host.js')
     assert.equal(TYPERT.package, packageJson.name)
     assert.ok(packageJson.files.includes('lib'))

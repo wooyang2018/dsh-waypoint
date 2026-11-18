@@ -48,7 +48,7 @@ jobs:
         id: published
         run: |
           VERSION="$(node -p "require('./packages/local-plugin/package.json').version")"
-          if npm view "dsh-remote-local-plugin@${VERSION}" version >/dev/null 2>&1; then
+          if npm view "dsh-waypoint@${VERSION}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -57,7 +57,7 @@ jobs:
         id: agent-published
         run: |
           VERSION="$(node -p "require('./packages/remote-agent/package.json').version")"
-          if npm view "@goldenpigeon/dsh-remote-agent@${VERSION}" version >/dev/null 2>&1; then
+          if npm view "dsh-waypoint-agent@${VERSION}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -65,22 +65,32 @@ jobs:
       - name: Stage remote agent tarball
         if: steps.agent-published.outputs.exists != 'true'
         run: |
-          npm stage publish packages/local-plugin/assets/goldenpigeon-dsh-remote-agent-*.tgz --tag latest --access public --provenance
-          echo "::notice::Remote agent staged. Approve it with 2FA: npm stage list @goldenpigeon/dsh-remote-agent"
+          npm stage publish packages/local-plugin/assets/dsh-waypoint-agent-*.tgz --tag latest --access public --provenance
+          echo "::notice::Remote agent staged. Approve it with 2FA: npm stage list dsh-waypoint-agent"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Stage local plugin tarball
         if: steps.published.outputs.exists != 'true'
         run: |
-          npm stage publish packages/local-plugin/dsh-remote-local-plugin-*.tgz --tag latest --access public --provenance
-          echo "::notice::npm package staged. Approve it with 2FA: npm stage list dsh-remote-local-plugin && npm stage approve <stage-id>"
+          npm stage publish packages/local-plugin/dsh-waypoint-*.tgz --tag latest --access public --provenance
+          echo "::notice::npm package staged. Approve it with 2FA: npm stage list dsh-waypoint && npm stage approve <stage-id>"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # The plugin-market entry points at `releases/latest/download/dsh-waypoint.tgz`.
+      # `latest/download/` resolves `latest` at request time but takes the file
+      # name literally, so a versioned asset name would 404 the moment the next
+      # release is cut — silently, and least of all to us. Publish a
+      # version-free copy for that URL and keep the versioned one for humans.
+      - name: Prepare the version-free install asset
+        run: |
+          VERSION="$(node -p "require('./packages/local-plugin/package.json').version")"
+          cp "packages/local-plugin/dsh-waypoint-${VERSION}.tgz" "$RUNNER_TEMP/dsh-waypoint.tgz"
       - name: Upload GitHub release assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           body_path: ${{ runner.temp }}/release-notes.md
           files: |
-            packages/local-plugin/dsh-remote-local-plugin-*.tgz
-            packages/local-plugin/assets/goldenpigeon-dsh-remote-agent-*.tgz
+            packages/local-plugin/dsh-waypoint-*.tgz
+            packages/local-plugin/assets/dsh-waypoint-agent-*.tgz
+            ${{ runner.temp }}/dsh-waypoint.tgz

@@ -5,15 +5,15 @@
  * installer bootstrap script over SSH, then waits for the remote state file.
  * No separate installer command is required.
  *
- * @module dsh-remote-local/remote/provisioner
+ * @module dsh-waypoint/remote/provisioner
  */
 
 import { existsSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { InstallerError, resolveScpBinary, type InstallerErrorCode } from '@dsh-remote/installer'
-import { provisionRemoteAgent } from '@dsh-remote/installer'
-import { isAgentLive } from '@dsh-remote/protocol'
+import { InstallerError, resolveScpBinary, type InstallerErrorCode } from '@dsh-waypoint/installer'
+import { provisionRemoteAgent } from '@dsh-waypoint/installer'
+import { isAgentLive } from '@dsh-waypoint/protocol'
 import { compareVersions, resolveLocalDshVersion } from '../version.ts'
 import type { ResolvedConfig } from '../config.ts'
 import { LocalError } from '../errors.ts'
@@ -84,7 +84,7 @@ export class RemoteProvisioner {
     } = {},
   ): Promise<void> {
     const tarball = findAgentTarball()
-    const version = /dsh-remote-agent-(.+)\.tgz$/u.exec(tarball)?.[1]
+    const version = /dsh-waypoint-agent-(.+)\.tgz$/u.exec(tarball)?.[1]
     let baselinePid: number | undefined
     let baselineKnown = false
     try {
@@ -307,7 +307,7 @@ export function agentVersionMatches(actual: string, expected: string | undefined
 /** Version bundled with this local plugin, if its packed asset is available. */
 export function bundledAgentVersion(): string | undefined {
   try {
-    return /dsh-remote-agent-(.+)\.tgz$/u.exec(findAgentTarball())?.[1]
+    return /dsh-waypoint-agent-(.+)\.tgz$/u.exec(findAgentTarball())?.[1]
   } catch {
     return undefined
   }
@@ -360,7 +360,7 @@ export function findAgentTarball(): string {
     const dir = fileURLToPath(candidate)
     if (!existsSync(dir)) continue
     const tarballs = readdirSync(dir)
-      .filter(name => name.startsWith('goldenpigeon-dsh-remote-agent-') && name.endsWith('.tgz'))
+      .filter(name => name.startsWith('dsh-waypoint-agent-') && name.endsWith('.tgz'))
       .sort()
     if (tarballs.length === 1) return join(dir, tarballs[0]!)
     if (tarballs.length > 1) {
@@ -371,6 +371,6 @@ export function findAgentTarball(): string {
   }
   throw new LocalError(
     'internal',
-    '本地插件没有内置 dsh-remote-agent 安装包；请重新执行 pnpm build 生成 assets',
+    '本地插件没有内置 dsh-waypoint-agent 安装包；请重新执行 pnpm build 生成 assets',
   )
 }

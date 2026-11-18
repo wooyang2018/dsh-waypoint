@@ -5,7 +5,7 @@
  * the bearer token, the live port, and liveness metadata. The local plugin
  * discovers it over SSH before opening the tunnel.
  *
- * @module dsh-remote-agent/config
+ * @module dsh-waypoint-agent/config
  */
 
 import { homedir } from 'node:os'
@@ -14,7 +14,7 @@ import z from '@deepseek-ai/schemastery'
 
 /** User-facing plugin config (all fields optional in the patch layer). */
 export interface Config {
-  /** State file path; empty means `$DSH_HOME/remote-agent/agent.json`. */
+  /** State file path; empty means `$DSH_HOME/waypoint-agent/agent.json`. */
   readonly stateFile?: string
   /** Fixed bearer token; empty means reuse or mint. */
   readonly token?: string
@@ -58,7 +58,7 @@ export function resolveDshHome(env: NodeJS.ProcessEnv = process.env): string {
 /** Expand a leading `~` and resolve relative paths against the DSH home. */
 export function resolveUserPath(path: string, home = resolveDshHome()): string {
   const trimmed = path.trim()
-  if (trimmed === '') return join(home, 'remote-agent', 'agent.json')
+  if (trimmed === '') return join(home, 'waypoint-agent', 'agent.json')
   if (trimmed === '~') return home
   if (trimmed.startsWith('~/')) return join(home, trimmed.slice(2))
   return isAbsolute(trimmed) ? trimmed : resolve(home, trimmed)
