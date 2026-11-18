@@ -38,6 +38,12 @@ jobs:
       - name: Build the installable bundle
         id: pack
         run: |
+          # `pnpm -r build` packs the remote agent with a `-dev-<stamp>` version,
+          # which is right while iterating and wrong in a published artifact: the
+          # agent inside the plugin reports that string as its runtime version,
+          # and the remote host's install decision is keyed on it. Re-pack it at
+          # the manifest version before the plugin copies it in.
+          node scripts/package-agent.mjs --release
           # `--release` keeps the manifest version. Without it the packer stamps
           # a unique `-dev-<stamp>-<random>` prerelease, which is what a local
           # iteration wants and what a published release must never be: the tag
