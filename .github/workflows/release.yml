@@ -35,7 +35,16 @@ jobs:
           case "$VERSION" in
             *-*) echo "::error::Refusing to release prerelease remote agent $VERSION"; exit 1 ;;
           esac
-      - run: node scripts/release-plugin.mjs
+      - name: Build the installable bundle
+        id: pack
+        run: |
+          # `--release` keeps the manifest version. Without it the packer stamps
+          # a unique `-dev-<stamp>-<random>` prerelease, which is what a local
+          # iteration wants and what a published release must never be: the tag
+          # check below would fail, and a `latest` tag would carry a prerelease.
+          TARBALL="$(node scripts/release-plugin.mjs --release)"
+          echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
+          test -f "$TARBALL"
       - name: Verify tag matches package version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -106,8 +115,12 @@ jobs:
       # version-free copy for that URL and keep the versioned one for humans.
       - name: Prepare the version-free install asset
         run: |
-          VERSION="$(node -p "require('./packages/local-plugin/package.json').version")"
-          cp "packages/local-plugin/dsh-waypoint-${VERSION}.tgz" "$RUNNER_TEMP/dsh-waypoint.tgz"
+          # Use the path the packer actually produced rather than reconstructing
+          # it from the manifest: a dev-stamped tarball name would silently
+          # break this copy, and the release asset is what the plugin-market
+          # entry downloads.
+          cp "${{ steps.pack.outputs.tarball }}" "$RUNNER_TEMP/dsh-waypoint.tgz"
+          ls -l "$RUNNER_TEMP/dsh-waypoint.tgz"
       - name: Upload GitHub release assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
