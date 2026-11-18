@@ -409,3 +409,5 @@ then follow `docs/operations.md` for moving the host registry and cleaning up th
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
