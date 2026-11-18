@@ -65,6 +65,7 @@ export const UI_TEXT_KEYS = [
   'error.agentInstallNodeMissing',
   'error.agentInstallNodeOutdated',
   'error.agentInstallNoNpm',
+  'error.agentInstallNoPnpm',
   'error.agentInstallDshMissing',
   'error.healthCheckFailed',
   'error.tunnelExited',

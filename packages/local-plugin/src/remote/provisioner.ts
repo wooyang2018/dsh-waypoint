@@ -265,6 +265,7 @@ const INSTALLER_CODES: ReadonlySet<string> = new Set<InstallerErrorCode>([
   'install/node-missing',
   'install/node-outdated',
   'install/npm-missing',
+  'install/pnpm-missing',
   'install/dsh-missing',
   'install/profile-migrate-failed',
 ])
@@ -284,6 +285,8 @@ export function installerUi(error: unknown): UiText {
       return { key: 'error.agentInstallNodeOutdated', params: { required: MINIMUM_NODE_VERSION } }
     case 'install/npm-missing':
       return { key: 'error.agentInstallNoNpm' }
+    case 'install/pnpm-missing':
+      return { key: 'error.agentInstallNoPnpm' }
     case 'install/dsh-missing':
       return { key: 'error.agentInstallDshMissing' }
     default:

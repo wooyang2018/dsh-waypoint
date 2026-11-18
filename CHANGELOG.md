@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Report a failed `npm install pnpm` as its own cause (new bootstrap `exit 25`,
+  `install/pnpm-missing`, localized as `error.agentInstallNoPnpm`) instead of the
+  generic "installing @deepseek-ai/dsh failed, or the installed dsh cannot start".
+  dsh is installed *after* pnpm, so a pnpm failure means dsh was never attempted;
+  the old message sent operators to the wrong prefix, the wrong Node.js version and
+  the wrong log line. The common trigger is a host that ships corepack: `bin/pnpm`
+  and `bin/pnpx` are symlinks into corepack, and npm refuses to replace them
+  (`EEXIST`) without `--force`. The bootstrap now names that fix on stderr.
 - Add `--dry-run` and `--keep-tracked` to `pnpm clean`, and warn when a removal would delete a file
   git still tracks. `lib/` is gitignored, but a file git already tracks stays tracked after the
   ignore rule appears, so a plain clean could leave an unrelated deletion staged for the next commit.

@@ -94,6 +94,7 @@ describe('installer failure surfacing', () => {
     assert.equal(keyFor(21), 'error.agentInstallNodeMissing')
     assert.equal(keyFor(22), 'error.agentInstallNodeOutdated')
     assert.equal(keyFor(23), 'error.agentInstallNoNpm')
+    assert.equal(keyFor(25), 'error.agentInstallNoPnpm')
     assert.equal(keyFor(24), 'error.agentInstallDshMissing')
   })
 

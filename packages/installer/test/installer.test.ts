@@ -262,6 +262,24 @@ describe('bootstrap rendering', () => {
     assert.match(script, /remote-agent\/agent\.json/)
   })
 
+  it('separates a pnpm install failure from a dsh install failure', () => {
+    const script = fromOptions(parseArgs(baseArgs), '/tmp/agent.tgz')
+    // dsh is installed after pnpm, so a failed pnpm install leaves dsh never
+    // attempted. Reporting that as "dsh-missing" sent an operator looking at
+    // the wrong prefix, the wrong Node version and the wrong log line.
+    assert.match(script, /installing pnpm@\$PNPM_VERSION globally into \$DSH_PREFIX/)
+    const pnpmBlock = script.slice(
+      script.indexOf('installing pnpm@$PNPM_VERSION globally'),
+      script.indexOf('installing @deepseek-ai/dsh@$DSH_VERSION globally'),
+    )
+    assert.ok(pnpmBlock.length > 0, 'expected the pnpm install block to precede the dsh one')
+    assert.match(pnpmBlock, /exit 25/)
+    assert.doesNotMatch(pnpmBlock, /exit 24/)
+    // The corepack conflict is the common cause for that EEXIST; name the fix.
+    assert.match(pnpmBlock, /corepack shims/)
+    assert.match(pnpmBlock, /rm -f "\$DSH_PREFIX\/bin\/pnpm" "\$DSH_PREFIX\/bin\/pnpx"/)
+  })
+
   it('checks Node.js instead of installing it', () => {
     const script = fromOptions(parseArgs(baseArgs), '/tmp/agent.tgz')
     // The script must never download or unpack a runtime: choosing a Node

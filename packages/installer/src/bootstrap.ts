@@ -328,7 +328,13 @@ echo "dsh-remote: installing pnpm@$PNPM_VERSION globally into $DSH_PREFIX"
 if ! npm install --global --prefix "$DSH_PREFIX" --no-audit --no-fund "pnpm@$PNPM_VERSION"; then
   echo "dsh-remote: npm could not install pnpm into $DSH_PREFIX" >&2
   echo "dsh-remote: point remoteGlobalPrefix at a directory you own (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
-  exit 24
+  # The common cause on hosts that ship corepack: <prefix>/bin/pnpm is a symlink
+  # into corepack, and npm refuses to replace it ("EEXIST: file already exists")
+  # without --force. dsh is never attempted, so this must not report itself as a
+  # dsh failure.
+  echo "dsh-remote: if <prefix>/bin/pnpm or pnpx already exist (corepack shims), remove them and retry:" >&2
+  echo "dsh-remote:   rm -f \"$DSH_PREFIX/bin/pnpm\" \"$DSH_PREFIX/bin/pnpx\"" >&2
+  exit 25
 fi
 
 echo "dsh-remote: installing @deepseek-ai/dsh@$DSH_VERSION globally into $DSH_PREFIX"

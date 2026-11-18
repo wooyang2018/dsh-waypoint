@@ -18,6 +18,8 @@ export type InstallerErrorCode =
   | 'install/node-outdated'
   /** Node.js is present but the distribution ships no npm. */
   | 'install/npm-missing'
+  /** `npm install pnpm` failed, so `dsh` was never installed. */
+  | 'install/pnpm-missing'
   /** `npm install @deepseek-ai/dsh` ran but produced no working `dsh`. */
   | 'install/dsh-missing'
   /** A legacy `dsh-remote-agent` profile entry could not be migrated. */
@@ -57,6 +59,11 @@ export const BOOTSTRAP_EXIT_CODES: readonly BootstrapExitCode[] = [
     code: 24,
     installerCode: 'install/dsh-missing',
     message: 'installing @deepseek-ai/dsh into the npm global prefix did not produce a working `dsh` command',
+  },
+  {
+    code: 25,
+    installerCode: 'install/pnpm-missing',
+    message: 'installing pnpm into the npm global prefix failed, so dsh was never installed',
   },
   {
     code: 26,
