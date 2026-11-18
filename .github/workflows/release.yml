@@ -44,8 +44,18 @@ jobs:
       - name: Extract release notes
         if: startsWith(github.ref, 'refs/tags/')
         run: node scripts/release-notes.mjs > "$RUNNER_TEMP/release-notes.md"
+      - name: Check whether npm publishing is configured
+        id: npm
+        run: |
+          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NPM_TOKEN is not set; this run publishes the GitHub release only. Add the secret and re-run to stage the npm packages."
+          fi
       - name: Check whether this version is already published
         id: published
+        if: steps.npm.outputs.ready == 'true'
         run: |
           VERSION="$(node -p "require('./packages/local-plugin/package.json').version")"
           if npm view "dsh-waypoint@${VERSION}" version >/dev/null 2>&1; then
@@ -55,6 +65,7 @@ jobs:
           fi
       - name: Check whether the remote agent version is already published
         id: agent-published
+        if: steps.npm.outputs.ready == 'true'
         run: |
           VERSION="$(node -p "require('./packages/remote-agent/package.json').version")"
           if npm view "dsh-waypoint-agent@${VERSION}" version >/dev/null 2>&1; then
@@ -63,17 +74,29 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Stage remote agent tarball
-        if: steps.agent-published.outputs.exists != 'true'
+        if: steps.npm.outputs.ready == 'true' && steps.agent-published.outputs.exists != 'true'
         run: |
           npm stage publish packages/local-plugin/assets/dsh-waypoint-agent-*.tgz --tag latest --access public --provenance
           echo "::notice::Remote agent staged. Approve it with 2FA: npm stage list dsh-waypoint-agent"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Stage local plugin tarball
-        if: steps.published.outputs.exists != 'true'
+        if: steps.npm.outputs.ready == 'true' && steps.published.outputs.exists != 'true'
         run: |
           npm stage publish packages/local-plugin/dsh-waypoint-*.tgz --tag latest --access public --provenance
           echo "::notice::npm package staged. Approve it with 2FA: npm stage list dsh-waypoint && npm stage approve <stage-id>"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Stage terminal controller tarball
+        if: steps.npm.outputs.ready == 'true' && steps.published.outputs.exists != 'true'
+        run: |
+          # The plugin bundles this package, so it is not required at install
+          # time; publishing it keeps the bundled dependency resolvable for
+          # anyone reading the manifest. `release-plugin.mjs` only copies it into
+          # the plugin's node_modules, so pack a standalone copy here.
+          (cd packages/terminal-controller && npm pack --silent --ignore-scripts --pack-destination .)
+          npm stage publish packages/terminal-controller/dsh-waypoint-terminal-controller-*.tgz --tag latest --access public --provenance
+          echo "::notice::Terminal controller staged. Approve it with 2FA: npm stage list dsh-waypoint-terminal-controller"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       # The plugin-market entry points at `releases/latest/download/dsh-waypoint.tgz`.
