@@ -23,9 +23,11 @@ Renaming a DSH bundle renames the identity DSH persists, so **this is not an in-
   answering the old protocol until its agent is reinstalled; Settings offers **Reinstall** for
   exactly that case.
 - Loader rows: `dsh-remote-local` → `dsh-waypoint`, `terminal-controller-remote` →
-  `terminal-controller-waypoint`. The installer still detects and removes a leftover
-  `dsh-remote-agent` dependency and stops a leftover `dsh-remote-agent.service`, so an
-  upgraded machine never runs two agents.
+  `terminal-controller-waypoint`. On its next run the installer also removes a leftover upstream
+  `dsh-remote-agent` dependency from the remote profile, so the profile holds one agent rather than
+  two. It does **not** stop an upstream `dsh-remote-agent.service` that is still running: that unit
+  belongs to the old install, and `docs/operations.md` walks through disabling it — until you do, the
+  old agent keeps answering on the same remote host.
 
 Everyone else keeps their state: an install of this version starts from an empty host registry.
 
@@ -33,6 +35,27 @@ Previously, in the 0.8.x line:
 
 ## Unreleased
 
+- Offer a deliberate **install remote Node.js** action instead of dead-ending on a missing runtime.
+  Provisioning still never installs one (`exit 21`/`exit 22`), but the expanded host card now probes
+  the remote first and then, on confirmation, installs nvm `v0.40.1` and the latest Node.js LTS
+  (`nvm install --lts`). nvm's installer runs with `PROFILE=/dev/null`, so no shell startup file is
+  modified; the card prints the snippet to add yourself. The finished panel offers **Reinstall**
+  because the running DSH keeps its old runtime until provisioning reruns. The action never rewrites
+  your `nvm alias default`, so the Node.js your own shells use is untouched; DSH resolves `lts/*`
+  directly. Verified end to end on a real host: from no nvm and no Node.js, and on a host where a
+  newer LTS already satisfied the minimum (nothing changed).
+- Stop retrying failures a retry cannot fix. A host with no Node.js, an outdated one, no npm, or a
+  profile that refuses migration is recorded as blocked: reconnecting no longer re-uploads the agent
+  and reruns the bootstrap every 30 seconds, the card keeps the real cause instead of a later
+  timeout, and the "retrying, attempt N" line stops growing. Transient failures still retry, now
+  bounded by the new `provisionRetryLimit` (default 3). **Reinstall** clears the block.
+- Prefer the nvm Node.js over an older system one during provisioning, so reinstalling after an
+  install actually switches the runtime instead of silently reusing the old `node`.
+- One source of truth for the minimum Node.js version and the shell check that enforces it
+  (`node-runtime.ts`), so the bootstrap, `doctor`, and the localized message cannot disagree.
+- Fix the documentation, which claimed in one place that the installer downloads a Node.js tarball
+  "when needed" and in another that it never installs one. `docs/operations.md` now describes the
+  actual behaviour, including the new install action.
 - Report a failed `npm install pnpm` as its own cause (new bootstrap `exit 25`,
   `install/pnpm-missing`, localized as `error.agentInstallNoPnpm`) instead of the
   generic "installing @deepseek-ai/dsh failed, or the installed dsh cannot start".

@@ -47,7 +47,14 @@ focused mirror regression checks are in [docs/testing.md](docs/testing.md).
 
 CI runs two things worth knowing about: a `verify` job that builds, typechecks, and tests against the
 DSH version in `.github/workflows/ci.yml` → `DSH_TARGET`, and no Playwright job. The Playwright suite
-(`pnpm test:e2e`) runs locally only. See [docs/testing.md](docs/testing.md) for the job's exact steps.
+(`pnpm test:e2e`) runs locally only, on macOS or Windows. See [docs/testing.md](docs/testing.md) for
+the job's exact steps.
+
+The fixture resolves the DSH CLI and a Chromium-family browser from the platform's standard install
+locations rather than hard-coding macOS paths, and it starts the Windows launcher by resolving what
+`dsh.cmd` runs (the Electron binary with `ELECTRON_RUN_AS_NODE` plus the CLI entry inside `app.asar`).
+`child_process` cannot start a `.cmd`, and going through a shell changes stdio, so the launcher path
+must not be spawned directly on Windows.
 
 ## Adapting to a new DSH release
 

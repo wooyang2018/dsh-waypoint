@@ -48,10 +48,48 @@ shells read, so a host with both a system Node.js and a version-managed one woul
 installer adopt the system Node — and compute a system-wide npm prefix alongside it. `doctor` shows
 the resulting `node` and `global_prefix` so this is visible before an install.
 
-Node.js is only detected, never installed. A missing or too-old runtime ends provisioning with
-`exit 21`/`exit 22` and a message naming what to install; the host card surfaces it. This keeps the
-choice of runtime with the operator and prevents the installer from leaving a second Node.js on a
-machine that already had one.
+### Remote Node.js
+
+Provisioning requires Node.js 22.19+ and **never installs one**. Downloading and unpacking a runtime
+is the kind of change an operator should make deliberately, and a silently chosen version is exactly
+what leaves two runtimes fighting over one command. A missing or too-old runtime ends provisioning
+with `exit 21`/`exit 22` and a message naming the shell it asked and the version it found.
+
+That failure leads somewhere instead of dead-ending: the expanded host card offers **远端 Node.js →
+安装** (also in the `⋯` menu). The button is the deliberate version of the same decision:
+
+1. it **probes first** and reports what the host actually has — a host that already satisfies the
+   minimum gets "已满足" and nothing is downloaded;
+2. otherwise it states the plan before running: nvm is installed under this account, then
+   `nvm install --lts` installs the current LTS;
+3. `PROFILE=/dev/null` is passed to nvm's installer, so **no shell startup file is modified**; the
+   card prints the `nvm` snippet for you to add yourself if you want it in an interactive shell;
+4. the finished card offers **重新安装远端 agent**, because the running DSH still uses the previous
+   runtime until provisioning reruns.
+
+Details worth knowing:
+
+- nvm is pinned to `v0.40.1`, installed with `git clone --depth 1 --branch` when `git` exists and via
+  the official `install.sh` otherwise. Neither needs root and neither runs `curl | sh` as root.
+- The install never rewrites your `nvm alias default`, so the Node.js your own shells use is
+  unchanged. DSH resolves `lts/*` directly instead. Two caveats are nvm's own behaviour, not the
+  plugin's: `nvm install --lts` switches the *current* version of that one non-interactive shell, and
+  on a host with no nvm at all nvm itself creates a `default` alias for the first version it installs.
+- The install is idempotent: on a host that already has a working `nvm` and a current LTS it reports
+  `vX is already installed` and changes nothing.
+- The probe refuses before downloading anything on a platform with no official Node.js build (only
+  Linux and macOS), or when the host has no `git`, `curl`, or `wget`.
+- After nvm has a newer Node.js, the bootstrap prefers it over an older system one, so **重新安装**
+  actually switches the runtime instead of silently reusing the old `node`.
+- Installing through nvm does not by itself change `remoteGlobalPrefix`: `npm prefix -g` resolves
+  inside the nvm version directory, so a reinstall puts `dsh` next to the new Node.js. An explicitly
+  configured `remoteGlobalPrefix` still wins.
+
+Permanent causes stop automatic retries. A host with no Node.js, an outdated one, no npm, or a
+profile that refuses migration is recorded as blocked: reconnecting does not re-upload the agent or
+rerun the bootstrap, the card stays in the error state, and the retry line disappears. Transient
+failures keep retrying, bounded by `provisionRetryLimit` (default 3). Either way, **重新安装** clears
+the block and runs a full attempt.
 
 The host card shows `安装中 → 正在连接 → 已连接`. If it fails, fix SSH and click **重新安装**.
 
@@ -166,6 +204,8 @@ Local plugin profile override:
     healthIntervalMs: 15000
     reconnect: true
     maxReconnectDelayMs: 30000
+    # Automatic reconnect attempts before the card stops and waits for a person.
+    provisionRetryLimit: 3
     strictHostKeyChecking: accept-new
 
     autoProvision: true
@@ -290,7 +330,11 @@ upgrade.
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| `等待远端 dsh web 就绪…` | The remote DSH web host did not write its state file. | Check `systemctl --user status dsh-waypoint-agent` and `~/.dsh/waypoint-agent/web.log`. The installer discovers Node through PATH/version managers and installs a verified official Node.js tarball when needed; reinstall if the bootstrap failed |
+| `等待远端 dsh web 就绪…` | The remote DSH web host did not write its state file. | Check `systemctl --user status dsh-waypoint-agent` and `~/.dsh/waypoint-agent/web.log`. Node.js is discovered through the account's shell and never installed by provisioning; the card's **远端 Node.js → 安装** action installs nvm plus the latest LTS when you want it. Reinstall if the bootstrap failed |
+| Install stops saying Node.js was not found, and the card stops retrying | Provisioning never installs a runtime, and a permanent cause no longer loops | Click **安装** under **远端 Node.js** (nvm + latest LTS, no shell files touched), then **重新安装**. Or install Node.js 22.19+ yourself in that account and reinstall |
+| `安装` fails with an unsupported-platform message | The remote is Windows, or its CPU architecture has no official Node.js build | Install Node.js 22.19+ on the remote manually; only Linux and macOS can be provisioned automatically |
+| `安装` fails saying it needs git, curl, or wget | None of the three exists on the remote | Install one of them (curl is usually enough) and retry the button |
+| The remote still reports the old Node.js after installing | The running DSH was started with the previous runtime | Click **重新安装** on the card; the bootstrap now prefers the nvm Node.js over an older system one |
 | Install never finishes | SSH auth is interactive or remote lacks Node/npm | `ssh -o BatchMode=yes host true`; run `doctor`; inspect the card |
 | `remote agent state file was not found` | Auto-provision disabled or remote start failed | Click **重新安装**; inspect `$DSH_HOME/waypoint-agent/web.log` |
 | `does not accept POST` | Remote agent older than local plugin | Click **重新安装** |
