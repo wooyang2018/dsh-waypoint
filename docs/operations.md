@@ -245,6 +245,47 @@ The normal plugin flow calls the same provisioning library.
   target version again.
 - If a remote restart changes the port, click **重新发现**.
 
+## Switching over from the upstream `dsh-remote` bundle
+
+`dsh-waypoint` is a fork, and the rename changed every identity DSH persists. Nothing is migrated
+automatically, and the two bundles must not be installed side by side — both would register a
+**Remote development** Settings section and both would answer for the same SSH hosts.
+
+1. Remove the upstream bundle from the profile:
+
+   ```sh
+   dsh plugin --profile <desktop|web> remove dsh-remote-local-plugin
+   ```
+
+2. Move the host registry, which is where tokens and host records live:
+
+   ```sh
+   mv "$DSH_HOME/remote" "$DSH_HOME/waypoint"
+   ```
+
+   Do this only while DSH is closed. Skipping it is safe but leaves the list empty, and every host
+   re-provisioning afterwards starts from scratch.
+
+3. Clean up the old service on each remote host. The new agent installs as
+   `dsh-waypoint-agent.service` and writes to `$DSH_HOME/waypoint-agent`, so the old unit would keep
+   running a second agent against the same remote DSH:
+
+   ```sh
+   systemctl --user disable --now dsh-remote-agent.service
+   rm -f ~/.config/systemd/user/dsh-remote-agent.service
+   # nohup deployments: stop the process recorded in the old state directory
+   kill "$(cat "$DSH_HOME/remote-agent/web.pid")" 2>/dev/null || true
+   ```
+
+   The installer also strips a leftover upstream dependency from the remote profile on its next run,
+   but it cannot stop a unit it no longer owns.
+
+4. Reinstall the plugin version you want and click **重新发现** on each host.
+
+An old remote agent answers the old protocol and the new plugin will refuse it as a version
+mismatch; **重新安装** on the host card is the fix, and it is the same action used for any agent
+upgrade.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Action |
