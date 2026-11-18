@@ -32,6 +32,8 @@
     "assets",
     "cordis.patch.yml",
     "icon-180.png",
+    "screenshots",
+    "screenshots.json",
     "README.md"
   ],
   "dsh": {

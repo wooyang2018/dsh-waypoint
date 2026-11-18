@@ -35,7 +35,7 @@ async function fixture(options: {
   temporary.push(home)
   const sshConfig = join(home, 'ssh-config')
   if (options.configText !== undefined) await writeFile(sshConfig, options.configText)
-  const stateDir = join(home, 'remote')
+  const stateDir = join(home, 'waypoint')
   if (options.records !== undefined && options.records.length > 0) {
     const store = new HostStore(`${stateDir}/hosts.json`)
     for (const record of options.records) await store.add(record)

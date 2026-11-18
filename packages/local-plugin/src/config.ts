@@ -26,6 +26,12 @@ export interface Config {
   readonly healthIntervalMs?: number
   readonly reconnect?: boolean
   readonly maxReconnectDelayMs?: number
+  /**
+   * Automatic reconnect attempts allowed before a host is left in the error
+   * state. An uncapped backoff keeps a permanent failure looking like a
+   * transient one forever.
+   */
+  readonly provisionRetryLimit?: number
   /** `yes`, `no`, `ask`, or `accept-new`. */
   readonly strictHostKeyChecking?: string
   /** Provision DSH + dsh-waypoint-agent when discovery finds no agent. */
@@ -74,6 +80,7 @@ export const Config: z<Config> = z.object({
   healthIntervalMs: z.number().min(2_000).max(600_000).default(15_000),
   reconnect: z.boolean().default(true),
   maxReconnectDelayMs: z.number().min(1_000).max(600_000).default(30_000),
+  provisionRetryLimit: z.number().min(1).max(50).default(3),
   strictHostKeyChecking: z.string().default('accept-new'),
   autoProvision: z.boolean().default(true),
   remoteDshHome: z.string().default('~/.dsh'),
@@ -112,6 +119,7 @@ export interface ResolvedConfig {
   readonly healthIntervalMs: number
   readonly reconnect: boolean
   readonly maxReconnectDelayMs: number
+  readonly provisionRetryLimit: number
   readonly strictHostKeyChecking: 'yes' | 'no' | 'ask' | 'accept-new'
   readonly autoProvision: boolean
   readonly remoteDshHome: string
@@ -145,7 +153,7 @@ export function resolveDshHome(env: NodeJS.ProcessEnv = process.env): string {
 /** Expand `~` and resolve relative paths. */
 export function resolveLocalPath(path: string, home = resolveDshHome()): string {
   const trimmed = path.trim()
-  if (trimmed === '') return join(home, 'remote')
+  if (trimmed === '') return join(home, 'waypoint')
   if (trimmed === '~') return home
   if (trimmed.startsWith('~/')) return join(home, trimmed.slice(2))
   return isAbsolute(trimmed) ? trimmed : resolve(home, trimmed)
@@ -206,6 +214,7 @@ export function resolveConfig(config: Config = {}, env: NodeJS.ProcessEnv = proc
     healthIntervalMs: config.healthIntervalMs ?? 15_000,
     reconnect: config.reconnect ?? true,
     maxReconnectDelayMs: config.maxReconnectDelayMs ?? 30_000,
+    provisionRetryLimit: config.provisionRetryLimit ?? 3,
     strictHostKeyChecking: strict,
     autoProvision: config.autoProvision ?? true,
     remoteDshHome,

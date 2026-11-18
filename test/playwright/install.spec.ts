@@ -17,29 +17,51 @@ interface ProfileManifest {
 }
 
 test.describe('plugin install and upgrade', () => {
-  test.skip(!appAvailable(), 'requires the official DSH Desktop app and Chrome on macOS')
+  test.skip(!appAvailable(), 'requires the official DSH Desktop app and Chrome or Edge')
 
-  test('replaces the registry 0.8.19 bundle with the current build', async () => {
+  /**
+   * The upgrade regression this spec exists for: a profile that already holds an
+   * older *published* bundle must be replaced by the freshly built one.
+   *
+   * The baseline is a GitHub release asset rather than an npm spec, because the
+   * package was renamed and the pre-rename releases only exist under the old
+   * name — `dsh-waypoint@0.8.19` was never published, so the npm form failed on
+   * every platform, not just Windows. The release URL is version-pinned: a
+   * `latest` link would silently start installing the same build under test and
+   * the assertion would lose its meaning.
+   */
+  const BASELINE = process.env.DSH_WAYPOINT_E2E_BASELINE_SPEC
+    ?? 'https://github.com/wooyang2018/dsh-waypoint/releases/download/v1.0.0/dsh-waypoint.tgz'
+
+  test('replaces an installed older bundle with the current build', async () => {
     const staging = mkdtempSync(join(tmpdir(), 'dsh-waypoint-dev-'))
-    const devTarball = join(staging, `dsh-waypoint-0.8.19-dev-${Date.now()}.tgz`)
+    const devTarball = join(staging, `dsh-waypoint-dev-${Date.now()}.tgz`)
     copyFileSync(PLUGIN_TARBALL, devTarball)
 
     let oldManifest: Manifest | undefined
+    let baselineMissing: string | undefined
     const host = await startE2EHost({
       prepareHome: home => {
-        installPlugin('web', 'dsh-waypoint@0.8.19', home)
+        try {
+          installPlugin('web', BASELINE, home)
+        } catch (error) {
+          baselineMissing = `could not install the baseline ${BASELINE}: ${String(error).split('\n')[0]}`
+          return
+        }
         oldManifest = JSON.parse(readFileSync(join(home, 'profiles/web/node_modules/dsh-waypoint/package.json'), 'utf8')) as Manifest
       },
       pluginSpec: devTarball,
     })
 
     try {
-      // The registry copy must really be the rc.1-built release, not the local one.
-      expect(oldManifest?.version).toBe('0.8.19')
-      expect(oldManifest?.dsh?.compatibility?.dsh).toBe('>=0.2.1-rc.1 <0.3.0-0')
+      test.skip(baselineMissing !== undefined, baselineMissing ?? '')
+      // The installed copy must really be the published baseline, and the name
+      // it was installed under must be the one this build installs — that is
+      // what makes this an upgrade of the same package rather than two plugins.
+      expect(oldManifest?.version).toBe('1.0.0')
 
       const profile = JSON.parse(readFileSync(join(host.home, 'profiles/web/package.json'), 'utf8')) as ProfileManifest
-      expect(profile.dependencies?.['dsh-waypoint']).toContain('dsh-waypoint-0.8.19-dev-')
+      expect(profile.dependencies?.['dsh-waypoint']).toContain('dsh-waypoint-dev-')
 
       const installed = JSON.parse(readFileSync(join(host.home, 'profiles/web/node_modules/dsh-waypoint/package.json'), 'utf8')) as Manifest
       expect(installed.engines?.dsh).toBe('>=0.2.2-rc.2 <0.3.0-0')

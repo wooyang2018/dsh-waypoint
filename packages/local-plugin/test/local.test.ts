@@ -98,12 +98,14 @@ describe('config', () => {
     const config = resolveConfig({}, { DSH_HOME: '/srv/dsh' })
     // DSH_HOME names a path on this machine, so resolution follows the host
     // platform: Windows anchors it to a drive, POSIX keeps it absolute.
-    assert.equal(config.stateDir, resolve('/srv/dsh', 'remote'))
+    assert.equal(config.stateDir, resolve('/srv/dsh', 'waypoint'))
     assert.equal(config.sshBinary, 'ssh')
     assert.equal(config.reconnect, true)
     assert.equal(config.credentialProxy, false)
     assert.equal(config.copyModelKey, true)
     assert.equal(config.remoteModelBaseUrl, 'https://api.deepseek.com/anthropic')
+    // An uncapped retry budget is what made a permanent failure look transient.
+    assert.equal(config.provisionRetryLimit, 3)
     assert.throws(() => resolveConfig({ strictHostKeyChecking: 'bogus' }), /strictHostKeyChecking/)
   })
 

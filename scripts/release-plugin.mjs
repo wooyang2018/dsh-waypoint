@@ -61,7 +61,7 @@ for (const required of [
 
 const staging = mkdtempSync(join(tmpdir(), 'dsh-waypoint-release-'))
 try {
-  for (const entry of ['lib', 'assets', 'cordis.patch.yml', 'icon-180.png', 'README.md']) {
+  for (const entry of ['lib', 'assets', 'cordis.patch.yml', 'icon-180.png', 'screenshots', 'screenshots.json', 'README.md']) {
     cpSync(join(pluginDir, entry), join(staging, entry), { recursive: true })
   }
   cpSync(join(repoRoot, 'LICENSE'), join(staging, 'LICENSE'))
@@ -74,7 +74,7 @@ try {
   const published = {
     ...manifest,
     version,
-    files: ['lib', 'assets', 'cordis.patch.yml', 'icon-180.png', 'README.md', 'LICENSE'],
+    files: ['lib', 'assets', 'cordis.patch.yml', 'icon-180.png', 'screenshots', 'screenshots.json', 'README.md', 'LICENSE'],
     dependencies: {
       ...manifest.dependencies,
       'dsh-waypoint-terminal-controller': terminalManifest.version,

@@ -15,8 +15,10 @@ test.describe('mirrored terminal', () => {
     const errors: string[] = []
     page.on('pageerror', error => errors.push(error.message))
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
-    await page.getByRole('button', { name: 'Continue' }).click({ timeout: 5_000 }).catch(() => {})
-    await page.getByRole('button', { name: 'Open sidebar' }).click({ timeout: 5_000 }).catch(() => {})
+    // The fixture runs whatever locale the machine has (this one is zh-CN), so
+    // overlay dismissal and the terminal tab have to accept both languages.
+    await page.getByRole('button', { name: /Continue|继续/ }).click({ timeout: 5_000 }).catch(() => {})
+    await page.getByRole('button', { name: /Open sidebar|打开侧边栏/ }).click({ timeout: 5_000 }).catch(() => {})
 
     const workspace = page.getByRole('treeitem', { name: /Playwright Remote · Alpha/ })
     await expect(workspace).toBeVisible({ timeout: 30_000 })
@@ -28,7 +30,7 @@ test.describe('mirrored terminal', () => {
     await expect(input).toBeVisible({ timeout: 10_000 })
     await input.click()
     await page.keyboard.press('Control+Backquote')
-    const terminalTab = page.getByRole('tab', { name: 'Terminal' }).first()
+    const terminalTab = page.getByRole('tab', { name: /Terminal|终端/ }).first()
     await expect(terminalTab).toBeVisible({ timeout: 10_000 })
     // The right sidebar can still be animating; dispatch the tab click directly.
     await terminalTab.evaluate(element => (element as HTMLElement).click())

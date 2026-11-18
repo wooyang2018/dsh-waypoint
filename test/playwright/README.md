@@ -6,10 +6,22 @@ the user's profile, SSH hosts, or remote DSH.
 
 ## Prerequisites
 
-- macOS
-- official DSH Desktop app installed at `/Applications/DeepSeek Harness.app`
-- Google Chrome at `/Applications/Google Chrome.app`
+- macOS or Windows
+- the official DSH Desktop app (the fixture resolves the CLI from the standard
+  install locations, or `DSH_WAYPOINT_E2E_DSH_CLI`)
+- Chrome or Edge at a standard location, or `DSH_WAYPOINT_E2E_CHROME`
 - `pnpm build`/`pnpm test:e2e`
+
+The fixture does not hard-code macOS paths. On Windows the installer's launcher
+is `dsh.cmd`, which `child_process` cannot start directly, so the fixture
+resolves what that file runs — the Electron binary with `ELECTRON_RUN_AS_NODE`
+and the CLI entry inside `app.asar` — and starts that instead.
+
+One test is marked `test.fixme`: "lets only one of two windows claim a promoted
+mirror". The claim is a one-shot hand-off, and expressing the race needs both
+clients attached to the same blank *before* it is created, which the current
+single-page fixture cannot do. The same contract is covered by the unit tests in
+`packages/local-plugin/test/lazy-session.test.ts`.
 
 ## Run
 
