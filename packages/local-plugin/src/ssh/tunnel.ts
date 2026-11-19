@@ -11,6 +11,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer, connect } from 'node:net'
 import { LocalError } from '../errors.ts'
+import { resolveCommand } from './command.ts'
 import { baseSshArgs } from './probe.ts'
 import type { ParsedSshTarget } from './target.ts'
 
@@ -127,7 +128,8 @@ export class Tunnel {
     let lastError: unknown
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const localPort = await allocateLocalPort()
-      const child = spawn(options.sshBinary, tunnelArgs(options, localPort), {
+      const invocation = resolveCommand(options.sshBinary)
+      const child = spawn(invocation.command, [...invocation.prefixArgs, ...tunnelArgs(options, localPort)], {
         stdio: ['ignore', 'ignore', 'pipe'],
         windowsHide: true,
       })

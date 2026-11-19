@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { InstallerError, installerErrorForExit } from '@dsh-waypoint/installer'
-import { agentVersionDiffers, agentVersionMatches, agentVersionTransition, installerCodeOf, installerUi, resolveRemoteDshVersion } from '../src/remote/provisioner.ts'
+import { InstallerError, NodeProvisionError, installerErrorForExit } from '@dsh-waypoint/installer'
+import { agentVersionDiffers, agentVersionMatches, agentVersionTransition, installerCodeOf, installerUi, isPermanentInstallFailure, resolveRemoteDshVersion } from '../src/remote/provisioner.ts'
 
 describe('agent install target', () => {
   it('never prefers a registry package over the bundled tarball', async () => {
@@ -107,5 +107,35 @@ describe('installer failure surfacing', () => {
   it('tells the operator which Node.js version is required', () => {
     const ui = installerUi(installerErrorForExit(22))
     assert.equal(ui.params?.required, '22.19.0')
+  })
+})
+
+describe('permanent install failures', () => {
+  it('stops retrying when no retry can change the cause', () => {
+    // Re-uploading the agent and re-running the bootstrap cannot install a
+    // Node.js, add npm, or migrate a profile that refuses migration.
+    for (const exit of [21, 22, 23, 26]) {
+      assert.equal(isPermanentInstallFailure(installerErrorForExit(exit)), true, `exit ${String(exit)}`)
+    }
+  })
+
+  it('keeps retrying the causes that do clear', () => {
+    // A corepack EEXIST someone removes by hand, and a network failure: both
+    // are transient from the plugin's point of view.
+    for (const exit of [24, 25]) {
+      assert.equal(isPermanentInstallFailure(installerErrorForExit(exit)), false, `exit ${String(exit)}`)
+    }
+    assert.equal(isPermanentInstallFailure(new Error('ssh: connection refused')), false)
+    assert.equal(isPermanentInstallFailure(installerErrorForExit(7)), false)
+  })
+
+  it('maps node provisioning failures to their own sentences', () => {
+    const unsupported = new NodeProvisionError('node/unsupported-platform', 'no')
+    assert.equal(installerUi(unsupported).key, 'error.nodeUnsupported')
+    assert.equal(installerUi(new NodeProvisionError('node/no-downloader', 'no')).key, 'error.nodeUnsupported')
+    assert.equal(installerUi(new NodeProvisionError('node/verify-failed', 'no')).key, 'error.nodeVerifyFailed')
+    assert.equal(installerUi(new NodeProvisionError('node/install-failed', 'no')).key, 'error.nodeInstallFailed')
+    // A failed Node.js install is never worth an automatic retry.
+    assert.equal(isPermanentInstallFailure(unsupported), true)
   })
 })

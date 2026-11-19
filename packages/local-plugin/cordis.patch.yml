@@ -25,6 +25,10 @@
         healthIntervalMs: 15000
         reconnect: true
         maxReconnectDelayMs: 30000
+        # Automatic reconnect attempts before the card stops and waits for a
+        # person. An uncapped backoff makes a permanent failure (no Node.js)
+        # look transient forever.
+        provisionRetryLimit: 3
         strictHostKeyChecking: accept-new
 
         # One-click remote provisioning.

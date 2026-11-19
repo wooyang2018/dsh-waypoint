@@ -11,8 +11,9 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { InstallerError, resolveScpBinary, type InstallerErrorCode } from '@dsh-waypoint/installer'
+import { InstallerError, NodeProvisionError, resolveScpBinary, type InstallerErrorCode } from '@dsh-waypoint/installer'
 import { provisionRemoteAgent } from '@dsh-waypoint/installer'
+import { MINIMUM_NODE_VERSION } from '@dsh-waypoint/installer'
 import { isAgentLive } from '@dsh-waypoint/protocol'
 import { compareVersions, resolveLocalDshVersion } from '../version.ts'
 import type { ResolvedConfig } from '../config.ts'
@@ -271,12 +272,64 @@ const INSTALLER_CODES: ReadonlySet<string> = new Set<InstallerErrorCode>([
 ])
 
 /**
+ * Minimum remote Node.js the bootstrap script accepts.
+ *
+ * Re-exported from the installer so the message the card shows and the check
+ * the remote actually enforces cannot drift apart.
+ */
+export { MINIMUM_NODE_VERSION } from '@dsh-waypoint/installer'
+
+/**
+ * Installer failures that will not fix themselves on a retry.
+ *
+ * A retry loop exists for transient trouble: a dropped SSH session, a slow
+ * download, a listener that is still binding. A host with no Node.js, an
+ * outdated one, no npm, or an un-migratable profile stays in that state however
+ * often the whole bootstrap is re-uploaded — so repeating it every 30 seconds
+ * achieves nothing except churn, and the card's "retrying, attempt N" grows
+ * forever. These stop the loop and wait for a deliberate action.
+ *
+ * `install/pnpm-missing` and `install/dsh-missing` are deliberately absent: the
+ * first is usually an existing corepack symlink and the second is usually a
+ * network failure, and both do clear on their own.
+ */
+const PERMANENT_INSTALL_CODES: ReadonlySet<InstallerErrorCode> = new Set<InstallerErrorCode>([
+  'install/node-missing',
+  'install/node-outdated',
+  'install/npm-missing',
+  'install/profile-migrate-failed',
+])
+
+/** Whether a provisioning failure should stop automatic retries. */
+export function isPermanentInstallFailure(error: unknown): boolean {
+  if (error instanceof NodeProvisionError) return true
+  const code = installerCodeOf(error)
+  return code !== undefined && PERMANENT_INSTALL_CODES.has(code)
+}
+
+/**
  * Pick the localized message for an installer failure.
  *
  * A missing or outdated Node.js is something the operator can fix and deserves
  * its own wording; everything else keeps the generic "check the log" text.
  */
 export function installerUi(error: unknown): UiText {
+  // Node.js provisioning has its own taxonomy: it never runs inside the
+  // bootstrap, so its failures would otherwise all collapse into the generic
+  // "installation failed" sentence and say nothing about what to fix.
+  const nodeCode = (error as { installerCode?: unknown } | null)?.installerCode
+  switch (nodeCode) {
+    case 'node/unsupported-platform':
+      return { key: 'error.nodeUnsupported' }
+    case 'node/no-downloader':
+      return { key: 'error.nodeUnsupported' }
+    case 'node/verify-failed':
+      return { key: 'error.nodeVerifyFailed' }
+    case 'node/install-failed':
+      return { key: 'error.nodeInstallFailed' }
+    default:
+      break
+  }
   const code = installerCodeOf(error)
   switch (code) {
     case 'install/node-missing':
@@ -293,9 +346,6 @@ export function installerUi(error: unknown): UiText {
       return { key: 'error.agentInstallFailed' }
   }
 }
-
-/** Minimum remote Node.js the bootstrap script accepts. */
-export const MINIMUM_NODE_VERSION = '22.19.0'
 
 /** Whether a discovered runtime is the version this install intended to start. */
 export function agentVersionMatches(actual: string, expected: string | undefined): boolean {

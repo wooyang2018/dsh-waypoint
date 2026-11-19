@@ -27,6 +27,7 @@ import { readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
+import { resolveCommand } from './command.ts'
 import { parseSshTarget } from './target.ts'
 
 const execFileAsync = promisify(execFile)
@@ -395,7 +396,8 @@ export function createSshRunner(options: {
 }): RunSsh {
   return async args => {
     try {
-      const result = await execFileAsync(options.sshBinary, [...args], {
+      const invocation = resolveCommand(options.sshBinary)
+      const result = await execFileAsync(invocation.command, [...invocation.prefixArgs, ...args], {
         timeout: options.timeoutMs,
         maxBuffer: 256 * 1024,
         encoding: 'utf8',

@@ -15,6 +15,7 @@ import {
   type AgentDiscoveryState,
 } from '@dsh-waypoint/protocol'
 import { LocalError } from '../errors.ts'
+import { resolveCommand } from './command.ts'
 import type { ParsedSshTarget } from './target.ts'
 
 const execFileAsync = promisify(execFile)
@@ -80,9 +81,10 @@ export async function discoverAgent(
   let stdout: string
   let stderr: string
   try {
+    const invocation = resolveCommand(options.sshBinary)
     const result = await execFileAsync(
-      options.sshBinary,
-      [...baseSshArgs(target, options), target.destination, command],
+      invocation.command,
+      [...invocation.prefixArgs, ...baseSshArgs(target, options), target.destination, command],
       {
         timeout: options.timeoutMs,
         maxBuffer: 256 * 1024,

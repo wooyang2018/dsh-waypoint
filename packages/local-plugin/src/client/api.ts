@@ -20,6 +20,7 @@ import {
   type HostApiValues,
   type MirrorTarget,
   type RemoteHostsState,
+  type RemoteNodeState,
   type SessionsResult,
   type ValidatedTarget,
   type WebUrlResult,
@@ -70,6 +71,10 @@ export interface HostsApi {
   readonly upgrade: (hostId: string) => Promise<HostView>
   readonly restart: (hostId: string) => Promise<HostView>
   readonly webUrl: (hostId: string) => Promise<WebUrlResult>
+  /** Read-only: what Node.js the remote would run today. */
+  readonly nodeStatus: (hostId: string) => Promise<RemoteNodeState>
+  /** Install nvm and the latest Node.js LTS on the remote host. */
+  readonly installNode: (hostId: string) => Promise<RemoteNodeState>
 
   // --- Workspaces (Settings page and the + menu) ---
   readonly workspaces: (hostId: string) => Promise<WorkspacesResult>
@@ -143,6 +148,8 @@ export function createHostsApi(ctx: Context): HostsApi {
       ...workspaceId === undefined ? {} : { workspaceId },
     }),
     webUrl: hostId => call('host/web-url', { hostId }),
+    nodeStatus: hostId => call('host/node', { hostId }),
+    installNode: hostId => call('host/node-install', { hostId }),
     modelCatalog: hostId => call('host/model-catalog', { hostId }),
     sessionMirror: localSessionId => call('host/session/mirror', { localSessionId }),
     setModelSource: (hostId, source) => call('host/model-source', { hostId, source }),

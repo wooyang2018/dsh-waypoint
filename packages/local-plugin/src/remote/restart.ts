@@ -10,6 +10,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { LocalError } from '../errors.ts'
+import { resolveCommand } from '../ssh/command.ts'
 import { baseSshArgs } from '../ssh/probe.ts'
 import type { ParsedSshTarget } from '../ssh/target.ts'
 
@@ -35,9 +36,11 @@ export async function restartRemoteAgent(
   options: RestartRemoteOptions,
 ): Promise<void> {
   try {
+    const invocation = resolveCommand(options.sshBinary)
     await execFileAsync(
-      options.sshBinary,
-      [...baseSshArgs(target, { timeoutMs: 60_000, strictHostKeyChecking: options.strictHostKeyChecking }),
+      invocation.command,
+      [...invocation.prefixArgs,
+        ...baseSshArgs(target, { timeoutMs: 60_000, strictHostKeyChecking: options.strictHostKeyChecking }),
         target.destination, RESTART_COMMAND],
       { timeout: 75_000, maxBuffer: 64 * 1024, encoding: 'utf8', windowsHide: true },
     )

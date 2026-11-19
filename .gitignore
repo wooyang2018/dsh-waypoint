@@ -15,3 +15,7 @@ coverage/
 test-results/
 playwright-report/
 .playwright/
+
+# Scratch files used while composing a commit message
+.git-commit-msg.txt
+.wp-*

@@ -48,7 +48,10 @@ import {
   type ModelSource,
   type SshDiscoveryResult,
 } from './hosts/types.ts'
-import { RemoteProvisioner, agentVersionDiffers, bundledAgentVersion } from './remote/provisioner.ts'
+import { RemoteProvisioner, agentVersionDiffers, bundledAgentVersion, isPermanentInstallFailure } from './remote/provisioner.ts'
+import { MINIMUM_NODE_VERSION, installRemoteNode, nodeVersionSatisfied, probeRemoteNode } from '@dsh-waypoint/installer'
+import { toRemoteNodeState } from './remote/node-state.ts'
+import type { RemoteNodeState } from './host-api/contract.ts'
 import { uiForErrorCode } from './messages.ts'
 import { scanSshConfig } from './ssh/config.ts'
 import { mergeAliasGroups } from './ssh/alias-groups.ts'
@@ -137,6 +140,15 @@ export class RemoteHostsService {
   readonly #reconnectTimers = new Map<string, NodeJS.Timeout>()
   readonly #healthInFlight = new Set<string>()
   readonly #attempts = new Map<string, number>()
+  /**
+   * Hosts whose provisioning failed for a reason a retry cannot change.
+   *
+   * Retrying is for transient trouble; a host with no Node.js stays without one
+   * no matter how often the bootstrap is re-uploaded. Kept in memory only: a
+   * restarted DSH gets one fresh attempt, which is what an operator who fixed
+   * the host in the meantime expects, and no persisted schema has to change.
+   */
+  readonly #installBlocked = new Map<string, LocalError>()
   readonly #manualDisconnect = new Set<string>()
   readonly #upgrades = new Set<string>()
   #disposed = false
@@ -329,6 +341,11 @@ export class RemoteHostsService {
     const target = parseSshTarget(record.sshTarget)
     this.#manualDisconnect.delete(id)
     this.#clearReconnect(id)
+    // An explicit reinstall is the operator saying "I fixed it". Whatever
+    // blocked the last attempt no longer suppresses this run, and the retry
+    // budget starts over with it.
+    this.#installBlocked.delete(id)
+    this.#attempts.delete(id)
     await this.#stopTransport(id)
     const { proxy, proxyToken, direct } = await this.#modelPathFor(record)
     this.#setRuntime(id, {
@@ -442,6 +459,61 @@ export class RemoteHostsService {
     } catch (error) {
       this.#markError(id, error, 'agent/unavailable')
       this.#scheduleReconnect(id)
+    }
+  }
+
+  /**
+   * Report what Node.js the remote would run today.
+   *
+   * Read-only by construction: this is what the confirm panel shows before the
+   * user decides, so it must never change the host.
+   */
+  async probeNode(id: string): Promise<RemoteNodeState> {
+    this.#assertAlive()
+    const record = this.#requireRecord(id)
+    const target = parseSshTarget(record.sshTarget)
+    const status = await probeRemoteNode(target, {
+      binary: this.config.sshBinary,
+      strictHostKeyChecking: this.config.strictHostKeyChecking,
+      timeoutMs: this.config.probeTimeoutMs,
+      verbose: false,
+    })
+    return toRemoteNodeState(status)
+  }
+
+  /**
+   * Install nvm and the latest Node.js LTS, then report the result.
+   *
+   * Deliberately not part of provisioning: installing a runtime is the
+   * operator's decision, and the provisioning path stays a pure "fail and say
+   * why" so an unattended reconnect never changes what a host runs.
+   */
+  async installNode(id: string): Promise<RemoteNodeState> {
+    this.#assertAlive()
+    const record = this.#requireRecord(id)
+    const target = parseSshTarget(record.sshTarget)
+    this.#setRuntime(id, { ...this.#runtimeFor(id), detail: 'nodeInstalling' })
+    try {
+      const result = await installRemoteNode(target, {
+        binary: this.config.sshBinary,
+        strictHostKeyChecking: this.config.strictHostKeyChecking,
+        timeoutMs: this.config.provisionTimeoutMs,
+        verbose: false,
+      })
+      // Whatever blocked provisioning was the old runtime; it is gone now.
+      this.#installBlocked.delete(id)
+      this.#attempts.delete(id)
+      this.ctx.logger.info('dsh-waypoint: remote Node.js for %s is now %s', id, result.version)
+      return {
+        supported: true,
+        version: result.version,
+        satisfied: nodeVersionSatisfied(result.version),
+        minimum: MINIMUM_NODE_VERSION,
+        nvmInstalled: true,
+        installedVersion: result.version,
+      }
+    } finally {
+      this.#setRuntime(id, { ...this.#runtimeFor(id), detail: null })
     }
   }
 
@@ -836,7 +908,6 @@ export class RemoteHostsService {
     this.#manualDisconnect.delete(id)
     this.#clearReconnect(id)
     await this.#stopTransport(id)
-
     this.#setRuntime(id, {
       ...idleRuntime(),
       phase: 'discovering',
@@ -867,6 +938,20 @@ export class RemoteHostsService {
     } catch (error) {
       const failure = asLocalError(error, 'ssh/probe-failed')
       if (this.config.autoProvision && failure.code === 'agent/unavailable') {
+        // A previous attempt proved this host cannot be provisioned as it
+        // stands. Re-uploading the agent and re-running the whole bootstrap
+        // every 30 seconds cannot change that, so stop and keep the original
+        // cause visible instead of replacing it with a timeout later.
+        const blocked = this.#installBlocked.get(id)
+        if (blocked !== undefined) {
+          this.ctx.logger.warn(
+            'dsh-waypoint: skipping provisioning for %s until it is reinstalled: %s',
+            id,
+            blocked.message,
+          )
+          this.#markError(id, blocked, 'agent/unavailable')
+          throw blocked
+        }
         this.#setRuntime(id, {
           ...this.#runtimeFor(id),
           phase: 'installing',
@@ -880,6 +965,7 @@ export class RemoteHostsService {
             ...this.#modelEnvironment(proxy, proxyToken, direct),
             onProgress: detail => this.#setRuntime(id, { ...this.#runtimeFor(id), detail }),
           })
+          this.#installBlocked.delete(id)
           this.#setRuntime(id, { ...this.#runtimeFor(id), detail: 'readingState' })
           const discovery = await this.#discover(target)
           remotePort = discovery.state.port
@@ -887,6 +973,15 @@ export class RemoteHostsService {
           await this.#saveRecord(id, { remoteAgentPort: remotePort, token })
         } catch (provisionError) {
           const provisionFailure = this.#markError(id, provisionError, 'agent/unavailable')
+          if (isPermanentInstallFailure(provisionError)) {
+            this.#installBlocked.set(id, provisionFailure)
+            this.ctx.logger.warn(
+              'dsh-waypoint: %s needs a deliberate fix before provisioning can succeed: %s',
+              id,
+              provisionFailure.message,
+            )
+            throw provisionFailure
+          }
           this.#scheduleReconnect(id)
           throw provisionFailure
         }
@@ -1258,7 +1353,21 @@ export class RemoteHostsService {
     if (this.#disposed || !this.config.reconnect || this.#manualDisconnect.has(id)) return
     if (this.#reconnectTimers.has(id)) return
     if (!this.#records.has(id)) return
+    if (this.#installBlocked.has(id)) return
     const attempt = (this.#attempts.get(id) ?? 0) + 1
+    // An uncapped backoff is indistinguishable from a stuck card: the countdown
+    // keeps restarting while the cause never changes. A finite budget turns
+    // that into a card that stops and waits for a person.
+    if (attempt > this.config.provisionRetryLimit) {
+      this.#attempts.set(id, attempt)
+      this.ctx.logger.warn(
+        'dsh-waypoint: giving up automatic reconnects for %s after %d attempts; reinstall or reconnect it manually',
+        id,
+        this.config.provisionRetryLimit,
+      )
+      this.#setRuntime(id, { ...this.#runtimeFor(id), retry: null, detail: null })
+      return
+    }
     this.#attempts.set(id, attempt)
     const delay = Math.min(1_000 * 2 ** Math.min(attempt - 1, 10), this.config.maxReconnectDelayMs)
     this.ctx.logger.info('dsh-waypoint: reconnecting %s in %dms (attempt %d)', id, delay, attempt)

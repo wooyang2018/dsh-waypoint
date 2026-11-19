@@ -9,6 +9,7 @@
  * @module @dsh-waypoint/installer/bootstrap
  */
 
+import { minimumNodeCheckScript, minimumNodeFloor } from './node-runtime.ts'
 import type { InstallerOptions, StartMode } from './options.ts'
 
 /** Options needed by the renderer. */
@@ -143,6 +144,13 @@ fi
 find_login_shell
 login_shell_node
 
+# Best-effort nvm probe, defined before the branch below so the version-aware
+# selection after it can reuse it. Without a match \`ls\` exits non-zero, and
+# pipefail would abort this script before the Node check runs.
+nvm_node_bin() {
+  ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1 || true
+}
+
 if ! command -v node >/dev/null 2>&1; then
   for candidate in \\
     "$HOME/.volta/bin" \\
@@ -157,12 +165,29 @@ if ! command -v node >/dev/null 2>&1; then
     "/usr/local/bin"; do
     if [ -d "$candidate" ]; then PATH="$candidate:$PATH"; fi
   done
-  # Best-effort nvm probe: without a match ls exits non-zero, and pipefail
-  # would abort this script before the Node auto-install step runs.
-  NODE_BIN_DIR="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1 || true)"
+  NODE_BIN_DIR="$(nvm_node_bin)"
   if [ -n "$NODE_BIN_DIR" ]; then PATH="$NODE_BIN_DIR:$PATH"; fi
   if ! command -v node >/dev/null 2>&1 && [ -x "$LOGIN_SHELL" ]; then
     login_shell_node
+  fi
+fi
+# A version manager can hold a usable Node.js while an older system one answers
+# first. That is exactly the state "install the latest LTS" leaves a host in, so
+# prefer the newest nvm Node.js when it is the newer of the two — otherwise a
+# reinstall would keep running the runtime the operator just replaced.
+NVM_NODE_BIN="$(nvm_node_bin)"
+if [ -n "$NVM_NODE_BIN" ] && [ -x "$NVM_NODE_BIN/node" ]; then
+  CURRENT_NODE="$(command -v node 2>/dev/null || true)"
+  CURRENT_MAJOR_MINOR=""
+  if [ -n "$CURRENT_NODE" ]; then
+    CURRENT_MAJOR_MINOR="$(node -p 'process.versions.node.split(".").slice(0,2).join(".")' 2>/dev/null || true)"
+  fi
+  NVM_MAJOR_MINOR="$(PATH="$NVM_NODE_BIN:$PATH" node -p 'process.versions.node.split(".").slice(0,2).join(".")' 2>/dev/null || true)"
+  if [ -n "$NVM_MAJOR_MINOR" ] && [ "$NVM_MAJOR_MINOR" != "$CURRENT_MAJOR_MINOR" ]; then
+    # String comparison of "22.9" vs "22.19" is wrong, so compare numerically.
+    if [ -z "$CURRENT_MAJOR_MINOR" ] || [ "$(printf '%s\\n%s\\n' "$CURRENT_MAJOR_MINOR" "$NVM_MAJOR_MINOR" | sort -V | tail -1)" = "$NVM_MAJOR_MINOR" ]; then
+      PATH="$NVM_NODE_BIN:$PATH"
+    fi
   fi
 fi
 export PATH`
@@ -197,6 +222,7 @@ export DSH_PREFIX DSH_BIN DSH_NODE_BIN_DIR`
 /** Render the complete bootstrap script. */
 export function renderBootstrapScript(options: BootstrapOptions): string {
   const startBlock = renderStartBlock(options)
+  const minimumNodeVersion = `${minimumNodeFloor().major}.${minimumNodeFloor().minor}.0`
   return `#!/usr/bin/env bash
 # dsh-waypoint installer bootstrap — generated, no secrets embedded.
 set -euo pipefail
@@ -288,14 +314,20 @@ ${nodePathPrelude()}
 # Node.js is a prerequisite, never something this script installs. Downloading
 # and unpacking a runtime is the kind of change an operator should make
 # deliberately, and a silently chosen version is exactly what leaves two
-# runtimes fighting over one command.
+# runtimes fighting over one command. Settings offers the deliberate version:
+# an explicit "install the remote Node.js" action backed by nvm.
+#
+# The messages carry the evidence, not just the conclusion: which shell
+# answered and what it resolved is what makes the failure actionable, and the
+# last line is the only one an operator reliably sees in a truncated log.
 if ! command -v node >/dev/null 2>&1; then
-  echo "dsh-waypoint: Node.js was not found through this account's shell." >&2
-  echo "dsh-waypoint: install Node.js 22.19+ (nvm/fnm/Volta are all detected) and retry." >&2
+  echo "dsh-waypoint: Node.js was not found through this account's shell (shell: \${LOGIN_SHELL:-unknown})." >&2
+  echo "dsh-waypoint: an nvm Node.js would have been found; use Settings > install remote Node.js, or install Node.js ${minimumNodeVersion}+ yourself." >&2
   exit 21
 fi
-if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)'; then
-  echo "dsh-waypoint: Node.js 22.19+ is required (found $(node --version))" >&2
+if ! ${minimumNodeCheckScript()}; then
+  echo "dsh-waypoint: Node.js ${minimumNodeVersion}+ is required (found $(node --version) at $(command -v node))" >&2
+  echo "dsh-waypoint: use Settings > install remote Node.js, or upgrade it yourself." >&2
   exit 22
 fi
 if ! command -v npm >/dev/null 2>&1; then

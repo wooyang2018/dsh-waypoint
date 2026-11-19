@@ -53,6 +53,8 @@ export type HostApiEndpoint =
   | 'host/session/mirror'
   | 'host/session/model'
   | 'host/model-source'
+  | 'host/node'
+  | 'host/node-install'
   | 'host/files/list'
   | 'host/files/read'
   | 'host/files/stat'
@@ -106,6 +108,28 @@ export interface HostCreateSessionResult extends CreateSessionResult {
 export interface MirrorFileResult {
   readonly mirrored: boolean
   readonly value?: unknown
+}
+
+/**
+ * What the remote currently runs, as the Settings panel needs it.
+ *
+ * Deliberately not the installer's raw probe shape: the client must not decide
+ * on its own whether a version is acceptable, and it has no business knowing
+ * which downloader the host happens to have.
+ */
+export interface RemoteNodeState {
+  /** Whether the remote can be provisioned automatically at all. */
+  readonly supported: boolean
+  /** Version the remote would run today, or null when absent. */
+  readonly version: string | null
+  /** Whether {@link version} meets the minimum this build requires. */
+  readonly satisfied: boolean
+  /** Minimum version this build requires, so the UI never hard-codes it. */
+  readonly minimum: string
+  /** Whether the remote already has nvm with a Node.js installed under it. */
+  readonly nvmInstalled: boolean
+  /** What the last install attempt ended with, when one is known. */
+  readonly installedVersion?: string
 }
 
 /** Result of resolving the remote Web UI. */
@@ -193,6 +217,8 @@ export interface HostApiPayloads {
     reasoningEffort?: string
   }
   'host/model-source': { hostId: string; source: ModelSource }
+  'host/node': { hostId: string }
+  'host/node-install': { hostId: string }
   'host/files/list': { sessionId: string; path: string }
   'host/files/read': { sessionId: string; path: string; offset?: number; limit?: number }
   'host/files/stat': { sessionId: string; path: string }
@@ -229,6 +255,8 @@ export interface HostApiValues {
   'host/session/mirror': MirrorTarget
   'host/session/model': AcceptedResult
   'host/model-source': HostView
+  'host/node': RemoteNodeState
+  'host/node-install': RemoteNodeState
   'host/files/list': MirrorFileResult
   'host/files/read': MirrorFileResult
   'host/files/stat': MirrorFileResult

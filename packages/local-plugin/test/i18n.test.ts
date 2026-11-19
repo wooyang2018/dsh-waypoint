@@ -37,6 +37,38 @@ describe('plugin localization', () => {
     assert.equal(uiForErrorCode('unknown/code').key, 'error.internal')
   })
 
+  it('phrases the Node.js remedy as an action, not a dead end', () => {
+    // The installer never installs a runtime, so the message has to name the
+    // button that does. Telling the operator only to "install it yourself"
+    // was accurate but left the one-click fix undiscoverable.
+    for (const key of ['error.agentInstallNodeMissing', 'error.agentInstallNodeOutdated'] as const) {
+      assert.match(zh[key], /安装远端 Node\.js/u, `zh ${key} does not name the action`)
+      assert.match(en[key], /Install remote Node\.js/u, `en ${key} does not name the action`)
+    }
+  })
+
+  it('renders every Node.js panel sentence in both languages', () => {
+    for (const key of [
+      'node.title',
+      'node.checking',
+      'node.satisfied',
+      'node.needsInstall',
+      'node.missing',
+      'node.plan',
+      'node.install',
+      'node.installing',
+      'node.installed',
+      'node.needsReinstall',
+      'node.reinstallNow',
+      'node.unsupported',
+      'node.close',
+      'node.retry',
+    ] as const) {
+      assert.ok(zh[key].length > 0, `zh ${key} is empty`)
+      assert.ok(en[key].length > 0, `en ${key} is empty`)
+    }
+  })
+
   it('projects structured status and localized error fields into HostView', () => {
     const record: HostRecord = {
       id: 'h1', label: 'host', sshTarget: 'user@host', sshPort: null,

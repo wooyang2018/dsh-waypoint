@@ -39,6 +39,8 @@ export const HOST_DETAILS = [
   'tunnel',
   'checkingAgent',
   'reconcilingModel',
+  'nodeProbing',
+  'nodeInstalling',
 ] as const
 
 export type HostDetail = (typeof HOST_DETAILS)[number]
@@ -67,6 +69,9 @@ export const UI_TEXT_KEYS = [
   'error.agentInstallNoNpm',
   'error.agentInstallNoPnpm',
   'error.agentInstallDshMissing',
+  'error.nodeUnsupported',
+  'error.nodeInstallFailed',
+  'error.nodeVerifyFailed',
   'error.healthCheckFailed',
   'error.tunnelExited',
   'error.operationFailed',

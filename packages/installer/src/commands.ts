@@ -17,6 +17,7 @@ import {
   type AgentDiscoveryState,
 } from '@dsh-waypoint/protocol'
 import { fromOptions, nodePathPrelude, shellPath } from './bootstrap.ts'
+import { minimumNodeCheckScript } from './node-runtime.ts'
 import { npmInvocation } from './npm.ts'
 import type { InstallerOptions } from './options.ts'
 import {
@@ -142,7 +143,7 @@ echo "host=$(hostname 2>/dev/null || true)"
 echo "home=$HOME"
 echo "node=$(command -v node 2>/dev/null || true)"
 echo "node_version=$(node --version 2>/dev/null || true)"
-echo "node_ok=$([ -n "$(command -v node 2>/dev/null)" ] && node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>22||(a===22&&b>=19)?0:1)' 2>/dev/null && echo yes || echo no)"
+echo "node_ok=$([ -n "$(command -v node 2>/dev/null)" ] && ${minimumNodeCheckScript()} 2>/dev/null && echo yes || echo no)"
 echo "npm=$(command -v npm 2>/dev/null || true)"
 echo "pnpm=$(command -v pnpm 2>/dev/null || true)"
 echo "systemctl=$(command -v systemctl 2>/dev/null || true)"
