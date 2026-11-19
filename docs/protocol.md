@@ -132,32 +132,40 @@ check and tunnel watcher schedule a bounded reconnect on any transport failure.
 | `GET` | `/sessions` | `{ sessions: RemoteSessionSummary[] }` |
 | `GET` | `/workspaces/:workspaceId/sessions` | `{ sessions }` filtered to the workspace |
 | `GET` | `/sessions/:sessionId?limit=N` | `SessionSnapshot` |
-| `GET` | `/sessions/:sessionId/events?cursor=N` | `text/event-stream` |
+| `GET` | `/sessions/:sessionId/events?cursor=N` | SSE; `event:` is the frame type (`ready`/`event`/`heartbeat`/`end`) |
+| `GET` | `/sessions/:sessionId/assistant-events` | SSE `event: assistant` frames; live sessions only (`session/not-live` otherwise) |
 | `GET` | `/web-url` | `{ path: "/?token=..." }` |
-| `GET` | `/files/watch?path=...` | SSE `ready`/`change` frames |
+| `GET` | `/llm/catalog` | `ModelCatalogResult` — the providers/models this host can actually route to |
+| `GET` | `/approvals/events` | SSE `event: ready`, then one `event: request` per pending approval, with `event: heartbeat` keepalives |
+| `GET` | `/files/watch?path=...` | SSE `event: file` with `{ kind: "ready" \| "change" }` |
 | `GET` | `/directories?path=...` | `RemoteDirectoryListing` |
 | `GET` | `/terminals` | `{ terminals: RemoteTerminalInfo[] }` |
-| `GET` | `/terminals/:id/attach` | SSE terminal frames |
+| `GET` | `/terminals/:id/attach` | SSE `event: frame` with terminal frames |
 
-Read routes use `GET`. `GET /approvals/events` is an SSE approval-question stream. Write routes use
-`POST` with a JSON body:
+Read routes use `GET`. Write routes use `POST` with a JSON body:
 
 | Method | Path | Body | Result |
 |---|---|---|---|
 | `POST` | `/workspaces` | `{ "path": "/abs/dir", "title"?: "…" }` | `RemoteWorkspace` |
 | `POST` | `/sessions` | `{ "workspaceId"?: "…", "cwd"?: "/abs/dir", "agentPreset"?: "…" }` | `CreateSessionResult` |
-| `POST` | `/sessions/:id/prompt` | `{ "text": "…", "mode"?: "queue" \| "steer", "provider"?: "…", "model"?: "…", "reasoningEffort"?: "…" }` | `{ "accepted": true }` |
+| `POST` | `/sessions/:id/model` | `{ "provider": "…", "model": "…", "reasoningEffort"?: "…" }` | `{ "accepted": true }`; `session/model-unavailable` when the host cannot route it |
+| `POST` | `/sessions/:id/sandbox` | `{ "mode": "read-only" \| "workspace-write" \| "danger-full-access" }` | `{ "accepted": true }` |
+| `POST` | `/sessions/:id/prompt` | `{ "text": "…", "content"?: [{ "type": "text", "text": "…" } \| { "type": "image", "data": "<base64>", "mediaType": "image/png", "name"?: "…" }], "mode"?: "queue" \| "steer", "provider"?: "…", "model"?: "…", "reasoningEffort"?: "…" }` | `{ "accepted": true }` |
 | `POST` | `/sessions/:id/cancel` | `{}` | `{ "accepted": true }` |
+| `POST` | `/sessions/:id/archive` | `{ "stopActivity"?: true }` (default `true`) | `{ "accepted": true }` |
 | `POST` | `/approvals/answer` | `{ "id": "…", "outcome": "allowed-once" \| "rejected" \| "cancelled" \| "unavailable" }` | `{ "accepted": true }` |
 | `POST` | `/files/stat`, `/files/list`, `/files/read`, `/files/bytes` | `{ "path": "/abs/path", "offset"?, "limit"?, "length"? }` | file/list result |
-| `POST` | `/terminals` | `{ "cwd": "/abs/dir", "id"?, "cols"?, "rows"?, "shellPath"? }` | `RemoteTerminalInfo` |
+| `POST` | `/terminals` | `{ "cwd": "/abs/dir", "id"?, "title"?, "cols"?, "rows"?, "shellPath"? }` | `RemoteTerminalInfo` |
 | `POST` | `/terminals/:id/input` | `{ "type": "write", "data": "…" }` or `{ "type": "resize", "cols": 100, "rows": 30 }` | `{ "accepted": true }` |
 | `POST` | `/terminals/:id/rename` | `{ "title": "…" }` | `{ "accepted": true }` |
 | `POST` | `/terminals/:id/close` | `{}` | `{ "accepted": true }` |
 
-`workspaceId` and `cwd` are mutually exclusive. Prompt text must be non-empty. An optional provider/model
-selection is installed on the remote Session before the prompt. A wrong method for a route returns
-`405`; unknown paths return a JSON `route/not-found` envelope.
+`workspaceId` and `cwd` are mutually exclusive. A prompt carries either a non-empty `text` or at least
+one `content` image part; `text` may be empty when an image is present. An optional provider/model
+selection is installed on the remote Session before the prompt is submitted. Request bodies are capped
+at 256 KiB, and at 12 MiB for `session.prompt` (base64 images); an oversized body fails with
+`request/too-large`. A wrong method on a known path returns `405` with code `request/invalid`; unknown
+paths return a JSON `route/not-found` envelope.
 
 The HTTP write surface creates workspaces and sessions, submits prompts, cancels a turn, reads files
 for the native file tree/preview, and owns PTY terminals. File reads are read-only; terminal input is
