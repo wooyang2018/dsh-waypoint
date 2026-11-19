@@ -4,7 +4,7 @@ import { appAvailable, startE2EHost, type E2EHost } from './dsh-fixture.ts'
 test.describe.configure({ mode: 'serial' })
 
 test.describe('remote new-session mode selection', () => {
-  test.skip(!appAvailable(), 'requires the official DSH Desktop app and Chrome on macOS')
+  test.skip(!appAvailable(), 'requires the official DSH Desktop app and Chrome or Edge')
   let host: E2EHost
 
   test.beforeAll(async () => { host = await startE2EHost() })

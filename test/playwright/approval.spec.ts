@@ -19,7 +19,7 @@ async function openMirroredSession(page: Page): Promise<void> {
 }
 
 test.describe('mirrored approval across two clients', () => {
-  test.skip(!appAvailable(), 'requires the official DSH Desktop app and Chrome on macOS')
+  test.skip(!appAvailable(), 'requires the official DSH Desktop app and Chrome or Edge')
   let host: E2EHost
   let second: Page
 

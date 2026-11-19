@@ -27,9 +27,9 @@
 | 组件 | 版本 |
 |---|---|
 | [DSH Desktop / 官方客户端](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)（已测试） |
-| 插件 | [**1.0.0**](https://www.npmjs.com/package/dsh-waypoint) |
+| 插件 | [**1.0.1**](https://www.npmjs.com/package/dsh-waypoint) |
 | 远端 DSH 运行时 | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)（已测试；新安装跟随本机 DSH 版本） |
-| 远端 Node.js | [**22.19+**](https://nodejs.org/en/download) |
+| 远端 Node.js | [**22.19+**](https://nodejs.org/en/download)（可在主机卡片一键安装 nvm + 最新 LTS） |
 | 远端操作系统 | Linux 或 macOS |
 
 没有测试过其他 DSH GUI 插件、社区 fork、修改过的客户端、非 DSH GUI，以及其他 DSH 版本。
@@ -75,7 +75,7 @@ DSH 会从 npm 安装 bundle。这个包已经包含远端 agent 资源和 termi
 如果 npmjs.com 对刚发布版本的 `latest` 解析仍旧滞后，可以改为安装当前的精确版本：
 
 ```text
-dsh-waypoint@1.0.0
+dsh-waypoint@1.0.1
 ```
 
 每次发新版本时同步更新这个版本号。
@@ -187,7 +187,7 @@ $DSH_HOME/waypoint/test-visibility.json
 
 **本地：** 官方 [DSH Desktop](https://github.com/deepseek-ai/deepseek-harness)，或同核心版本的 DSH Web；需要可通过 key 或 ssh-agent 免交互认证的 `ssh`。只有官方 Desktop 客户端是经过验证的 GUI 目标。
 
-**远端：** Linux 或 macOS，带 SSH server，且**已装好** [Node.js 22.19+](https://nodejs.org/en/download)。Node.js 通过该账号自己的 shell 探测，所以 PATH、nvm、Volta、fnm、Bun、asdf、mise、Nix、Homebrew 都会被识别。安装器**不会**下载或安装 Node.js：选哪个运行时版本是你的决定，机器上多一份正是两个运行时争抢同一个命令的起因。找不到或版本过低时，安装会停下并说明该装什么。不支持 Windows 远端。
+**远端：** Linux 或 macOS，带 SSH server。[Node.js 22.19+](https://nodejs.org/en/download) 通过该账号自己的 shell 探测，所以 PATH、nvm、Volta、fnm、Bun、asdf、mise、Nix、Homebrew 都会被识别。安装流程**不会**自行安装 Node.js：选哪个运行时版本是你的决定，机器上多一份正是两个运行时争抢同一个命令的起因；找不到或版本过低时会停下并说明探测到了什么。需要插件代劳时，主机卡片上有 **远端 Node.js → 安装**：先探测，再安装 nvm 与最新 LTS（`nvm install --lts`），且从不修改 shell 启动文件。不支持 Windows 远端。
 
 `pnpm` 和 `@deepseek-ai/dsh` 一律**全局安装**到 `npm prefix -g` 给出的前缀，因此插件启动的 `dsh` 和你自己敲的 `dsh` 是同一个文件、同一个版本。想换前缀就设 `remoteGlobalPrefix`，没有兜底位置——把 `dsh` 悄悄装到别处才是这次要去掉的分歧。如果该前缀不在你登录 shell 的 `PATH` 上，安装日志会打印唯一一行 `export PATH=…` 让人自行加入；安装器从不改你的 shell 启动文件。前缀不可写时安装会带着 npm 原始错误失败，而不是改装到别处。注意 npm 写的是 `<prefix>/lib/node_modules` 和 `<prefix>/bin`，两者可以一个可写一个不可写，这正是要跑 `dsh-waypoint-install doctor` 的原因。
 
@@ -256,8 +256,8 @@ $DSH_HOME/waypoint/test-visibility.json
 
 | 现象 | 处理 |
 |---|---|
-| **Installing** 一直不结束 / `Waiting for remote dsh web…` | 检查 `ssh -o BatchMode=yes my-host true`。安装器通过你的 shell 探测 Node.js（nvm/Volta/fnm），从不自行安装；缺失或版本过低会直接停下并说明原因。装好 [Node.js 22.19+](https://nodejs.org/en/download) 或改用 `remoteStart: nohup`，然后点 **Reinstall** |
-| 安装报“Node.js 未找到” | 你的登录 shell 没有暴露 `node`。在该账号的交互式 shell 下装好（nvm/fnm/Volta 均可），确认 `bash -lic 'command -v node'` 能输出路径，再点 **Reinstall** |
+| **Installing** 一直不结束 / `Waiting for remote dsh web…` | 检查 `ssh -o BatchMode=yes my-host true`。安装流程通过你的 shell 探测 Node.js（nvm/Volta/fnm），自身从不安装；缺失或版本过低会直接停下并说明探测到了什么。用主机卡片上的 **远端 Node.js → 安装**（nvm + 最新 LTS），或自行装好 [Node.js 22.19+](https://nodejs.org/en/download)，然后点 **重新安装** |
+| 安装报“Node.js 未找到”，且卡片不再自动重试 | 这是永久性原因，自动重连会停下而不是空转。点 **远端 Node.js → 安装**（先探测，再装 nvm + 最新 LTS，不改 shell 启动文件），然后点 **重新安装**；或在该账号的交互式 shell 下自行装好，确认 `bash -lic 'command -v node'` 能输出路径后重装 |
 | `does not accept POST` | 远端 agent 太旧；点 **Reinstall** |
 | 侧边栏没有远端 workspace | 用 **Workspaces +** 创建，或到 Settings → Remote development → Workspaces 查看 |
 | 原生 Session 没有回复 | 检查主机行的 **Local proxy / Remote direct / Remote default** 状态；配置远端凭据，或改为本地 Key 代理 |

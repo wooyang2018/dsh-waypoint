@@ -1,6 +1,24 @@
 # Changelog
 
+## 1.0.1
+
+Re-publish of 1.0.0 with a tarball that actually exists.
+
+`dsh-waypoint@1.0.0` reached the registry with its metadata intact but its tarball answering 404:
+`npm publish` exited 0, the version appeared in the packument, and `npm install` could not fetch it.
+A published version cannot be republished, so this is the same tree released under a new patch
+version. The plugin, the remote agent and the terminal controller are otherwise unchanged.
+
+Publishing moved to the maintainer's machine. It used to be CI staging (`npm stage publish`) plus a
+manual `npm stage approve`; that split one release across two credentials, and when the account's
+2FA was not what the registry expected it answered `404 staged version not found` instead of naming
+the problem. `pnpm release:publish` now builds, packs, publishes dependency-first, and **downloads
+every published tarball before reporting success** — the check that would have caught 1.0.0. The
+`Release` workflow keeps building and attaching the GitHub release assets and no longer touches npm,
+so no `NPM_TOKEN` secret is involved.
+
 ## 1.0.0
+
 
 The project is now maintained independently as **`dsh-waypoint`**, a fork of
 [`Golden-Pigeon/dsh-remote`](https://github.com/Golden-Pigeon/dsh-remote). The upstream attempt to

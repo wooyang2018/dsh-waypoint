@@ -108,9 +108,9 @@ That form works on Windows too, where `VAR=1 command` is not understood by the s
 ## Installing a local build into a profile
 
 ```sh
-node scripts/package-agent.mjs             # remote agent, 0.2.12-dev-<timestamp>-<rand>.tgz
-node scripts/release-plugin.mjs            # 0.8.21-dev-<timestamp>-<rand>.tgz
-node scripts/release-plugin.mjs --release  # 0.8.21.tgz, for publishing
+node scripts/package-agent.mjs             # remote agent, 1.0.0-dev-<timestamp>-<rand>.tgz
+node scripts/release-plugin.mjs            # 1.0.1-dev-<timestamp>-<rand>.tgz
+node scripts/release-plugin.mjs --release  # 1.0.1.tgz, for publishing
 ```
 
 Both packers stamp a unique prerelease version by default, and both accept `--release` to keep the

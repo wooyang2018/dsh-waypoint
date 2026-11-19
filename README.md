@@ -29,9 +29,9 @@ This plugin is developed for the **official DSH Desktop application**. Supported
 | Component | Version |
 |---|---|
 | [DSH Desktop / official client](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested) |
-| Plugin | [**1.0.0**](https://www.npmjs.com/package/dsh-waypoint) |
+| Plugin | [**1.0.1**](https://www.npmjs.com/package/dsh-waypoint) |
 | Remote DSH runtime | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested; new installs follow the local DSH version) |
-| Remote Node.js | [**22.19+**](https://nodejs.org/en/download) |
+| Remote Node.js | [**22.19+**](https://nodejs.org/en/download) (one-click nvm + latest LTS install from the host card) |
 | Remote OS | Linux or macOS |
 
 Other DSH GUI plugins, community forks, modified clients, non-DSH GUIs, and other DSH versions have
@@ -82,7 +82,7 @@ If npmjs.com still resolves an older `latest` tag for a newly published release,
 current version instead:
 
 ```text
-dsh-waypoint@1.0.0
+dsh-waypoint@1.0.1
 ```
 
 Keep this pinned version in sync with each release.
@@ -229,11 +229,14 @@ installer-owned systemd user unit; a `nohup` deployment uses **Reinstall** or a 
 
 **Local:** official [DSH Desktop](https://github.com/deepseek-ai/deepseek-harness) or DSH Web with the same core version, plus `ssh` with key or ssh-agent auth. Only the official Desktop client is a verified GUI target.
 
-**Remote:** Linux or macOS with an SSH server. [Node.js 22.19+](https://nodejs.org/en/download) must already
-be installed and is discovered through the account's own shell, so PATH, nvm, Volta, fnm, Bun, asdf, mise,
-Nix, and Homebrew all answer. The installer does **not** download Node.js: picking a runtime version is your
-decision, and a second one on the machine is how two runtimes end up fighting over one command. A missing or
-too-old Node.js stops the install with a message naming what to install. Windows remotes are not supported.
+**Remote:** Linux or macOS with an SSH server. [Node.js 22.19+](https://nodejs.org/en/download) is
+discovered through the account's own shell, so PATH, nvm, Volta, fnm, Bun, asdf, mise, Nix, and
+Homebrew all answer. Provisioning does **not** install a runtime on its own: picking a version is your
+decision, and a second one on the machine is how two runtimes end up fighting over one command. A
+missing or too-old Node.js stops the install with a message naming what it found. When you want the
+plugin to do it, the host card offers **install remote Node.js**: it checks the host first, then
+installs nvm and the latest LTS (`nvm install --lts`), and never touches a shell startup file. Windows
+remotes are not supported.
 
 `pnpm` and `@deepseek-ai/dsh` are installed **globally**, into the prefix `npm prefix -g` reports, so the
 `dsh` the plugin starts and the `dsh` you type yourself are the same file and the same version. Override the
@@ -331,8 +334,8 @@ The remote agent config remains available for advanced deployments:
 
 | Symptom | Action |
 |---|---|
-| **Installing** never finishes / `Waiting for remote dsh web…` | Check `ssh -o BatchMode=yes my-host true`. The installer detects Node.js through your shell (nvm/Volta/fnm) and never installs one, so a missing or too-old Node.js ends the install with an explicit message; install [Node.js 22.19+](https://nodejs.org/en/download) there, or use `remoteStart: nohup`, then **Reinstall** |
-| Install stops saying Node.js was not found | Your login shell does not expose `node`. Install it under an interactive shell for that account (nvm/fnm/Volta all work), confirm `bash -lic 'command -v node'` prints a path, then **Reinstall** |
+| **Installing** never finishes / `Waiting for remote dsh web…` | Check `ssh -o BatchMode=yes my-host true`. Provisioning detects Node.js through your shell (nvm/Volta/fnm) and never installs one itself, so a missing or too-old Node.js ends the install with an explicit message. Use **install remote Node.js** on the host card (nvm + latest LTS), or install [Node.js 22.19+](https://nodejs.org/en/download) there, then **Reinstall** |
+| Install stops saying Node.js was not found, and the card stops retrying | That failure is permanent, so automatic reconnects stop instead of looping. Click **install remote Node.js** (probes first, then nvm + latest LTS without touching shell files), then **Reinstall** — or install Node.js 22.19+ yourself under an interactive shell for that account, confirm `bash -lic 'command -v node'` prints a path, and reinstall |
 | `does not accept POST` | Remote agent is old; click **Reinstall** |
 | No remote workspace in sidebar | Use **Workspaces +**, or Settings → Remote development → Workspaces |
 | Native session has no reply | Check the host row's **Local proxy / Remote direct / Remote default** state; configure remote credentials or switch to the local key proxy |

@@ -7,7 +7,7 @@ This repository is intended to be public on GitHub.
 - Preserve the existing commit author identity; do not rewrite history or authors.
 - Keep test hostnames, personal paths, tokens, and screenshots out of committed files.
 - Local logs, screenshots, and test state may contain real values; only staged content matters.
-- Do not bump the version for test-only tooling or documentation. The current release is 1.0.0.
+- Do not bump the version for test-only tooling or documentation. The current release is 1.0.1.
 - In CHANGELOG entries, link the related issue or PR and thank external contributors with `@handle`.
 - When releasing a new version, update the pinned install version in `README.md`, `README.zh.md`, and `packages/local-plugin/README.md`.
 - Do not commit generated `lib/` output, tarballs, local DSH state, or credentials.
@@ -71,6 +71,15 @@ Two things are easy to get wrong and worth stating here:
   committed baseline.
 - `pnpm install --lockfile-only` reports `Already up to date` and leaves old versions in the lockfile.
   Delete `pnpm-lock.yaml` before regenerating, then confirm the new version is actually present.
+
+## Releasing
+
+Publishing runs on a maintainer's machine (`pnpm release:publish`), not in CI: `npm publish` needs to
+prompt for the account's 2FA, and `scripts/publish-local.mjs` verifies each tarball is downloadable
+before reporting success — a published version whose tarball 404s cannot be republished, which is
+what forced 1.0.1. The `Release` workflow builds artifacts and attaches them to the GitHub release
+only. Do not reintroduce `npm stage publish` or an `NPM_TOKEN` secret; the reasons are in
+[RELEASING.md](RELEASING.md), "Why not staged publishing".
 
 ## Documentation map
 
