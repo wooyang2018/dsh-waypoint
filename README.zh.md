@@ -251,6 +251,7 @@ $DSH_HOME/waypoint/test-visibility.json
 
 - 完整的远端 DSH 浏览器 UI 是诊断入口，不是主流程。远端 agent 保持 `dsh-api-remotes` 启用，该界面照常启动；审批桥以 `prepend` 注册，镜像审批仍会到达本地原生 UI。需要远端浏览器时（例如安装远端插件），用主机卡片上的 **打开远端 Web UI**。
 - 本地 workspace anchor 只是元数据句柄。文件列表、预览和终端会路由到远端；远端 diff 和部分高级文件操作仍使用原生 Session 的工具结果。
+- `dsh-better-sidebar` 自带的文件标签页读 Session 的 cwd，而远程工作区的 cwd 是空锚点，因此它显示空树。插件会在该边栏里注册自己的 **远端文件** 标签页（经隧道读取、不落本地副本）；原生 **Workspace files** 面板无需该插件也可用。
 - 超过 `mirrorMaxEvents` 的远端 Session 会从可用尾部里第一个完整 turn 开始镜像；更早的历史留在远端 Session。想镜像更早的内容就调大限制，或直接在远端打开该会话查看。
 - 不支持 Windows 远端，也不支持 relay/NAT 穿透。
 
@@ -267,7 +268,7 @@ $DSH_HOME/waypoint/test-visibility.json
 | 本地出现审批，但远端工具仍失败 | 本地决定已经发出；检查远端工具结果 |
 | 本地终端打开本地 shell | 本地 Session 的预期行为；远端 Session 使用 `Remote · <dir>` 终端 |
 | 远端终端打开本地 zsh | terminal-controller fork 未生效；重新运行 `./scripts/install-local.sh` |
-| 远端重启后端口变化 | 点 **Rediscover** |
+| 远端重启后端口变化 | 隧道会断开并自动重连，重连时重新发现；也可点 **重启远端 DSH** 或 **重装远端 agent** 手动触发 |
 | 安装报 npm 全局前缀相关错误 | npm 无法写入该账号的 `<prefix>/lib/node_modules` 或 `<prefix>/bin`，或 `npm prefix -g` 输出为空。把 `remoteGlobalPrefix` 指向一个你自己拥有的目录（如 `~/npm-global`）后重试 |
 | 装完了自己的 shell 里找不到 `dsh` | 安装日志打印了要加到 shell 启动文件的那行 `export PATH=…`；安装器不会代你修改这些文件 |
 | 切换 Node.js 版本后远端 DSH 起不来 | nvm/Volta 切版本会连 npm 全局前缀一起搬走，服务里烘焙的 `dsh` 路径随之失效。点 **Reinstall**；`dsh-waypoint-install doctor --target …` 会报 `global_dsh` 与 `login_path_has_dsh` |

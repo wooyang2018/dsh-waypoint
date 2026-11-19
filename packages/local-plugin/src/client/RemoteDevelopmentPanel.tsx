@@ -572,16 +572,12 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
    */
   function hostActions(host: HostView): readonly MenuAction[] {
     const busyNow = busy !== null
-    const actions: MenuAction[] = [
-      {
-        // Recovery, not routine: only useful when the remote agent moved or its
-        // token went stale.
-        id: 'refresh',
-        label: t('settings.rediscover'),
-        disabled: busyNow,
-        run: () => { void run(`refresh:${host.id}`, async () => { await api.refresh(host.id) }) },
-      },
-    ]
+    // No manual "rediscover": a port or token change always breaks the tunnel,
+    // which schedules a reconnect, and the reconnect re-runs discovery by
+    // itself (see `RemoteHostsService#doConnect`). The health loop covers the
+    // remaining case, so a recovery button here only competed with the actions
+    // an operator actually uses.
+    const actions: MenuAction[] = []
     if (host.dshUpdate !== null) {
       actions.push({
         id: 'upgrade',
@@ -602,8 +598,10 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
         // A deliberate, one-off change to what the host runs: it is offered as
         // an action rather than performed during provisioning, so an
         // unattended reconnect can never swap a runtime underneath an operator.
+        // "Manage" because this opens a panel (probe / install / close) rather
+        // than performing one atomic operation.
         id: 'node',
-        label: t('node.title'),
+        label: t('settings.manageNode'),
         disabled: busyNow || host.phase === 'installing',
         run: () => { void openNodePanel(host) },
       },

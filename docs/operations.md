@@ -287,7 +287,8 @@ The normal plugin flow calls the same provisioning library.
 - Because `dsh` lives in the npm global prefix, anything that replaces it takes effect on the next
   restart: a manual `npm i -g @deepseek-ai/dsh@…` runs that version until the next provisioning pins the
   target version again.
-- If a remote restart changes the port, click **重新发现**.
+- If a remote restart changes the port, the tunnel drops and the plugin reconnects, which re-runs
+  discovery by itself; **Restart remote DSH** or **Reinstall remote agent** does the same on demand.
 
 ## Switching over from the upstream `dsh-remote` bundle
 
@@ -324,7 +325,8 @@ automatically, and the two bundles must not be installed side by side — both w
    The installer also strips a leftover upstream dependency from the remote profile on its next run,
    but it cannot stop a unit it no longer owns.
 
-4. Reinstall the plugin version you want and click **重新发现** on each host.
+4. Reinstall the plugin version you want and click **Reinstall remote agent** (`重新安装`) on each
+   host; the reinstall re-runs discovery and picks up the new port and token.
 
 An old remote agent answers the old protocol and the new plugin will refuse it as a version
 mismatch; **重新安装** on the host card is the fix, and it is the same action used for any agent
@@ -347,7 +349,7 @@ upgrade.
 | `DeepSeek Messages request failed (404)` | Proxy upstream points at the wrong provider root/path | Set `credentialProxyUpstream: https://api.deepseek.com/anthropic`; the fixed proxy preserves the `/anthropic` prefix and tolerates it already being on the request path; reinstall the local plugin |
 | Approval appears locally but remote tool still fails | The decision was delivered but the tool failed remotely | Inspect the remote tool result |
 | Duplicate native session after restart | Old mirror archive failed | Archive the old session in the sidebar; new mirrors use fresh IDs |
-| Tunnel drops after sleep | SSH reset | Plugin reconnects; or click **连接** / **重新发现** |
+| Tunnel drops after sleep | SSH reset | Plugin reconnects on its own; or click **Connect** |
 | Install fails while naming the npm global prefix | npm cannot write `<prefix>/lib/node_modules` or `<prefix>/bin` for this account, or `npm prefix -g` printed nothing | Set `remoteGlobalPrefix` to a directory you own (e.g. `~/npm-global`) and retry. There is deliberately no fallback install location. `doctor` distinguishes the two write targets |
 | `dsh` missing in the operator's own shell | The global prefix is not on that shell's `PATH` | Add the `export PATH=…` line the install log printed to that shell's startup file yourself; the installer never edits them |
 | Remote DSH stops starting after a Node.js version switch | nvm/Volta moved the global prefix, so the unit's baked-in `dsh` path is gone | Click **重新安装**; `doctor` shows `global_dsh` and `login_path_has_dsh` |
