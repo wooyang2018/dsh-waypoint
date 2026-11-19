@@ -6,8 +6,8 @@ import { aliasGroupKey, mergeAliasGroups, type AliasGroupMember } from '../src/s
 function member(overrides: Partial<AliasGroupMember> & { alias: string }): AliasGroupMember {
   return {
     canonical: overrides.alias,
-    hostname: '21.91.123.76',
-    user: 'weyoungli',
+    hostname: '203.0.113.10',
+    user: 'alice',
     port: 36000,
     source: '/home/u/.ssh/config',
     proxyJump: false,
@@ -17,21 +17,21 @@ function member(overrides: Partial<AliasGroupMember> & { alias: string }): Alias
 
 describe('SSH alias grouping', () => {
   it('merges aliases that resolve to the same machine', () => {
-    // `Host devcloud_64g_weyoungli cloud64` on one line.
+    // `Host devcloud_64g_alice cloud64` on one line.
     const groups = mergeAliasGroups([
-      member({ alias: 'devcloud_64g_weyoungli' }),
+      member({ alias: 'devcloud_64g_alice' }),
       member({ alias: 'cloud64' }),
     ])
     assert.equal(groups.length, 1)
     // The longer alias is the descriptive one, so it leads.
-    assert.equal(groups[0]?.alias, 'devcloud_64g_weyoungli')
+    assert.equal(groups[0]?.alias, 'devcloud_64g_alice')
     assert.deepEqual(groups[0]?.aliases, ['cloud64'])
   })
 
   it('keeps different machines apart', () => {
     const groups = mergeAliasGroups([
-      member({ alias: 'cloud64', hostname: '21.91.123.76', user: 'weyoungli' }),
-      member({ alias: 'cloud32', hostname: '9.135.225.137', user: 'weyoungli' }),
+      member({ alias: 'cloud64', hostname: '203.0.113.10', user: 'alice' }),
+      member({ alias: 'cloud32', hostname: '192.0.2.10', user: 'alice' }),
     ])
     assert.equal(groups.length, 2)
     assert.deepEqual(groups.map(group => group.alias), ['cloud64', 'cloud32'])
@@ -41,7 +41,7 @@ describe('SSH alias grouping', () => {
     // Same address, two accounts: genuinely different destinations.
     const groups = mergeAliasGroups([
       member({ alias: 'devcloud_64g_user00', user: 'user00' }),
-      member({ alias: 'devcloud_64g_weyoungli', user: 'weyoungli' }),
+      member({ alias: 'devcloud_64g_alice', user: 'alice' }),
     ])
     assert.equal(groups.length, 2)
   })
@@ -97,11 +97,11 @@ describe('SSH alias grouping', () => {
     // The bug this replaces: `canonical` equals the alias, so aliases that
     // reach the same machine never compared equal.
     const left = aliasGroupKey(member({ alias: 'cloud64' }))
-    const right = aliasGroupKey(member({ alias: 'devcloud_64g_weyoungli' }))
+    const right = aliasGroupKey(member({ alias: 'devcloud_64g_alice' }))
     assert.equal(left, right)
     assert.notEqual(
       aliasGroupKey(member({ alias: 'x', user: 'user00' })),
-      aliasGroupKey(member({ alias: 'x', user: 'weyoungli' })),
+      aliasGroupKey(member({ alias: 'x', user: 'alice' })),
     )
   })
 
@@ -111,8 +111,8 @@ describe('SSH alias grouping', () => {
       member({ alias: 'a-much-longer-alias' }),
     ])
     const group = groups[0]!
-    assert.equal(group.value.hostname, '21.91.123.76')
-    assert.equal(group.value.user, 'weyoungli')
+    assert.equal(group.value.hostname, '203.0.113.10')
+    assert.equal(group.value.user, 'alice')
     assert.equal(group.value.port, 36000)
   })
 })

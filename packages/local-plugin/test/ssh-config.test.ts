@@ -112,11 +112,11 @@ describe('SSH config parsing', () => {
       'Host *.devcloud.woa.com',
       'Include ~/.ssh/devcloud_config',
     ].join('\n'), '/home/u/.ssh/config', table({
-      '~/.ssh/devcloud_config': 'Host included-host\n  HostName weyoungli-any198.devcloud.woa.com\n',
+      '~/.ssh/devcloud_config': 'Host included-host\n  HostName alice-any198.devcloud.woa.com\n',
     }))
     assert.deepEqual(parsed.hosts.map(host => host.alias), ['included-host'])
     assert.equal(parsed.hosts[0]?.source, '~/.ssh/devcloud_config')
-    assert.equal(parsed.hosts[0]?.hostname, 'weyoungli-any198.devcloud.woa.com')
+    assert.equal(parsed.hosts[0]?.hostname, 'alice-any198.devcloud.woa.com')
   })
 
   it('survives an include cycle and a missing include', async () => {
@@ -143,9 +143,9 @@ describe('SSH config parsing', () => {
   it('accepts every literal alias shape this machine actually uses', async () => {
     const aliases = [
       'native1', 'native2', 'native3', 'cloud32', 'cloud64',
-      'devcloud_64g_user00', 'devcloud_64g_weyoungli', 'devcloud_32g_user00',
-      'devcloud_32g_weyoungli', 'docker_os4_native1_user00', 'docker_os4_native3_user00',
-      'devcloud_okar_weyoungli', 'docker_okar_okarinhuang', 'docker_git_svn_pack_user00',
+      'devcloud_64g_user00', 'devcloud_64g_alice', 'devcloud_32g_user00',
+      'devcloud_32g_alice', 'docker_os4_native1_user00', 'docker_os4_native3_user00',
+      'devcloud_okar_alice', 'docker_okar_okarinhuang', 'docker_git_svn_pack_user00',
       'docker_os4_native2_user00',
     ]
     const parsed = await parseSshConfig(

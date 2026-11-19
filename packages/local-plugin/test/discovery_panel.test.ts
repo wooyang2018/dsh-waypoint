@@ -75,8 +75,8 @@ function discovery(overrides: Partial<SshDiscoveryResult> = {}): SshDiscoveryRes
         alias: 'cloud32',
         aliases: [],
         canonical: 'cloud32',
-        hostname: '9.135.225.137',
-        user: 'weyoungli',
+        hostname: '192.0.2.10',
+        user: 'alice',
         port: 36000,
         source: '/home/u/.ssh/config',
         proxyJump: false,
@@ -155,7 +155,7 @@ describe('SSH config discovery in the Settings panel', () => {
     const endpoints = renderer.root
       .findAllByProps({ className: 'dshwp-discovered-endpoint' })
       .map(node => node.children.map(child => String(child)).join(''))
-    assert.ok(endpoints.includes('weyoungli@9.135.225.137:36000'), `endpoint missing: ${endpoints.join(' | ')}`)
+    assert.ok(endpoints.includes('alice@192.0.2.10:36000'), `endpoint missing: ${endpoints.join(' | ')}`)
   })
 
   it('marks registered hosts and offers connect only for the rest', async () => {
