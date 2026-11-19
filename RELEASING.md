@@ -90,6 +90,17 @@ npm pack dsh-waypoint@<version>        # must download, not 404
 Then install it in a clean DSH profile: **Plugins → Add plugin → `dsh-waypoint`** → Restart, and
 confirm **Settings → Remote development** appears.
 
+If the Settings page changed visibly since the last release, regenerate the market screenshots
+before tagging:
+
+```sh
+node scripts/screenshots.mjs
+```
+
+It writes the four images `screenshots.json` lists. The script refuses to capture unless the fixture
+read only its own temporary SSH config — a screenshot of the host list is the one place a real host
+alias could be published by accident.
+
 ## If a published version is broken
 
 A published version cannot be republished, and unpublishing leaves the version usable by nobody.

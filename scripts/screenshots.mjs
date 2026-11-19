@@ -74,6 +74,47 @@ async function capture(page, name) {
   await page.emulateMedia({ colorScheme: 'light' })
 }
 
+/**
+ * Refuse to capture if the plugin is reading the operator's real SSH config.
+ *
+ * This is the one way a committed screenshot can leak something real. The
+ * Settings page lists every host alias the plugin discovers, and discovery reads
+ * whatever `sshConfigPath` points at. When that setting is absent the plugin
+ * falls back to `~/.ssh/config` — so a fixture change that drops the override
+ * would put a developer's internal machine names into a published image, and
+ * nothing about the resulting screenshot looks wrong.
+ *
+ * The check reads the plugin's own answer rather than the config file, because
+ * the question is what the UI is about to display.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} home The fixture's temporary DSH home.
+ */
+async function assertOnlyFixtureHosts(page, home) {
+  const scanned = /** @type {{ value?: { configFiles?: string[] } }} */ (await page.evaluate(async () => {
+    const response = await fetch('/api/dsh-waypoint', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint: 'host/discover', payload: { refresh: true } }),
+    })
+    return response.json()
+  }))
+  const files = scanned.value?.configFiles ?? []
+  const outside = files.filter(file => !String(file).startsWith(home))
+  if (files.length === 0) {
+    throw new Error('screenshot guard: discovery reported no config file; the Settings page would show nothing')
+  }
+  if (outside.length > 0) {
+    throw new Error(
+      `screenshot guard: discovery read a config outside the fixture: ${outside.join(', ')}\n`
+      + 'Refusing to capture — those aliases would be published in the screenshot. Check that the '
+      + 'fixture still sets `sshConfigPath`.',
+    )
+  }
+  process.stdout.write(`   guard: discovery read only ${files.length} fixture config file(s)\n`)
+}
+
 const host = await startE2EHost()
 try {
   const { page } = host
@@ -81,6 +122,7 @@ try {
   mkdirSync(OUT, { recursive: true })
 
   await openSettings(page)
+  await assertOnlyFixtureHosts(page, host.home)
   await capture(page, 'settings-hosts')
 
   // The add-workspace dialog, with the remote destination list open.

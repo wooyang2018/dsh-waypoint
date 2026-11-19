@@ -122,3 +122,21 @@ Two contracts there are load-bearing and easy to break:
 In `scripts/` it is fine to delete `@deepseek-ai/*` or `react/*` entries from a build script's
 `external` list only after checking they are not imports: `build-client.mjs` keeps one wildcard per
 module family instead of naming packages the bundle never requires.
+
+## Committed assets and the scripts that produce them
+
+Two scripts generate binaries that are committed, and nothing imports them, so a reference search
+will not find them. Both are run by hand:
+
+- `scripts/draw-icon.py` writes `packages/local-plugin/icon-180.png`, the plugin-market tile. The
+  market entry links that file by URL and the package ships it, so the script is the only record of
+  how it was made — change the script and re-run it rather than editing the PNG, or the two drift and
+  nobody can tell which is authoritative. Needs Pillow (`pip install pillow`).
+- `scripts/screenshots.mjs` writes the four images under `packages/local-plugin/screenshots/` that
+  `screenshots.json` lists. It runs against the Playwright fixture, not the desktop app, so it needs
+  `DSH_WAYPOINT_PLUGIN_TARBALL` and a built Chromium. Re-run it when the Settings page changes
+  visibly, not on every release.
+
+`screenshots.mjs` refuses to capture unless discovery read only the fixture's temporary SSH config.
+That guard exists because a fixture change silently falling back to `~/.ssh/config` would publish a
+developer's real host aliases in the Settings panel, and the screenshot would look entirely correct.
