@@ -1,18 +1,15 @@
 /**
  * Publish the release packages to npm from this machine.
  *
- * Publishing used to happen in CI: the Release workflow called
- * `npm stage publish`, and a maintainer then approved each staged version with
- * `npm stage approve`. That splits one release across two places, and it needs
- * two different credentials — CI stages, the maintainer approves. In practice it
- * failed in a way that cost most of a day: with 2FA not enabled on the account,
- * `stage approve` answered `404 staged version not found` rather than naming the
- * missing 2FA, and the same 404 came back after the token was replaced with a
- * bypass-2FA one until the account itself had 2FA.
+ * Publishing happens here rather than in CI because npm will not prompt for a
+ * second factor there, and a release that spans two places can fail after the
+ * half everyone was watching has already gone green.
  *
- * This script does the whole thing locally instead, and npm asks for the 2FA
- * code directly. CI keeps building and uploading the GitHub release assets; it
- * no longer touches npm at all.
+ * The token comes from the `NPM_TOKEN` environment variable and is passed to npm
+ * in the child's environment. It is never written to `~/.npmrc`: a plaintext
+ * credential in that file is readable by the `postinstall` script of every
+ * package a machine installs, which is how the eslint-scope and `@mastra/core`
+ * compromises harvested publish tokens.
  *
  * The one failure this script exists to catch is the one that shipped in 1.0.0:
  * the registry recorded `dsh-waypoint@1.0.0` while its tarball answered 404, so
@@ -24,7 +21,7 @@
  * the dependency goes first. Each package is skipped when its exact version is
  * already on the registry, which makes a partially failed run re-runnable.
  *
- * Usage: node scripts/publish-local.mjs [--dry-run]
+ * Usage: node scripts/publish-local.mjs [--dry-run] [--publish-only] [--otp <code>]
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
@@ -35,6 +32,53 @@ import { readManifest, repoRoot } from './paths.mjs'
 
 const dryRun = process.argv.includes('--dry-run')
 const npm = npmInvocation()
+
+/**
+ * The publish token, from `NPM_TOKEN` alone.
+ *
+ * There is deliberately no fallback to `~/.npmrc` or to a `npm_config_*`
+ * variable: one documented source is a rule an operator can follow, and a
+ * silent fallback is how a token ends up on disk without anyone deciding to put
+ * it there.
+ *
+ * @returns {string} The token, never logged.
+ */
+function publishToken() {
+  const value = (process.env.NPM_TOKEN ?? '').trim()
+  if (value === '') {
+    throw new Error(
+      'NPM_TOKEN is not set. Set it for this shell and run again:\n'
+      + '  PowerShell:  $env:NPM_TOKEN = "<token>"\n'
+      + '  bash/zsh:    export NPM_TOKEN="<token>"\n'
+      + 'The token must be a granular access token with "Allow bypass 2FA" enabled.',
+    )
+  }
+  return value
+}
+
+// Resolved once, before any build work: a missing token should fail in the first
+// second, not after a full `pnpm -r build`.
+const token = publishToken()
+
+/**
+ * The environment every npm call runs with.
+ *
+ * `_authToken` is a protected npm setting and must be scoped to a registry host,
+ * so the key carries the `//registry.npmjs.org/` prefix. It travels in the
+ * environment rather than as a command-line argument, which would be visible to
+ * other users in the process list.
+ *
+ * @returns {NodeJS.ProcessEnv}
+ */
+function npmEnv() {
+  return {
+    ...process.env,
+    'NPM_CONFIG_//registry.npmjs.org/:_authToken': token,
+    // npm 11 defaults to browser/security-key authentication, which opens a URL
+    // and never offers a code prompt. `legacy` keeps the flow answerable.
+    NPM_CONFIG_AUTH_TYPE: 'legacy',
+  }
+}
 
 /**
  * Print a step the operator can follow.
@@ -62,14 +106,7 @@ function npmInteractive(args, cwd = repoRoot) {
     process.stdout.write(`   would run: npm ${args.join(' ')}\n`)
     return
   }
-  execFileSync(npm.command, [...npm.prefixArgs, ...args], {
-    cwd,
-    stdio: 'inherit',
-    // npm 11 defaults to browser/security-key authentication, which opens a URL
-    // and never offers the TOTP prompt. `legacy` asks for the authenticator code
-    // in the terminal instead, which is what `--otp` supplies.
-    env: { ...process.env, NPM_CONFIG_AUTH_TYPE: 'legacy' },
-  })
+  execFileSync(npm.command, [...npm.prefixArgs, ...args], { cwd, stdio: 'inherit', env: npmEnv() })
 }
 
 /**
@@ -83,6 +120,7 @@ function npmQuery(args) {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
     timeout: 60_000,
+    env: npmEnv(),
   })
 }
 
@@ -227,10 +265,14 @@ const plan = [
   { name: plugin.name, version: plugin.version, tarball: pluginTarball, why: 'the installable bundle' },
 ]
 
+// A bypass-2FA token needs no code, so `--otp` is only used when one happens to
+// be supplied. This note exists because npm's own fallback is unhelpful: it opens
+// a browser tab and redacts the URL in its error output, which looks like a hang.
 const otp = oneTimePassword()
 if (otp === undefined) {
-  process.stdout.write('\nnote: no --otp given. npm will print a browser URL, but it redacts that URL\n'
-    + 'in its own error output; pass --otp <6-digit code> (or set NPM_OTP) instead.\n')
+  process.stdout.write('\nnote: publishing with the NPM_TOKEN as-is. If npm asks for a second factor,\n'
+    + 'this token lacks "Allow bypass 2FA" — regenerate it with that option rather than\n'
+    + 'trying to answer the prompt, which cannot be completed non-interactively.\n')
 }
 
 step('publishing')

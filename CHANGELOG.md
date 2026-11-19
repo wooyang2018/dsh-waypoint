@@ -9,13 +9,10 @@ Re-publish of 1.0.0 with a tarball that actually exists.
 A published version cannot be republished, so this is the same tree released under a new patch
 version. The plugin, the remote agent and the terminal controller are otherwise unchanged.
 
-Publishing moved to the maintainer's machine. It used to be CI staging (`npm stage publish`) plus a
-manual `npm stage approve`; that split one release across two credentials, and when the account's
-2FA was not what the registry expected it answered `404 staged version not found` instead of naming
-the problem. `pnpm release:publish` now builds, packs, publishes dependency-first, and **downloads
-every published tarball before reporting success** — the check that would have caught 1.0.0. The
-`Release` workflow keeps building and attaching the GitHub release assets and no longer touches npm,
-so no `NPM_TOKEN` secret is involved.
+Publishing runs on a maintainer's machine with `pnpm release:publish`, which builds, packs, publishes
+dependency-first, and **downloads every published tarball before reporting success** — the check that
+would have caught 1.0.0. The `Release` workflow builds and attaches the GitHub release assets and does
+not touch npm.
 
 ## 1.0.0
 

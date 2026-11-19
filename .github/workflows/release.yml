@@ -2,17 +2,9 @@ name: Release
 
 # Builds the tag's artifacts and attaches them to the GitHub release.
 #
-# npm publishing is deliberately not here. It happens on a maintainer's machine
-# with `pnpm release:publish`, where npm can ask for the 2FA code directly, and
-# `scripts/publish-local.mjs` verifies each published tarball is downloadable
-# before reporting success. The staged-publish flow this replaced split one
-# release across two places and two credentials, and failed with a misleading
-# `404 staged version not found` whenever the account's 2FA was not what the
-# registry expected.
-#
-# If npm publishing is ever moved back into CI, that script is the specification:
-# order (dependency first), the skip-if-already-published rule, and the
-# post-publish download check all exist for reasons recorded there.
+# npm publishing is not here: it runs on a maintainer's machine
+# (`pnpm release:publish`), which also verifies each published tarball is
+# downloadable before reporting success.
 
 on:
   push:

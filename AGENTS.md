@@ -74,12 +74,12 @@ Two things are easy to get wrong and worth stating here:
 
 ## Releasing
 
-Publishing runs on a maintainer's machine (`pnpm release:publish`), not in CI: `npm publish` needs to
-prompt for the account's 2FA, and `scripts/publish-local.mjs` verifies each tarball is downloadable
-before reporting success — a published version whose tarball 404s cannot be republished, which is
+Publishing runs on a maintainer's machine (`pnpm release:publish`), not in CI. The token comes from
+the `NPM_TOKEN` environment variable — never from `~/.npmrc`, which any installed package's
+`postinstall` script can read. `scripts/publish-local.mjs` verifies each published tarball is
+downloadable before reporting success; a version whose tarball 404s cannot be republished, which is
 what forced 1.0.1. The `Release` workflow builds artifacts and attaches them to the GitHub release
-only. Do not reintroduce `npm stage publish` or an `NPM_TOKEN` secret; the reasons are in
-[RELEASING.md](RELEASING.md), "Why not staged publishing".
+only.
 
 ## Documentation map
 

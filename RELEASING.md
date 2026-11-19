@@ -7,21 +7,26 @@ touches npm.
 
 - npm account with publish access to `dsh-waypoint`, `dsh-waypoint-agent` and
   `dsh-waypoint-terminal-controller`
-- **a granular access token with "Allow bypass 2FA" enabled**, stored in `~/.npmrc`
+- **a granular access token with "Allow bypass 2FA" enabled**, exported as `NPM_TOKEN`
 
 ```sh
-npm config set //registry.npmjs.org/:_authToken=<token>
+# PowerShell
+$env:NPM_TOKEN = '<token>'
+
+# bash/zsh
+export NPM_TOKEN='<token>'
 ```
+
+The token is read from the environment and handed to npm for the duration of one command. **Do not
+write it into `~/.npmrc`**: that file is readable by the `postinstall` script of every package the
+machine installs, which is how the eslint-scope (2018) and `@mastra/core` (2026) compromises
+harvested publish tokens. `npm audit` and Socket.dev do not inspect configuration files.
 
 > **Why a bypass token rather than a 2FA prompt.** npm stopped accepting new TOTP
 > (authenticator-app) enrolments in 2025, so an account set up today can only use a
 > **security key** — which opens a browser and asks for a fingerprint. That flow cannot
 > produce a 6-digit code, so `--otp` cannot answer it, and a recovery code is rejected
-> the same way. A granular token with bypass 2FA is the documented way to publish
-> without the prompt, and it is the only path that works unattended.
-
-No `NPM_TOKEN` repository secret is involved. If you find one in the repository settings, nothing
-uses it.
+> the same way. A granular token with bypass 2FA is the only path that works unattended.
 
 ## Bump the version
 
@@ -84,22 +89,6 @@ npm pack dsh-waypoint@<version>        # must download, not 404
 
 Then install it in a clean DSH profile: **Plugins → Add plugin → `dsh-waypoint`** → Restart, and
 confirm **Settings → Remote development** appears.
-
-## Why not staged publishing
-
-This used `npm stage publish` in CI plus `npm stage approve` from a maintainer's machine. It was
-replaced for a concrete reason, recorded so it is not reintroduced:
-
-- One release needed two credentials in two places, and only the second step could fail after CI was
-  green.
-- With 2FA not enabled on the account, `npm stage approve` answered **`404 staged version not
-  found`** — not a permission error. Replacing the token with a bypass-2FA one did not change it;
-  enabling 2FA on the account did. The 404 sent the investigation in the wrong direction for a long
-  time.
-- A staged version can be approved but end up half-published, which is exactly how 1.0.0's tarball
-  went missing.
-
-Publishing directly from a machine where npm can prompt for 2FA removes the hand-off entirely.
 
 ## If a published version is broken
 
