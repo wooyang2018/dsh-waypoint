@@ -6,7 +6,10 @@
 # "follow the local DSH version", which is the default.
 - id: dsh-waypoint
   config:
-    stateDir: ~/.dsh/remote
+    # Empty means $DSH_HOME/waypoint. A leading `~` is expanded against
+    # DSH_HOME here (not the OS home), so `~/.dsh/remote` would become
+    # <DSH_HOME>/.dsh/remote.
+    stateDir: ''
     sshBinary: ssh
     # Empty pairs scp with sshBinary.
     scpBinary: ''
