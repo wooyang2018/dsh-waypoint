@@ -140,6 +140,15 @@ export class RemoteProvisioner {
       })
     }
 
+    // `remoteStart: none` means the operator starts the remote DSH themselves.
+    // The bootstrap deliberately does not wait for the state file in that mode,
+    // so waiting here would always time out 120 seconds later and report a
+    // failure the configuration asked for. The install itself succeeded.
+    if (this.#config.remoteStart === 'none') {
+      options.onProgress?.('installed')
+      return
+    }
+
     options.onProgress?.('waitingWeb')
     await this.#waitForAgent(
       target,
@@ -298,12 +307,45 @@ const PERMANENT_INSTALL_CODES: ReadonlySet<InstallerErrorCode> = new Set<Install
   'install/node-outdated',
   'install/npm-missing',
   'install/profile-migrate-failed',
+  // The unit would not stop, so the fallback refused to create a second
+  // `dsh web`. Retrying runs the same commands against the same stuck unit.
+  'install/service-still-running',
 ])
 
-/** Whether a provisioning failure should stop automatic retries. */
+/**
+ * Node.js provisioning failures the operator must change something to fix.
+ *
+ * `node/install-failed` is deliberately absent: the nvm download runs over the
+ * network, so a transient failure there is retried like any other. The three
+ * listed causes describe the host itself (wrong platform, no downloader, an
+ * install that does not verify), and repeating the attempt cannot change them.
+ */
+const PERMANENT_NODE_CODES: ReadonlySet<string> = new Set<string>([
+  'node/unsupported-platform',
+  'node/no-downloader',
+  'node/verify-failed',
+])
+
+/**
+ * Whether a provisioning failure should stop automatic retries.
+ *
+ * Reads the installer code from either shape it reaches this function in. A
+ * raw `InstallerError` carries it as a property; `ensureInstalled` wraps the
+ * failure in a `LocalError` and records the code under `details.installerCode`
+ * instead. Only the first shape was read before, so every wrapped failure
+ * looked transient and the "blocked" state was never entered — a host with no
+ * Node.js re-ran the whole bootstrap on each reconnect.
+ */
 export function isPermanentInstallFailure(error: unknown): boolean {
-  if (error instanceof NodeProvisionError) return true
+  if (error instanceof NodeProvisionError) {
+    return PERMANENT_NODE_CODES.has(error.installerCode)
+  }
+  // Prefer the error's own code; `details` is the wrapper's copy and is only a
+  // fallback, so a code that disagrees with the original cannot win.
+  const nested = (error as { details?: { installerCode?: unknown } } | null | undefined)
+    ?.details?.installerCode
   const code = installerCodeOf(error)
+    ?? (typeof nested === 'string' && INSTALLER_CODES.has(nested) ? nested as InstallerErrorCode : undefined)
   return code !== undefined && PERMANENT_INSTALL_CODES.has(code)
 }
 
@@ -342,6 +384,10 @@ export function installerUi(error: unknown): UiText {
       return { key: 'error.agentInstallNoPnpm' }
     case 'install/dsh-missing':
       return { key: 'error.agentInstallDshMissing' }
+    case 'install/prefix-unreadable':
+      // The global prefix could not be read at all: npm answered nothing, so
+      // checking the dsh install would send the operator to the wrong place.
+      return { key: 'error.agentInstallPrefixUnreadable' }
     default:
       return { key: 'error.agentInstallFailed' }
   }

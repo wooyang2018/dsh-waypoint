@@ -209,7 +209,7 @@ export function globalPrefixPrelude(configured?: string): string {
     ? `PREFIX_OUTPUT="$(npm prefix -g 2>/dev/null | tr -d '\\r' | tail -n 1 || true)"
 if [ -z "$PREFIX_OUTPUT" ]; then
   echo "dsh-waypoint: could not read the npm global prefix; 'npm prefix -g' returned nothing" >&2
-  exit 24
+  exit 27
 fi
 DSH_PREFIX="$PREFIX_OUTPUT"`
     : `DSH_PREFIX=${shellPath(trimmed)}`
@@ -471,8 +471,13 @@ if [ "$WAIT_FOR_STATE" -eq 1 ] && [ -s "$STATE_FILE" ]; then
   echo "dsh-waypoint: agent ready"
   PORT_VALUE=$(sed -n 's/.*"port": *\\([0-9][0-9]*\\).*/\\1/p' "$STATE_FILE" | head -1)
   echo "dsh-waypoint: remote agent port \${PORT_VALUE:-unknown}"
-else
+elif [ "$WAIT_FOR_STATE" -eq 1 ]; then
   echo "dsh-waypoint: warning: the agent state file is not ready yet; inspect the remote DSH log" >&2
+else
+  # remoteStart: none asked for exactly this — nothing was started, so there is
+  # no state file to wait for. Calling it a warning would blame the operator for
+  # the setting they chose.
+  echo "dsh-waypoint: start mode none; the remote DSH was not started" >&2
 fi
 `
 }
@@ -498,7 +503,22 @@ if command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload >/dev/
     && systemctl --user restart dsh-waypoint-agent.service; then
     echo "dsh-waypoint: restarted systemd user unit dsh-waypoint-agent.service"
   else
-    echo "dsh-waypoint: systemd user unit failed; falling back to nohup" >&2
+    # The unit was enabled before the restart failed, so it can still be
+    # enabled now. Starting nohup on top of it would leave two dsh web processes
+    # writing one agent.json — the state doctor reports as dsh_web_processes.
+    # Withdraw the unit first, and refuse the fallback if it will not stop:
+    # failing this install is better than creating that state.
+    echo "dsh-waypoint: systemd user unit failed; withdrawing it before the nohup fallback" >&2
+    systemctl --user disable --now dsh-waypoint-agent.service >/dev/null 2>&1 || true
+    STOPPED=0
+    for _ in 1 2 3 4 5 6; do
+      if ! systemctl --user is-active dsh-waypoint-agent.service >/dev/null 2>&1; then STOPPED=1; break; fi
+      sleep 1
+    done
+    if [ "$STOPPED" -ne 1 ]; then
+      echo "dsh-waypoint: dsh-waypoint-agent.service is still running; refusing to start a second dsh web" >&2
+      exit 28
+    fi
     ${renderNohup(options)}
   fi
 else
