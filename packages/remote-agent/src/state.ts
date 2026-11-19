@@ -8,7 +8,7 @@
  * @module dsh-waypoint-agent/state
  */
 
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { isValidToken, mintToken } from './auth.ts'
 import { stateDirectory } from './config.ts'
@@ -120,8 +120,14 @@ export async function openState(
 
 /** Atomically write the private state file with mode 0600. */
 export async function writeState(file: string, state: AgentState): Promise<void> {
-  await mkdir(stateDirectory(file), { recursive: true, mode: 0o700 })
-  await chmod(stateDirectory(file), 0o700).catch(() => undefined)
+  // Tighten only a directory this call created. `stateFile` is configurable, and
+  // pointing it at a shared directory (an account's home, for example) must not
+  // narrow that directory's mode out from under whatever else lives there; the
+  // state file itself is still written 0600.
+  const directory = stateDirectory(file)
+  const existed = await stat(directory).then(() => true, () => false)
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  if (!existed) await chmod(directory, 0o700).catch(() => undefined)
   const temp = `${file}.${randomUUID()}.tmp`
   const body = `${JSON.stringify(state, null, 2)}\n`
   await writeFile(temp, body, { encoding: 'utf8', mode: 0o600 })

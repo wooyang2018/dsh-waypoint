@@ -3,8 +3,16 @@
  *
  * The installer's contract with the remote machine is one POSIX bash script
  * on stdin. Rendering is pure and unit-tested; execution lives in
- * `commands.ts`. The script intentionally prints no token and never copies
- * model API keys.
+ * `commands.ts`.
+ *
+ * Secret handling, stated exactly, because the previous wording claimed more
+ * than this file delivers: the script never contains the agent bearer token,
+ * and it contains the model API key **only** in direct-key mode, where it is
+ * assigned to `MODEL_API_KEY` so the systemd unit or nohup environment can
+ * carry it. In credential-proxy mode that variable is empty and only a
+ * per-host proxy token travels. A caller that prints the rendered script to a
+ * shared log therefore prints the key — which is why `commands.ts` no longer
+ * echoes it.
  *
  * @module @dsh-waypoint/installer/bootstrap
  */
@@ -48,7 +56,7 @@ export function shellLiteral(value: string): string {
 
 /** Render a path option, expanding a leading `~/` against the remote HOME. */
 export function shellPath(value: string): string {
-  if (value === '~') return '"$HOME"'
+  if (value === '~' || value === '$HOME') return '"$HOME"'
   if (value.startsWith('~/')) {
     const rest = value.slice(2)
     return `"$HOME/"${shellLiteral(rest)}`
@@ -220,11 +228,47 @@ export DSH_PREFIX DSH_BIN DSH_NODE_BIN_DIR`
 }
 
 /** Render the complete bootstrap script. */
+/**
+ * Refuse a configured value that could break out of the script that carries it.
+ *
+ * Every value below reaches the remote shell, and the systemd unit is written
+ * with an unquoted heredoc that *expands* those variables: a newline inside
+ * `remoteDshHome` ends the `Environment=` line and starts a new unit directive,
+ * so `remoteDshHome: "/srv/dsh\nExecStartPre=curl … | sh"` runs that command as
+ * the account. Quoting protects the shell assignment; it does not protect the
+ * heredoc expansion. Rejecting the characters up front is the narrow fix —
+ * a remote injection check would need a new exit code and its own message for a
+ * value the operator typed into their own config.
+ *
+ * @param value the configured value.
+ * @param field the option name, for the error message.
+ * @throws when the value contains a control character.
+ */
+function assertConfigSafe(value: string, field: string): void {
+  if (/[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new Error(
+      `${field} must not contain control characters (a newline there would inject a line into the remote service definition)`,
+    )
+  }
+}
+
 export function renderBootstrapScript(options: BootstrapOptions): string {
+  assertConfigSafe(options.dshHome, 'dshHome')
+  assertConfigSafe(options.profile, 'profile')
+  assertConfigSafe(options.dshVersion, 'dshVersion')
+  assertConfigSafe(options.pnpmVersion, 'pnpmVersion')
+  assertConfigSafe(options.agentTarball, 'agentTarball')
+  if (options.globalPrefix !== undefined) assertConfigSafe(options.globalPrefix, 'globalPrefix')
+  if (options.modelBaseUrl !== undefined) assertConfigSafe(options.modelBaseUrl, 'modelBaseUrl')
+  if (options.modelApiKey !== undefined) assertConfigSafe(options.modelApiKey, 'modelApiKey')
+  if (options.proxyUrl !== undefined) assertConfigSafe(options.proxyUrl, 'proxyUrl')
+  if (options.noProxy !== undefined) assertConfigSafe(options.noProxy, 'noProxy')
   const startBlock = renderStartBlock(options)
   const minimumNodeVersion = `${minimumNodeFloor().major}.${minimumNodeFloor().minor}.0`
   return `#!/usr/bin/env bash
-# dsh-waypoint installer bootstrap — generated, no secrets embedded.
+# dsh-waypoint installer bootstrap — generated. It carries the model API key in
+# direct-key mode (MODEL_API_KEY below); it never carries the agent's bearer
+# credential, which the local plugin reads from the state file instead.
 set -euo pipefail
 
 DSH_HOME=${shellPath(options.dshHome)}

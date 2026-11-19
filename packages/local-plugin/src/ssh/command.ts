@@ -25,13 +25,23 @@ export interface CommandInvocation {
 }
 
 /**
- * Extensions Windows cannot execute directly, so they have to go through Node.
+ * Extensions Node can run as a script.
  *
- * `.cmd`/`.bat` are deliberately included: `execFile` rejects them with
- * `EFTYPE` too (only `spawn(..., { shell: true })` accepts them, and a shell
- * would make the argv quoting the plugin relies on unsafe).
+ * Only these three. `.cmd`/`.bat` are **not** here: Node cannot execute a batch
+ * file — it parses `@SETLOCAL` as JavaScript and throws `SyntaxError` — so
+ * routing them through Node would replace one opaque failure with another.
  */
-const SCRIPT_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.cmd', '.bat'])
+const NODE_SCRIPT_EXTENSIONS = new Set(['.js', '.mjs', '.cjs'])
+
+/**
+ * Extensions that cannot be started through `spawn` at all.
+ *
+ * `.cmd`/`.bat` need a shell to interpret them, and `spawn` rejects them with
+ * `EINVAL`. `.ps1` is not an executable format on Windows either: `spawn` gives
+ * `EFTYPE`, and running it needs `powershell -File`, which this package does not
+ * do. Both cases are named in the error rather than left to the OS.
+ */
+const UNSUPPORTED_EXTENSIONS = new Set(['.cmd', '.bat', '.ps1'])
 
 /**
  * Whether a configured binary needs Node to run.
@@ -40,7 +50,7 @@ const SCRIPT_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.cmd', '.bat'])
  * honoured on POSIX for extensionless scripts.
  */
 export function needsNode(command: string): boolean {
-  if (SCRIPT_EXTENSIONS.has(extname(command).toLowerCase())) return true
+  if (NODE_SCRIPT_EXTENSIONS.has(extname(command).toLowerCase())) return true
   // An extensionless script (`#!/usr/bin/env node`) only matters where the
   // kernel would have read the shebang; Windows never gets that far.
   if (process.platform === 'win32') return false
@@ -65,6 +75,14 @@ export function resolveCommand(
   execPath: string = process.execPath,
   needsNodeImpl: (value: string) => boolean = needsNode,
 ): CommandInvocation {
+  const extension = extname(command).toLowerCase()
+  if (UNSUPPORTED_EXTENSIONS.has(extension)) {
+    throw new Error(
+      `${command} cannot be started without a shell `
+      + `(${extension} needs one, and a shell would change the argv quoting this plugin relies on); `
+      + 'point sshBinary/scpBinary at the real executable, or wrap it in a .js file',
+    )
+  }
   return needsNodeImpl(command)
     ? { command: execPath, prefixArgs: [command] }
     : { command, prefixArgs: [] }

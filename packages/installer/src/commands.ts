@@ -119,7 +119,15 @@ export async function commandInstall(options: InstallerOptions): Promise<string>
     verbose: options.verbose,
   })
   const script = fromOptions(options, remoteTarball)
-  if (options.verbose) process.stderr.write(script)
+  // Never echo the rendered script: in direct-key mode it carries the model
+  // API key verbatim (see `renderBootstrapScript`). `plan` prints the script
+  // without a key, because it renders from CLI options and the CLI has no key
+  // flag; that is the way to inspect it.
+  if (options.verbose) {
+    process.stderr.write(
+      `dsh-waypoint: bootstrap script is ${String(script.length)} bytes; use \`plan\` to inspect it\n`,
+    )
+  }
   const result = await runRemoteScript(target, script, {
     ...sshOptions(options),
     // npm install and DSH boot regularly exceed a short per-command timeout.

