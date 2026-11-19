@@ -25,9 +25,12 @@ Normally the local plugin installs this package for you when you add a host. For
 ```sh
 node packages/installer/lib/cli.js install --target user@host
 # or
-dsh plugin --profile web add dsh-waypoint-agent@0.2.12
+dsh plugin --profile web add dsh-waypoint-agent@<version>
 dsh web --host 127.0.0.1 --port 0 --no-open
 ```
+
+`<version>` must match `version` in [`package.json`](package.json), which is also the value the agent
+reports as `AGENT_VERSION` and in the `x-dsh-waypoint-agent-version` response header.
 
 ## Endpoints
 

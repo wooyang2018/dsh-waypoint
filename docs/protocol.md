@@ -3,7 +3,12 @@
 - **Status**: v1, implemented by `dsh-waypoint-agent` and `@dsh-waypoint/protocol`
 - **Transport**: HTTP/1.1 over an SSH local forward; Server-Sent Events for streamed frames
 - **Encoding**: JSON envelopes; UTF-8
-- **Scope**: host/workspace/session projections plus a small session/workspace write surface. No arbitrary shell or file-content access.
+- **Scope**: host/workspace/session projections, a small session/workspace write surface, a read-only
+  remote filesystem (text line windows and base64 byte windows), and PTY terminals. The filesystem
+  surface returns file content by design, and the terminal surface types arbitrary commands into a
+  remote login shell. Both are reachable by any holder of the bearer token, so the token is equivalent
+  to shell access on the remote host: the trust boundary is the token plus the loopback bind, not a
+  command allowlist.
 
 ## Why this protocol exists
 
@@ -51,10 +56,12 @@ The agent advertises its revision on every response:
 
 ```http
 x-dsh-waypoint-server-protocol: 1
-x-dsh-waypoint-agent-version: 0.2.10
-x-dsh-waypoint-host-id: <echoed or local>
+x-dsh-waypoint-agent-version: <AGENT_VERSION>   # the dsh-waypoint-agent package version
 x-dsh-waypoint-request-id: <echoed or generated>
 ```
+
+`hostId` is not echoed as a response header. It is returned inside the JSON body (`HostInfo`,
+`SessionSnapshot`), and a client keeps its per-host caches apart by the host it dialed.
 
 ### Version rules
 
@@ -95,21 +102,32 @@ Failure:
 
 | Code | HTTP | Meaning |
 |---|---|---|
-| `protocol/version-mismatch` | 409 | Peer revision is missing/invalid/unsupported |
+| `protocol/version-mismatch` | 409 | Peer revision is missing, malformed, or unsupported. `details: { clientVersion, serverVersion, supported }` |
 | `auth/missing` | 401 | No bearer token |
 | `auth/invalid` | 401 | Wrong bearer token |
-| `auth/forbidden` | 403 | Peer is not loopback (when enforced) |
-| `request/invalid` | 400/405 | Bad method, limit, cursor, or host header |
-| `request/too-large` | 413 | Snapshot scan ceiling exceeded |
+| `auth/forbidden` | 403 | Peer is not loopback while `loopbackOnly` is true |
+| `request/invalid` | 400 / 405 | 400: bad body, `limit`, cursor, or host-id header. 405: wrong method for a known path — see [Routes](#routes) for the routes that currently return no response instead |
+| `request/too-large` | 413 | Request body over the per-route cap (256 KiB, and 12 MiB for `session.prompt`), or the cold-session scan ceiling was exceeded |
 | `route/not-found` | 404 | Unknown path |
-| `workspace/not-found` | 404 | Workspace not registered |
-| `session/not-found` | 404 | Session not live or persisted |
-| `session/not-live` | 409 | Follow requested for a cold session (cold resume is not implemented) |
-| `agent/not-ready` | 503 | Listener not bound |
+| `workspace/not-found` | 404 | Workspace id is not registered on the host |
+| `session/not-found` | 404 | Session is neither live nor resolvable through persistence |
+| `session/not-live` | 409 | A live-only route (`/sessions/:id/events`, `/sessions/:id/assistant-events`, `/sessions/:id/sandbox`) was used on a cold session; cold resume is not implemented |
+| `session/model-unavailable` | 400 | The selected provider/model is absent from this host's catalog. `retryable: false`, `details: { provider, model }`; resending the same selection cannot succeed |
+| `agent/not-ready` | 503 | The agent has no bound web listener. Raised while mounting, so a client normally never observes it as a response |
+| `workspace-file/not-found` | 404 | A `files/*` target does not exist, or could not be stat-ed |
+| `workspace-file/not-regular-file` | 404 | Target exists but is a directory or another non-regular file. `details.kind` is `directory` or `other` |
+| `workspace-file/not-text` | 404 | `files/read` found a NUL byte, so the page is not text |
+| `directory/unreadable` | 404 | `directories?path=` could not be listed |
+| `terminal/unavailable` | 409 | PTY id is unknown, closed, or no longer running |
+| `terminal/error` | 500 | PTY allocation or control-channel failure |
 | `internal` | 500 | Unexpected agent failure |
 
-`retryable` is advisory. The local plugin reconnects on `agent/not-ready`, transport failures, and
-tunnel exits, not on authentication or protocol errors.
+The table above is the complete `PROTOCOL_ERROR_CODES` list; a code the client does not recognize is
+reported as `internal`, so adding one is a client-visible change.
+
+`retryable` is advisory. `isRetryableCode` marks only `agent/not-ready` and `internal`, and the flag is
+carried through to the local plugin for display. The local plugin does not branch on it: its health
+check and tunnel watcher schedule a bounded reconnect on any transport failure.
 
 ## Routes
 
@@ -121,38 +139,55 @@ tunnel exits, not on authentication or protocol errors.
 | `GET` | `/sessions` | `{ sessions: RemoteSessionSummary[] }` |
 | `GET` | `/workspaces/:workspaceId/sessions` | `{ sessions }` filtered to the workspace |
 | `GET` | `/sessions/:sessionId?limit=N` | `SessionSnapshot` |
-| `GET` | `/sessions/:sessionId/events?cursor=N` | `text/event-stream` |
+| `GET` | `/sessions/:sessionId/events?cursor=N` | SSE; `event:` is the frame type (`ready`/`event`/`heartbeat`/`end`) |
+| `GET` | `/sessions/:sessionId/assistant-events` | SSE `event: assistant` frames; live sessions only (`session/not-live` otherwise) |
 | `GET` | `/web-url` | `{ path: "/?token=..." }` |
-| `GET` | `/files/watch?path=...` | SSE `ready`/`change` frames |
+| `GET` | `/llm/catalog` | `ModelCatalogResult` — the providers/models this host can actually route to |
+| `GET` | `/approvals/events` | SSE `event: ready`, then one `event: request` per pending approval, with `event: heartbeat` keepalives |
+| `GET` | `/files/watch?path=...` | SSE `event: file` with `{ kind: "ready" \| "change" }` |
 | `GET` | `/directories?path=...` | `RemoteDirectoryListing` |
 | `GET` | `/terminals` | `{ terminals: RemoteTerminalInfo[] }` |
-| `GET` | `/terminals/:id/attach` | SSE terminal frames |
+| `GET` | `/terminals/:id/attach` | SSE `event: frame` with terminal frames |
 
-Read routes use `GET`. `GET /approvals/events` is an SSE approval-question stream. Write routes use
-`POST` with a JSON body:
+Read routes use `GET`. Write routes use `POST` with a JSON body:
 
 | Method | Path | Body | Result |
 |---|---|---|---|
 | `POST` | `/workspaces` | `{ "path": "/abs/dir", "title"?: "…" }` | `RemoteWorkspace` |
 | `POST` | `/sessions` | `{ "workspaceId"?: "…", "cwd"?: "/abs/dir", "agentPreset"?: "…" }` | `CreateSessionResult` |
-| `POST` | `/sessions/:id/prompt` | `{ "text": "…", "mode"?: "queue" \| "steer", "provider"?: "…", "model"?: "…", "reasoningEffort"?: "…" }` | `{ "accepted": true }` |
+| `POST` | `/sessions/:id/model` | `{ "provider": "…", "model": "…", "reasoningEffort"?: "…" }` | `{ "accepted": true }`; `session/model-unavailable` when the host cannot route it |
+| `POST` | `/sessions/:id/sandbox` | `{ "mode": "read-only" \| "workspace-write" \| "danger-full-access" }` | `{ "accepted": true }` |
+| `POST` | `/sessions/:id/prompt` | `{ "text": "…", "content"?: [{ "type": "text", "text": "…" } \| { "type": "image", "data": "<base64>", "mediaType": "image/png", "name"?: "…" }], "mode"?: "queue" \| "steer", "provider"?: "…", "model"?: "…", "reasoningEffort"?: "…" }` | `{ "accepted": true }` |
 | `POST` | `/sessions/:id/cancel` | `{}` | `{ "accepted": true }` |
+| `POST` | `/sessions/:id/archive` | `{ "stopActivity"?: true }` (default `true`) | `{ "accepted": true }` |
 | `POST` | `/approvals/answer` | `{ "id": "…", "outcome": "allowed-once" \| "rejected" \| "cancelled" \| "unavailable" }` | `{ "accepted": true }` |
 | `POST` | `/files/stat`, `/files/list`, `/files/read`, `/files/bytes` | `{ "path": "/abs/path", "offset"?, "limit"?, "length"? }` | file/list result |
-| `POST` | `/terminals` | `{ "cwd": "/abs/dir", "id"?, "cols"?, "rows"?, "shellPath"? }` | `RemoteTerminalInfo` |
+| `POST` | `/terminals` | `{ "cwd": "/abs/dir", "id"?, "title"?, "cols"?, "rows"?, "shellPath"? }` | `RemoteTerminalInfo` |
 | `POST` | `/terminals/:id/input` | `{ "type": "write", "data": "…" }` or `{ "type": "resize", "cols": 100, "rows": 30 }` | `{ "accepted": true }` |
 | `POST` | `/terminals/:id/rename` | `{ "title": "…" }` | `{ "accepted": true }` |
 | `POST` | `/terminals/:id/close` | `{}` | `{ "accepted": true }` |
 
-`workspaceId` and `cwd` are mutually exclusive. Prompt text must be non-empty. An optional provider/model
-selection is installed on the remote Session before the prompt. A wrong method for a route returns
-`405`; unknown paths return a JSON `route/not-found` envelope.
+`workspaceId` and `cwd` are mutually exclusive. A prompt carries either a non-empty `text` or at least
+one `content` image part; `text` may be empty when an image is present. An optional provider/model
+selection is installed on the remote Session before the prompt is submitted. Request bodies are capped
+at 256 KiB, and at 12 MiB for `session.prompt` (base64 images); an oversized body fails with
+`request/too-large`. Unknown paths return a JSON `route/not-found` envelope.
+
+A wrong method on a known path returns `405` with code `request/invalid` where the route declares a
+single method — `GET` on `session.prompt`, `session.cancel`, `session.archive`, and `approval.answer`;
+`POST` on any read route; and any method other than `GET` or `POST` anywhere. The remaining POST-only
+routes (`/files/stat`, `/files/list`, `/files/read`, `/files/bytes`, `/sessions/:id/model`,
+`/sessions/:id/sandbox`, `/terminals/:id/input`, `/terminals/:id/rename`, `/terminals/:id/close`)
+currently answer a `GET` with no response at all, so a client that sends the wrong method sees its
+request time out rather than a `405`. Treat these routes as POST-only and do not rely on the method
+check.
 
 The HTTP write surface creates workspaces and sessions, submits prompts, cancels a turn, reads files
-for the native file tree/preview, and owns PTY terminals. File reads are read-only; terminal input is
-the only path that executes a shell, and it is gated by the same bearer token. File and terminal
-traffic from the local UI travels over the existing SSH tunnel; no per-operation SSH connection is
-opened by the local plugin.
+for the native file tree/preview, and owns PTY terminals. File reads are read-only; the terminal
+surface — both `POST /terminals` (which allocates the PTY and starts the login shell) and
+`POST /terminals/:id/input` — reaches a shell, and both are gated by the same bearer token. File and
+terminal traffic from the local UI travels over the existing SSH tunnel; no per-operation SSH
+connection is opened by the local plugin.
 
 ## Approvals
 
@@ -172,15 +207,19 @@ interface HostInfo {
   dshVersion: string
   agentVersion: string
   home: string            // remote DSH home
+  loginShell?: string     // POSIX login shell; absent on older agents
   startedAt: string       // ISO-8601
   protocolVersion: number
   capabilities: AgentCapability[]
   workspaceCount: number
+  modelBaseUrl?: string | null          // provider base URL, never the key
+  modelKeyConfigured?: boolean          // whether a model API key is present remotely
+  modelKeyFingerprint?: string | null   // SHA-256 of that key, for drift detection only
 }
 ```
 
-`hostId` is a client-side identity. The agent echoes the header so a multi-host client can keep its
-caches unambiguous.
+`hostId` is a client-side identity. The agent uses it for diagnostics and cache isolation inside the
+JSON body; it is not echoed as a response header.
 
 ## Workspaces
 
@@ -208,12 +247,16 @@ interface RemoteSessionSummary {
   createdAt: string
   live: boolean
   eventCount: number | null
+  origin?: 'subagent'      // present only for subagent sessions
+  parentSession?: string   // parent session id for a subagent session
 }
 ```
 
 The agent lists sessions from the workspace registry plus persisted sessions that are not in a
 workspace (reported with `workspaceId: null`). `live` means the session is in the remote process
-store. `eventCount` comes from the live store or the persistence snapshot's cheap metadata.
+store. `eventCount` comes from the live store or the persistence snapshot's cheap metadata. Subagent
+sessions are reported with `origin: "subagent"` and their `parentSession`, so a client can keep them
+out of the ordinary workspace list.
 
 ### Snapshot
 
@@ -238,6 +281,23 @@ interface SessionSnapshot {
 - A cold session is read through `sessionPersistence`; a live session through its in-memory
   snapshot.
 - `cursor` is the next sequence number, not the last event's sequence.
+
+Every event in a snapshot or a stream has this shape:
+
+```ts
+interface RemoteSessionEvent {
+  seq: number
+  type: string
+  time: number            // epoch milliseconds
+  data: JsonValue
+  // Optional surface placement, copied from the Host event for native transcript replay.
+  surfaceOp?: 'append' | { op: 'replace'; startSeq: number; endSeq: number }
+  // Earlier surface events cited by this message.
+  sourceEventSeqs?: number[]
+}
+```
+
+`surfaceOp` and `sourceEventSeqs` are omitted when the Host event does not carry them.
 
 ### Event stream
 
@@ -289,12 +349,12 @@ never logged or stored by the local plugin.
 - `session.create` joins an existing workspace or an explicit remote directory; it never creates an
   arbitrary local path outside the remote DSH workspace registry.
 - `session.prompt` submits text and an optional model selection. File reads and terminal input are
-  separate authenticated endpoints; the file surface is read-only, while terminal input reaches a
-  host shell. Approval questions travel on the dedicated approval stream; the local UI's decision is
+  separate authenticated endpoints; the file surface is read-only, while the terminal surface reaches
+  a host shell. Approval questions travel on the dedicated approval stream; the local UI's decision is
   posted back to this agent. A prompt can still cause the remote DSH agent to use its own tools under
   the remote sandbox and approval policy.
-- The bearer token grants session-writing capability. Treat it as a secret and keep the agent on
-  loopback.
+- The bearer token grants session-writing capability, read access to any file the remote account can
+  read, and a login shell on the remote host. Treat it as a secret and keep the agent on loopback.
 - `session.cancel` only cancels the active turn of an existing live session.
 
 ## Security notes
@@ -304,9 +364,11 @@ never logged or stored by the local plugin.
   disabling it; a direct public port cannot.
 - State files are written atomically with `0600`.
 - The protocol never carries model credentials.
-- The agent's write surface is session/workspace creation, prompts, cancel, and approval answers.
-  Terminal and file traffic for the native UI is carried by the remote agent file/terminal API over the tunnel, not this
-  HTTP protocol.
+- The agent's write surface is session/workspace creation, prompts, cancel, archive, model and sandbox
+  selection, approval answers, and terminal input/rename/close. The native UI's file tree, previews,
+  file watching, and terminals are served by this same HTTP protocol over the existing SSH tunnel
+  (`/files/*`, `/files/watch`, `/terminals/*`); the local plugin never opens a per-operation SSH
+  connection.
 - Adding another mutation verb requires a protocol revision and a re-review of this boundary.
 
 ## Package surface: contract versus internals
@@ -316,47 +378,67 @@ only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
+`index.ts` exports 127 symbols in total. They split into 60 contract symbols, 44 symbols referenced
+only inside `packages/protocol/src`, and 23 symbols referenced nowhere at all. Every name below is
+listed explicitly, so the counts can be recomputed from this page without expanding any wildcard.
+
 **Import contract (60 symbols).** Consumed by another package through a named import. Changing or
 removing one of these is a cross-package change.
 
-- Version and headers: `PROTOCOL_VERSION`, `AGENT_API_PREFIX`, `HEADER_*`, `negotiateProtocol`,
-  `parseProtocolHeader`
-- Clients and cursors: `RemoteAgentClient`, `EventCursor`, `parseCursorQuery`
-- Discovery and routes: `isAgentDiscoveryState`, `isAgentLive`, `AgentDiscoveryState`,
-  `matchAgentRoute`, `sessionArchivePath`
-- Errors: `RemoteProtocolError`, `httpStatusForCode`
-- Wire types: `AgentCapability`, `HostInfo`, `JsonValue`, `ApiSuccess`, `ApiFailure`,
-  `AcceptedResult`, `ApprovalOutcome`, `RemoteApprovalFrame`, `RemoteApprovalRequest`,
-  `RemoteAssistantFrame`, `CreateSessionRequest`, `CreateSessionResult`, `CreateWorkspaceRequest`,
-  `PromptContentPart`, `PromptDeliveryMode`, `PromptSessionRequest`, `SelectModelRequest`,
-  `ModelCatalogResult`, `RemoteModel`, `RemoteModelFailure`, `RemoteModelGroup`,
-  `RemoteModelReasoning`, `ListSessionsResult`, `ListWorkspacesResult`, `RemoteSessionEvent`,
-  `RemoteSessionSummary`, `RemoteWorkspace`, `SessionSnapshot`, `SessionStreamFrame`, `WebUrlResult`
-  and the `RemoteFile*` / `RemoteDirectoryListing` / `RemoteTerminal*` request and result types.
+- Version and headers (9): `PROTOCOL_VERSION`, `AGENT_API_PREFIX`, `HEADER_PROTOCOL_VERSION`,
+  `HEADER_SERVER_PROTOCOL_VERSION`, `HEADER_HOST_ID`, `HEADER_AGENT_VERSION`, `HEADER_REQUEST_ID`,
+  `negotiateProtocol`, `parseProtocolHeader`
+- Client, routing, and cursors (5): `RemoteAgentClient`, `matchAgentRoute`, `sessionArchivePath`,
+  `EventCursor`, `parseCursorQuery`
+- Discovery (3): `AgentDiscoveryState`, `isAgentDiscoveryState`, `isAgentLive`
+- Envelopes and errors (4): `ApiSuccess`, `ApiFailure`, `RemoteProtocolError`, `httpStatusForCode`
+- Host and workspace (5): `AgentCapability`, `HostInfo`, `RemoteWorkspace`, `CreateWorkspaceRequest`,
+  `ListWorkspacesResult`
+- Sessions and prompts (13): `RemoteSessionSummary`, `RemoteSessionEvent`, `SessionSnapshot`,
+  `SessionStreamFrame`, `ListSessionsResult`, `RemoteAssistantFrame`, `AcceptedResult`,
+  `CreateSessionRequest`, `CreateSessionResult`, `PromptSessionRequest`, `PromptContentPart`,
+  `PromptDeliveryMode`, `SelectModelRequest`
+- Files (7): `RemoteFileStat`, `RemoteFileText`, `RemoteFileBytes`, `RemoteFileEntry`,
+  `RemoteFileListing`, `RemoteFileWatchFrame`, `RemoteDirectoryListing`
+- Terminals (4): `RemoteTerminalCreateRequest`, `RemoteTerminalFrame`, `RemoteTerminalInfo`,
+  `RemoteTerminalInput`
+- Models (5): `ModelCatalogResult`, `RemoteModel`, `RemoteModelFailure`, `RemoteModelGroup`,
+  `RemoteModelReasoning`
+- Approvals, JSON, and Web UI (5): `ApprovalOutcome`, `RemoteApprovalFrame`,
+  `RemoteApprovalRequest`, `JsonValue`, `WebUrlResult`
 
-**Internal (65 symbols).** Exported from `index.ts` but imported by no other package. These exist
-because individual protocol modules need them from each other, or because they are re-exported for
-symmetry. Treat them as private: they carry no cross-package guarantee, and nothing outside
-`packages/protocol/src` should start importing them without promoting them to the contract above.
-A `*` marks a family listed both by the `is` guard name and the type it guards.
+**Internal (67 symbols).** Exported from `index.ts` but imported by no other package. Treat them as
+private: they carry no cross-package guarantee, and nothing outside `packages/protocol/src` should
+start importing them without promoting them to the contract above.
 
-- Guards: `isAcceptedResult`, `isApiFailure`, `isApiSuccess`, `isCreateSessionResult`,
+*Referenced only inside `packages/protocol/src` (44).*
+
+- Guards used by `client.ts` (24): `isAcceptedResult`, `isApiFailure`, `isCreateSessionResult`,
   `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`, `isModelCatalogResult`,
-  `isRecord`, `isRemoteWorkspace`, `isRemoteApprovalFrame`, `isRemoteAssistantFrame`,
-  `isSessionSnapshot`, `isSessionStreamFrame`, `isWebUrlResult`, `isRemoteDirectoryListing`,
-  `isRemoteFile*`, `isRemoteTerminal*`, `isCursor`, `isProtocolSupported`, `isRetryableCode`
-- Path builders: `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
-  `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionCancelPath`,
-  `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`, `terminal*Path`
-- Types and constants: `ApiEnvelope`, `JsonPrimitive`, `ProtocolErrorCode`,
-  `PROTOCOL_ERROR_CODES`, `ProtocolNegotiation`, `RemoteProtocolErrorInit`, `RemoteFailure`,
-  `CursorAcceptance`, `SseMessage`, `AgentRoute`, `DEFAULT_REQUEST_TIMEOUT_MS`,
-  `MIN_SUPPORTED_PROTOCOL_VERSION`, `MAX_SUPPORTED_PROTOCOL_VERSION`, `DISCOVERY_STATE_VERSION`,
-  `RemoteDirectoryEntry`, `RemoteTerminalListResult`, `RemoteTerminalShell`, `PromptImagePart`,
-  `RemoteSandboxMode`, `RemoteModelCatalog`, `RemoteReasoningEffort`, `SetSandboxModeRequest`,
-  `SessionSnapshotOptions`, `SessionStreamEndReason`, `RemoteAgentClientOptions`
-- Functions: `parseSseStream`
+  `isProtocolSupported`, `isRecord`, `isRemoteApprovalFrame`, `isRemoteAssistantFrame`,
+  `isRemoteDirectoryListing`, `isRemoteFileBytes`, `isRemoteFileListing`, `isRemoteFileStat`,
+  `isRemoteFileText`, `isRemoteFileWatchFrame`, `isRemoteTerminalFrame`, `isRemoteTerminalInfo`,
+  `isRemoteTerminalListResult`, `isRemoteWorkspace`, `isSessionSnapshot`, `isSessionStreamFrame`,
+  `isWebUrlResult`
+- Path builders used by `client.ts` (14): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`,
+  `sessionCancelPath`, `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`,
+  `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`, `terminalAttachPath`,
+  `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
+- Types, constants, and functions used inside the package (6): `RemoteFailure`,
+  `RemoteTerminalListResult`, `SessionSnapshotOptions`, `SetSandboxModeRequest`,
+  `DEFAULT_REQUEST_TIMEOUT_MS`, `parseSseStream`
+
+*Referenced nowhere (23).*
+
+- `ApiEnvelope`, `AgentRoute`, `CursorAcceptance`, `DISCOVERY_STATE_VERSION`, `JsonPrimitive`,
+  `MAX_SUPPORTED_PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`,
+  `PromptImagePart`, `ProtocolErrorCode`, `ProtocolNegotiation`, `RemoteAgentClientOptions`,
+  `RemoteDirectoryEntry`, `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteReasoningEffort`,
+  `RemoteSandboxMode`, `RemoteTerminalShell`, `SessionStreamEndReason`, `SseMessage`, `isApiSuccess`,
+  `isCursor`, `isRetryableCode`
 
 `ApiEnvelope` and `isApiSuccess` are currently referenced by no package and no internal module. They
 are kept because `isApiSuccess` pairs with `isApiFailure`, which the client uses on every request;
-splitting a guard pair reads worse than one unused guard.
+splitting a guard pair reads worse than one unused guard. `PROTOCOL_ERROR_CODES` and
+`ProtocolErrorCode` are kept for the same reason: `client.ts` asks `isProtocolErrorCode` rather than
+reading the array, so the list exists as documentation of the closed set.
