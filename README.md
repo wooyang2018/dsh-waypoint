@@ -388,6 +388,8 @@ then follow `docs/operations.md` for moving the host registry and cleaning up th
 ## Documentation
 
 - [Wire protocol](docs/protocol.md)
+- [Remote workspace mechanism](docs/remote-workspace-mechanism.md) — how a remote directory becomes a
+  local workspace: discovery, tunnel, the session mirror, files/terminal routing
 - [Operations guide](docs/operations.md)
 - [Development](docs/development.md)
 - [Testing](docs/testing.md)

@@ -87,6 +87,9 @@ README.md lists every document. The ones an agent reaches for while working in
 this repository:
 
 - `docs/adapting-to-dsh-releases.md` — moving to a new DSH release.
+- `docs/remote-workspace-mechanism.md` — how a remote directory becomes a local
+  workspace at runtime: discovery, tunnel, the session mirror, and how files and
+  terminals are rerouted. Start here before changing the mirror.
 - `docs/testing.md` — test workspace visibility, mirror regressions, CI steps.
 - `docs/development.md` — workspace layout, build scripts, the Windows
   package-manager shims this repository has to work around.
