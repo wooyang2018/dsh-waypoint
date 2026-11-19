@@ -370,47 +370,67 @@ only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
+`index.ts` exports 127 symbols in total. They split into 60 contract symbols, 44 symbols referenced
+only inside `packages/protocol/src`, and 23 symbols referenced nowhere at all. Every name below is
+listed explicitly, so the counts can be recomputed from this page without expanding any wildcard.
+
 **Import contract (60 symbols).** Consumed by another package through a named import. Changing or
 removing one of these is a cross-package change.
 
-- Version and headers: `PROTOCOL_VERSION`, `AGENT_API_PREFIX`, `HEADER_*`, `negotiateProtocol`,
-  `parseProtocolHeader`
-- Clients and cursors: `RemoteAgentClient`, `EventCursor`, `parseCursorQuery`
-- Discovery and routes: `isAgentDiscoveryState`, `isAgentLive`, `AgentDiscoveryState`,
-  `matchAgentRoute`, `sessionArchivePath`
-- Errors: `RemoteProtocolError`, `httpStatusForCode`
-- Wire types: `AgentCapability`, `HostInfo`, `JsonValue`, `ApiSuccess`, `ApiFailure`,
-  `AcceptedResult`, `ApprovalOutcome`, `RemoteApprovalFrame`, `RemoteApprovalRequest`,
-  `RemoteAssistantFrame`, `CreateSessionRequest`, `CreateSessionResult`, `CreateWorkspaceRequest`,
-  `PromptContentPart`, `PromptDeliveryMode`, `PromptSessionRequest`, `SelectModelRequest`,
-  `ModelCatalogResult`, `RemoteModel`, `RemoteModelFailure`, `RemoteModelGroup`,
-  `RemoteModelReasoning`, `ListSessionsResult`, `ListWorkspacesResult`, `RemoteSessionEvent`,
-  `RemoteSessionSummary`, `RemoteWorkspace`, `SessionSnapshot`, `SessionStreamFrame`, `WebUrlResult`
-  and the `RemoteFile*` / `RemoteDirectoryListing` / `RemoteTerminal*` request and result types.
+- Version and headers (9): `PROTOCOL_VERSION`, `AGENT_API_PREFIX`, `HEADER_PROTOCOL_VERSION`,
+  `HEADER_SERVER_PROTOCOL_VERSION`, `HEADER_HOST_ID`, `HEADER_AGENT_VERSION`, `HEADER_REQUEST_ID`,
+  `negotiateProtocol`, `parseProtocolHeader`
+- Client, routing, and cursors (5): `RemoteAgentClient`, `matchAgentRoute`, `sessionArchivePath`,
+  `EventCursor`, `parseCursorQuery`
+- Discovery (3): `AgentDiscoveryState`, `isAgentDiscoveryState`, `isAgentLive`
+- Envelopes and errors (4): `ApiSuccess`, `ApiFailure`, `RemoteProtocolError`, `httpStatusForCode`
+- Host and workspace (5): `AgentCapability`, `HostInfo`, `RemoteWorkspace`, `CreateWorkspaceRequest`,
+  `ListWorkspacesResult`
+- Sessions and prompts (13): `RemoteSessionSummary`, `RemoteSessionEvent`, `SessionSnapshot`,
+  `SessionStreamFrame`, `ListSessionsResult`, `RemoteAssistantFrame`, `AcceptedResult`,
+  `CreateSessionRequest`, `CreateSessionResult`, `PromptSessionRequest`, `PromptContentPart`,
+  `PromptDeliveryMode`, `SelectModelRequest`
+- Files (7): `RemoteFileStat`, `RemoteFileText`, `RemoteFileBytes`, `RemoteFileEntry`,
+  `RemoteFileListing`, `RemoteFileWatchFrame`, `RemoteDirectoryListing`
+- Terminals (4): `RemoteTerminalCreateRequest`, `RemoteTerminalFrame`, `RemoteTerminalInfo`,
+  `RemoteTerminalInput`
+- Models (5): `ModelCatalogResult`, `RemoteModel`, `RemoteModelFailure`, `RemoteModelGroup`,
+  `RemoteModelReasoning`
+- Approvals, JSON, and Web UI (5): `ApprovalOutcome`, `RemoteApprovalFrame`,
+  `RemoteApprovalRequest`, `JsonValue`, `WebUrlResult`
 
-**Internal (65 symbols).** Exported from `index.ts` but imported by no other package. These exist
-because individual protocol modules need them from each other, or because they are re-exported for
-symmetry. Treat them as private: they carry no cross-package guarantee, and nothing outside
-`packages/protocol/src` should start importing them without promoting them to the contract above.
-A `*` marks a family listed both by the `is` guard name and the type it guards.
+**Internal (67 symbols).** Exported from `index.ts` but imported by no other package. Treat them as
+private: they carry no cross-package guarantee, and nothing outside `packages/protocol/src` should
+start importing them without promoting them to the contract above.
 
-- Guards: `isAcceptedResult`, `isApiFailure`, `isApiSuccess`, `isCreateSessionResult`,
+*Referenced only inside `packages/protocol/src` (44).*
+
+- Guards used by `client.ts` (24): `isAcceptedResult`, `isApiFailure`, `isCreateSessionResult`,
   `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`, `isModelCatalogResult`,
-  `isRecord`, `isRemoteWorkspace`, `isRemoteApprovalFrame`, `isRemoteAssistantFrame`,
-  `isSessionSnapshot`, `isSessionStreamFrame`, `isWebUrlResult`, `isRemoteDirectoryListing`,
-  `isRemoteFile*`, `isRemoteTerminal*`, `isCursor`, `isProtocolSupported`, `isRetryableCode`
-- Path builders: `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
-  `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionCancelPath`,
-  `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`, `terminal*Path`
-- Types and constants: `ApiEnvelope`, `JsonPrimitive`, `ProtocolErrorCode`,
-  `PROTOCOL_ERROR_CODES`, `ProtocolNegotiation`, `RemoteProtocolErrorInit`, `RemoteFailure`,
-  `CursorAcceptance`, `SseMessage`, `AgentRoute`, `DEFAULT_REQUEST_TIMEOUT_MS`,
-  `MIN_SUPPORTED_PROTOCOL_VERSION`, `MAX_SUPPORTED_PROTOCOL_VERSION`, `DISCOVERY_STATE_VERSION`,
-  `RemoteDirectoryEntry`, `RemoteTerminalListResult`, `RemoteTerminalShell`, `PromptImagePart`,
-  `RemoteSandboxMode`, `RemoteModelCatalog`, `RemoteReasoningEffort`, `SetSandboxModeRequest`,
-  `SessionSnapshotOptions`, `SessionStreamEndReason`, `RemoteAgentClientOptions`
-- Functions: `parseSseStream`
+  `isProtocolSupported`, `isRecord`, `isRemoteApprovalFrame`, `isRemoteAssistantFrame`,
+  `isRemoteDirectoryListing`, `isRemoteFileBytes`, `isRemoteFileListing`, `isRemoteFileStat`,
+  `isRemoteFileText`, `isRemoteFileWatchFrame`, `isRemoteTerminalFrame`, `isRemoteTerminalInfo`,
+  `isRemoteTerminalListResult`, `isRemoteWorkspace`, `isSessionSnapshot`, `isSessionStreamFrame`,
+  `isWebUrlResult`
+- Path builders used by `client.ts` (14): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`,
+  `sessionCancelPath`, `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`,
+  `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`, `terminalAttachPath`,
+  `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
+- Types, constants, and functions used inside the package (6): `RemoteFailure`,
+  `RemoteTerminalListResult`, `SessionSnapshotOptions`, `SetSandboxModeRequest`,
+  `DEFAULT_REQUEST_TIMEOUT_MS`, `parseSseStream`
+
+*Referenced nowhere (23).*
+
+- `ApiEnvelope`, `AgentRoute`, `CursorAcceptance`, `DISCOVERY_STATE_VERSION`, `JsonPrimitive`,
+  `MAX_SUPPORTED_PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`,
+  `PromptImagePart`, `ProtocolErrorCode`, `ProtocolNegotiation`, `RemoteAgentClientOptions`,
+  `RemoteDirectoryEntry`, `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteReasoningEffort`,
+  `RemoteSandboxMode`, `RemoteTerminalShell`, `SessionStreamEndReason`, `SseMessage`, `isApiSuccess`,
+  `isCursor`, `isRetryableCode`
 
 `ApiEnvelope` and `isApiSuccess` are currently referenced by no package and no internal module. They
 are kept because `isApiSuccess` pairs with `isApiFailure`, which the client uses on every request;
-splitting a guard pair reads worse than one unused guard.
+splitting a guard pair reads worse than one unused guard. `PROTOCOL_ERROR_CODES` and
+`ProtocolErrorCode` are kept for the same reason: `client.ts` asks `isProtocolErrorCode` rather than
+reading the array, so the list exists as documentation of the closed set.
