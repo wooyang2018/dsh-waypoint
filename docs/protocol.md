@@ -57,9 +57,11 @@ The agent advertises its revision on every response:
 ```http
 x-dsh-waypoint-server-protocol: 1
 x-dsh-waypoint-agent-version: <AGENT_VERSION>   # the dsh-waypoint-agent package version
-x-dsh-waypoint-host-id: <echoed or local>
 x-dsh-waypoint-request-id: <echoed or generated>
 ```
+
+`hostId` is not echoed as a response header. It is returned inside the JSON body (`HostInfo`,
+`SessionSnapshot`), and a client keeps its per-host caches apart by the host it dialed.
 
 ### Version rules
 
