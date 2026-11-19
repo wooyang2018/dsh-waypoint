@@ -5,6 +5,7 @@
  */
 
 import { dirname, sep } from 'node:path'
+import { MINIMUM_NODE_VERSION } from './node-runtime.ts'
 
 /** Supported subcommands. */
 export type Command = 'install' | 'plan' | 'doctor' | 'discover' | 'tunnel' | 'pack' | 'help'
@@ -264,7 +265,7 @@ Options:
   --dry-run                Print the bootstrap script (same as plan)
   -h, --help               Show this help
 
-The remote host needs Node.js 22.19+ and npm, resolved through the account's
+The remote host needs Node.js ${MINIMUM_NODE_VERSION}+ and npm, resolved through the account's
 own shell so nvm/fnm/Volta answer. The installer does not install Node.js: it
 verifies it and stops with an actionable message when it is missing or too old.
 It then installs pnpm and @deepseek-ai/dsh into the npm global prefix
