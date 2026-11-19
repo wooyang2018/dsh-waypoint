@@ -106,7 +106,7 @@ Failure:
 | `auth/missing` | 401 | No bearer token |
 | `auth/invalid` | 401 | Wrong bearer token |
 | `auth/forbidden` | 403 | Peer is not loopback while `loopbackOnly` is true |
-| `request/invalid` | 400 / 405 | 400: bad body, `limit`, cursor, or host-id header. 405: wrong method for a known path |
+| `request/invalid` | 400 / 405 | 400: bad body, `limit`, cursor, or host-id header. 405: wrong method for a known path — see [Routes](#routes) for the routes that currently return no response instead |
 | `request/too-large` | 413 | Request body over the per-route cap (256 KiB, and 12 MiB for `session.prompt`), or the cold-session scan ceiling was exceeded |
 | `route/not-found` | 404 | Unknown path |
 | `workspace/not-found` | 404 | Workspace id is not registered on the host |
@@ -171,8 +171,16 @@ Read routes use `GET`. Write routes use `POST` with a JSON body:
 one `content` image part; `text` may be empty when an image is present. An optional provider/model
 selection is installed on the remote Session before the prompt is submitted. Request bodies are capped
 at 256 KiB, and at 12 MiB for `session.prompt` (base64 images); an oversized body fails with
-`request/too-large`. A wrong method on a known path returns `405` with code `request/invalid`; unknown
-paths return a JSON `route/not-found` envelope.
+`request/too-large`. Unknown paths return a JSON `route/not-found` envelope.
+
+A wrong method on a known path returns `405` with code `request/invalid` where the route declares a
+single method — `GET` on `session.prompt`, `session.cancel`, `session.archive`, and `approval.answer`;
+`POST` on any read route; and any method other than `GET` or `POST` anywhere. The remaining POST-only
+routes (`/files/stat`, `/files/list`, `/files/read`, `/files/bytes`, `/sessions/:id/model`,
+`/sessions/:id/sandbox`, `/terminals/:id/input`, `/terminals/:id/rename`, `/terminals/:id/close`)
+currently answer a `GET` with no response at all, so a client that sends the wrong method sees its
+request time out rather than a `405`. Treat these routes as POST-only and do not rely on the method
+check.
 
 The HTTP write surface creates workspaces and sessions, submits prompts, cancels a turn, reads files
 for the native file tree/preview, and owns PTY terminals. File reads are read-only; the terminal
