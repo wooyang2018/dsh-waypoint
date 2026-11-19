@@ -80,10 +80,10 @@ finishes.
 1. **Settings → 远程开发**
 2. Enter an SSH target (`my-host`) and click **保存并连接**.
 3. Wait for `已连接` (first use installs the remote side).
-4. Use **Workspaces +** to create a workspace; local folders use the native picker, remote folders
-   use the SSH browser.
-5. Create a session from the workspace row or Settings. The mirrored session opens in the normal
-   Conversation UI.
+4. Use **+** in the sidebar's **Workspaces** header to create a workspace; local folders use the
+   native picker, remote folders use the SSH browser.
+5. Create a session from the workspace row's **New session** action, or let the create dialog open it.
+   The mirrored session opens in the normal Conversation UI.
 6. Continue prompting. **Workspace files** and **New terminal** follow the selected Session.
 
 ## Boundaries

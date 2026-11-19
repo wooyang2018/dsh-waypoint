@@ -95,7 +95,9 @@ The host card shows `安装中 → 正在连接 → 已连接`. If it fails, fix
 
 ## 3. Add a remote workspace
 
-Click **Workspaces +** and choose **远程新建工作区…**, then enter an existing absolute remote directory.
+Click **+** in the sidebar's **Workspaces** header. The create dialog takes a name, a destination
+(**This computer** or a connected **Remote device**), and a source folder — an existing absolute path
+on that destination, typed or picked with **Browse…** — then **Create workspace**.
 
 The plugin creates a local anchor and a mirror workspace. The remote workspace then appears in the
 normal left sidebar, titled `<host label> · <remote title>`. Sessions in that remote workspace are
@@ -103,8 +105,9 @@ mirrored automatically.
 
 ## 4. Use the ordinary Conversation UI
 
-Click **+ 新会话** in Settings, or the workspace row's **New session** action. Both use this remote path.
-The plugin:
+The create flow opens the remote Session for you; later, use the workspace row's **New session**
+action. Both use this remote path. The Settings page has no new-session button of its own; it manages
+hosts and workspaces. The plugin:
 
 1. creates the remote session;
 2. creates a local mirror Session and registers the custom Agent façade;
@@ -339,7 +342,7 @@ upgrade.
 | Install never finishes | SSH auth is interactive or remote lacks Node/npm | `ssh -o BatchMode=yes host true`; run `doctor`; inspect the card |
 | `remote agent state file was not found` | Auto-provision disabled or remote start failed | Click **重新安装**; inspect `$DSH_HOME/waypoint-agent/web.log` |
 | `does not accept POST` | Remote agent older than local plugin | Click **重新安装** |
-| Remote workspace not in sidebar | Not added yet or sync pending | Use **Workspaces + → 远程新建工作区…**, or add it in **工作区** |
+| Remote workspace not in sidebar | Not added yet or sync pending | Use **+** in the **Workspaces** header (or the create dialog's **Remote device** destination), or check Settings → Remote development → Workspaces |
 | Native session has no reply | No local key copied and remote has no credentials | Check **模型 Key 来源**; either switch the host to **本地 Key 代理** or configure credentials on the remote DSH |
 | `DeepSeek Messages request failed (404)` | Proxy upstream points at the wrong provider root/path | Set `credentialProxyUpstream: https://api.deepseek.com/anthropic`; the fixed proxy preserves the `/anthropic` prefix and tolerates it already being on the request path; reinstall the local plugin |
 | Approval appears locally but remote tool still fails | The decision was delivered but the tool failed remotely | Inspect the remote tool result |
