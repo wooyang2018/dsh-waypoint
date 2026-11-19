@@ -1,8 +1,11 @@
-# Normalize line endings so a build on Windows does not dirty tracked files.
+# Normalize line endings so a checkout on Windows keeps POSIX helpers runnable.
 #
-# `pnpm build` regenerates the tracked `packages/terminal-controller/lib/`
-# entry points; without this rule each Windows build rewrites them with CRLF and
-# they show up as modified in every diff.
+# `scripts/*.sh` are executed by bash and WSL, and `packages/*/scripts/*.mjs` are
+# run by Node. A CRLF checkout turns `#!/usr/bin/env bash` into a bad interpreter
+# and leaves the scripts showing as modified in every diff.
+#
+# Nothing under `packages/*/lib/` is tracked (`.gitignore` covers `lib/`), so this
+# rule exists for the scripts and sources, not for generated build output.
 * text=auto eol=lf
 
 # Windows-only helpers must keep CRLF so cmd.exe and PowerShell can run them.
