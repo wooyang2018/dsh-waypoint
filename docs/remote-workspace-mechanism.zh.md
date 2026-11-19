@@ -346,7 +346,33 @@ running 标记，以及「inbox 里的下一条 prompt 何时放行」。远端 
    （`src/remote/remote-path.ts` 的 `resolveRemoteFileTarget`）。这条规则是 Windows 客户端浏览 Linux
    工作区的前提。
 
-### 6.2 终端
+### 6.2 右侧边栏里的文件树
+
+右侧边栏自带的文件标签页（`dsh-better-sidebar` 的 `editor` 类型在不带 path 时的形态）用 `node:fs`
+读 Session 的 cwd，而镜像会话的 cwd 是**空的本地锚点**。所以它对远程工作区显示空目录——这是预期行为，
+不是缺陷：本插件从不把远端文件复制到本地磁盘。
+
+为了让这个边栏也能访问远端文件、同时不引入第二份副本，插件通过该边栏的公开扩展点**注册自己的标签页**：
+
+```ts
+ctx.inject(['betterSidebar'], child => {
+  child.effect(() => registerRemoteTreeTab(child, api, t))   // 「远端文件」
+})
+```
+
+`registerRemoteTreeTab`（`src/client/remote-tree-tab.tsx`）注册的标签页调用 `host/files/*` 端点——也就是
+6.1 那套适配器——因此每次列目录和读文件都经隧道来自远端 agent。三个细节让它成立：
+
+- **注入是条件式的**。`betterSidebar` 是可选的第三方服务；把它写进模块级 `inject` 会让没装该插件的用户
+  整个插件都无法激活。
+- **只声明结构化类型**。该模块不 import 那个边栏包，所以它既不会进入本包的依赖，也不会进入客户端 bundle
+  的 external 列表。
+- **路径是工作区路径，不是远端绝对路径**。`host/files/list` 会把相对路径解析到镜像工作区，返回的 `path`
+  也在同一命名空间（根为空字符串）。因此标签页既不需要锚点、也不需要远端根路径，任何工作区路径都能用。
+
+标签页是只读的：不提供上传、编辑、重命名或删除，因为往锚点写入会让远端已经拥有的字节出现第二个权威副本。
+
+### 6.3 终端
 
 终端比文件更麻烦：`ClientTerminals` 在客户端构造时就拿到了 `ctx.remote.terminal`，没有实例级替换点。
 仓库的解法是一个**构建期 fork**：`packages/terminal-controller/scripts/build.mjs` 读取被 pin 的 stock
@@ -401,6 +427,7 @@ running 标记，以及「inbox 里的下一条 prompt 何时放行」。远端 
 | 超过 `mirrorMaxEvents` 的远端会话只镜像尾部 | 快照是「最新一页」，更早历史仍在远端 UI |
 | 冷会话没有事件流，只有轮询 | 远端 `session/not-live`，cold resume 未实现 |
 | 锚点是空目录，本地直接读 `fs` 会看到空 | 远端内容从不落地到本地磁盘 |
+| `dsh-better-sidebar` 自带的文件标签页对镜像会话显示空树 | 该标签页用 `node:fs` 读 cwd；请改用本插件的「远端文件」标签页（6.2） |
 | remote diff / 部分高级文件动作仍用本地工具的既有结果 | 只接管了 `workspaceFiles` 与终端两个接缝 |
 | 需要 SSH 可达，无 relay/NAT 穿透 | 当前只有 ssh `-L`/`-R` |
 | Windows 远端不支持 | bootstrap 是 POSIX bash，Node.js 也按 Linux/macOS 处理 |

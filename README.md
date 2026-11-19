@@ -332,6 +332,9 @@ The remote agent config remains available for advanced deployments:
 - The local workspace anchor is a metadata handle. File listing, preview, and terminal are routed to
   the remote workspace; remote diffs and some advanced file actions still use the native session's
   own tool results.
+- `dsh-better-sidebar`'s own files tab reads the Session cwd, which for a remote workspace is the empty
+  anchor, so it shows an empty tree. The plugin registers its own **Remote files** tab in that sidebar
+  (read over the tunnel, no local copy); the native **Workspace files** panel works without it.
 - A remote session longer than `mirrorMaxEvents` is mirrored from the first complete turn in the
   available tail; older history stays in the remote session. Increase the limit to mirror further
   back, or open the session on the remote host to read the rest.
@@ -350,7 +353,7 @@ The remote agent config remains available for advanced deployments:
 | Approval appears locally but remote tool still fails | The local decision was sent; check the remote tool result |
 | Local terminal opens local shell | Expected for local Sessions; remote Sessions use `Remote · <dir>` terminals |
 | Remote terminal opens local zsh | The terminal-controller fork is not active; run `./scripts/install-local.sh` again |
-| Port changed after remote restart | Click **Rediscover** |
+| Port changed after remote restart | The tunnel drops and the plugin reconnects, which re-runs discovery; **Restart remote DSH** or **Reinstall remote agent** does it on demand |
 | Install fails while reporting the npm global prefix | npm cannot write `<prefix>/lib/node_modules` or `<prefix>/bin` for this account, or `npm prefix -g` printed nothing. Point `remoteGlobalPrefix` at a directory you own (for example `~/npm-global`) and retry |
 | `dsh` not found in your own shell after installing | The install log printed the `export PATH=…` line to add to your shell startup. The installer does not edit those files itself |
 | Remote DSH stopped starting after you switched Node.js versions | An nvm/Volta switch moves the npm global prefix with it, so the service's baked-in `dsh` path no longer exists. Click **Reinstall**; `dsh-waypoint-install doctor --target …` reports `global_dsh` and `login_path_has_dsh` |

@@ -20,6 +20,29 @@ describe('plugin localization', () => {
     }
   })
 
+  it('keeps the two dictionaries in step', () => {
+    // A key present in one language and absent from the other renders the
+    // missing-translation fallback, which reads as a bug in the UI and is
+    // invisible until someone switches language. Guarding the whole key set
+    // catches a half-applied rename, which is how `settings.rediscover` once
+    // survived after its only call site was deleted.
+    const zhKeys = Object.keys(zh).sort()
+    const enKeys = Object.keys(en).sort()
+    assert.deepEqual(zhKeys, enKeys, 'zh and en must define the same keys')
+  })
+
+  it('names an action and its object in the host menu', () => {
+    // The overflow menu is read without the host row's context, so a bare verb
+    // ("Reinstall", "Remove") leaves the object implicit. Each entry states it.
+    for (const key of ['settings.reprovision', 'settings.remove', 'settings.manageNode'] as const) {
+      assert.doesNotMatch(zh[key], /^(重新安装|删除|远端 Node\.js)$/u, `zh ${key} still names no object`)
+      assert.doesNotMatch(en[key], /^(Reinstall|Remove|Remote Node\.js)$/u, `en ${key} still names no object`)
+    }
+    // The retired recovery action must stay gone from both dictionaries.
+    assert.equal('settings.rediscover' in zh, false, 'zh must not keep the retired rediscover key')
+    assert.equal('settings.rediscover' in en, false, 'en must not keep the retired rediscover key')
+  })
+
   it('localizes errors by stable UI key without leaking the raw host message', () => {
     const failure = new RemoteUiError('agent/unavailable', '远端自动安装失败：中文原始错误', {}, { key: 'error.agentUnavailable' })
     assert.equal(localizedError(t, failure, zh['error.unknown']), zh['error.agentUnavailable'])

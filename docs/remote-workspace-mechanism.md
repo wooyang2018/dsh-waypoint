@@ -391,7 +391,38 @@ side differ:
    (`resolveRemoteFileTarget` in `src/remote/remote-path.ts`). This rule is what lets a Windows client
    browse a Linux workspace.
 
-### 6.2 Terminals
+### 6.2 A file tree inside `dsh-better-sidebar`
+
+The right sidebar's own files tab (`dsh-better-sidebar`'s `editor` type with no path) reads the Session
+cwd with `node:fs`, and a mirrored Session's cwd is the **empty local anchor**. That tab therefore shows
+an empty directory for remote workspaces, which is expected rather than a bug: the plugin never copies
+remote files to local disk.
+
+To make remote files reachable from that sidebar without introducing a second copy, the plugin
+contributes **its own tab** through the sidebar's public extension point:
+
+```ts
+ctx.inject(['betterSidebar'], child => {
+  child.effect(() => registerRemoteTreeTab(child, api, t))   // "Remote files"
+})
+```
+
+`registerRemoteTreeTab` (`src/client/remote-tree-tab.tsx`) registers a tab whose component asks the
+`host/files/*` endpoints — the same adapter described in 6.1 — so every listing and page comes from the
+remote agent over the tunnel. Three details make this work:
+
+- **The injection is conditional.** `betterSidebar` is an optional third-party service; a module-level
+  `inject` entry would stop the whole plugin from activating for users who do not have it.
+- **Only a structural type is declared.** The module does not import the sidebar package, so it stays
+  out of this package's dependencies and the client bundle's externals.
+- **Paths are workspace paths, not remote absolute paths.** `host/files/list` resolves a relative path
+  against the mirrored workspace, and the listed `path` comes back in that same space (empty for the
+  root). The tab therefore never needs the anchor or the remote root, and works for any workspace path.
+
+The tab is read-only: it offers no upload, edit, rename or delete, because writing into the anchor would
+create a second authority for bytes the remote already owns.
+
+### 6.3 Terminals
 
 Terminals are harder than files: `ClientTerminals` receives `ctx.remote.terminal` when the client is
 constructed, and there is no per-instance replacement point. The repository's answer is a **build-time
@@ -458,6 +489,7 @@ the provisioning flow directly (the remote process has to restart with the new e
 | Remote sessions over `mirrorMaxEvents` mirror only the tail | The snapshot is "the newest page"; earlier history stays in the remote UI |
 | Cold sessions have no event stream, only polling | The remote answers `session/not-live`; cold resume is not implemented |
 | The anchor is empty, so reading `fs` locally sees nothing | Remote content never lands on local disk |
+| `dsh-better-sidebar`'s own files tab shows an empty tree for a mirrored Session | That tab reads the cwd with `node:fs`; use the plugin's **Remote files** tab instead (6.2) |
 | Remote diffs / some advanced file actions still use the native tool results | Only `workspaceFiles` and the terminal are intercepted |
 | SSH reachability required; no relay/NAT traversal | Only ssh `-L`/`-R` today |
 | Windows remotes unsupported | The bootstrap is POSIX bash, and Node.js is handled as Linux/macOS |

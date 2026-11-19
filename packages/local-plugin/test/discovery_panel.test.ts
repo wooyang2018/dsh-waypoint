@@ -262,8 +262,46 @@ describe('SSH config discovery in the Settings panel', () => {
       .map(entry => entry.children.map(child => typeof child === 'string' ? child : '').join(''))
     assert.equal(texts.includes('settings.workspaces'), false,
       'the redundant "workspaces" button was removed')
+    // `settings.rediscover` is retired outright: a port or token change breaks
+    // the tunnel, and the reconnect that follows re-runs discovery by itself,
+    // so the menu must not offer it at all (not merely hide it on the row).
     assert.equal(texts.includes('settings.rediscover'), false,
-      'rediscover moved into the menu')
+      'the manual rediscover action was removed from the menu')
+  })
+
+  it('offers only verb-and-object actions in the host menu', async () => {
+    const { renderer } = await render({
+      state: async () => ({
+        hosts: [{
+          id: 'host-menu', label: 'Native', sshTarget: 'native',
+          sshPort: null, remoteAgentPort: 1, autoConnect: true,
+          createdAt: 'now', updatedAt: 'now', hasToken: true,
+          phase: 'connected', localPort: 2, localUrl: 'http://127.0.0.1:2',
+          hostInfo: null, workspaceCount: 1, error: null, errorCode: null,
+          connectedAt: 'now', detail: null, errorUi: null, agentOutdated: false,
+          modelProxy: true, modelDirect: false, modelSource: 'proxy',
+          dshUpdate: null, retry: null,
+        }],
+        mirroredWorkspaceIds: [],
+        mirroredWorkspaces: [],
+      }),
+    })
+    await settle(renderer, text => text.includes('dshwp-host-row'))
+    const trigger = renderer.root.findAllByType('button')
+      .find(entry => entry.props['aria-haspopup'] === 'menu')
+    assert.ok(trigger, 'the host row must carry an overflow menu')
+    await act(async () => { trigger!.props.onClick({ preventDefault() {}, stopPropagation() {} }) })
+
+    const labels = renderer.root.findAllByType('button')
+      .map(entry => entry.props['aria-label'] ?? entry.children.map(child => typeof child === 'string' ? child : '').join(''))
+    // Every entry names an action AND its object, so a row read on its own is
+    // never ambiguous ("Reinstall" — of what?). The Node.js entry says
+    // "manage" because it opens a panel instead of running one operation.
+    for (const key of ['settings.manageNode', 'settings.reprovision', 'settings.remove']) {
+      assert.ok(labels.includes(key), `${key} must be offered by the host menu`)
+    }
+    assert.equal(labels.includes('settings.rediscover'), false,
+      'the retired rediscover action must not reappear')
   })
 
   it('lists registered hosts before the scanned ones', async () => {
