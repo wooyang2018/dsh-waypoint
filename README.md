@@ -238,6 +238,12 @@ plugin to do it, the host card offers **install remote Node.js**: it checks the 
 installs nvm and the latest LTS (`nvm install --lts`), and never touches a shell startup file. Windows
 remotes are not supported.
 
+The remote terminal uses a Python helper (`pty` from the standard library) instead of a native
+`node-pty` build, so **New terminal** needs `python3` on the remote host. Nothing else does: installing,
+connecting, sessions, prompts, files, and the transcript all work without it, and only **New terminal**
+fails — the terminal panel opens and reports the PTY failure. `python3` ships with mainstream Linux
+distributions and macOS; a minimal container image is the usual place it is missing.
+
 `pnpm` and `@deepseek-ai/dsh` are installed **globally**, into the prefix `npm prefix -g` reports, so the
 `dsh` the plugin starts and the `dsh` you type yourself are the same file and the same version. Override the
 prefix with `remoteGlobalPrefix` when npm's answer is not the one you want; there is no fallback location,
@@ -326,8 +332,9 @@ The remote agent config remains available for advanced deployments:
 - The local workspace anchor is a metadata handle. File listing, preview, and terminal are routed to
   the remote workspace; remote diffs and some advanced file actions still use the native session's
   own tool results.
-- A remote session longer than `mirrorMaxEvents` is not mirrored; increase the limit or open it on the
-  remote host directly.
+- A remote session longer than `mirrorMaxEvents` is mirrored from the first complete turn in the
+  available tail; older history stays in the remote session. Increase the limit to mirror further
+  back, or open the session on the remote host to read the rest.
 - Windows remotes and relay/NAT traversal are not supported.
 
 ## Troubleshooting
@@ -388,6 +395,8 @@ then follow `docs/operations.md` for moving the host registry and cleaning up th
 ## Documentation
 
 - [Wire protocol](docs/protocol.md)
+- [Remote workspace mechanism](docs/remote-workspace-mechanism.md) — how a remote directory becomes a
+  local workspace: discovery, tunnel, the session mirror, files/terminal routing
 - [Operations guide](docs/operations.md)
 - [Development](docs/development.md)
 - [Testing](docs/testing.md)

@@ -10,6 +10,8 @@ This plugin targets the official **DSH Desktop** application. Supported versions
 - Plugin [`1.0.1`](https://www.npmjs.com/package/dsh-waypoint)
 - Remote DSH [`0.2.2-rc.3`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested; new installs follow the local DSH version)
 - Remote [Node.js `22.19+`](https://nodejs.org/en/download) on Linux/macOS
+- Remote `python3` for **New terminal** only (the remote PTY is a standard-library `pty` helper, not a
+  native `node-pty` build); everything else works without it
 
 Other DSH GUI plugins, forks, modified clients, and other DSH versions have not been tested. The
 desktop client and the remote runtime are tested on `0.2.2-rc.3`; new remote installs follow the
@@ -80,10 +82,10 @@ finishes.
 1. **Settings → 远程开发**
 2. Enter an SSH target (`my-host`) and click **保存并连接**.
 3. Wait for `已连接` (first use installs the remote side).
-4. Use **Workspaces +** to create a workspace; local folders use the native picker, remote folders
-   use the SSH browser.
-5. Create a session from the workspace row or Settings. The mirrored session opens in the normal
-   Conversation UI.
+4. Use **+** in the sidebar's **Workspaces** header to create a workspace; local folders use the
+   native picker, remote folders use the SSH browser.
+5. Create a session from the workspace row's **New session** action, or let the create dialog open it.
+   The mirrored session opens in the normal Conversation UI.
 6. Continue prompting. **Workspace files** and **New terminal** follow the selected Session.
 
 ## Boundaries
@@ -91,7 +93,8 @@ finishes.
 - The remote browser UI stays available: the remote agent keeps the `dsh-api-remotes` carrier enabled
   and its approval bridge registers with `prepend`, so mirrored approvals still reach the native local
   UI. Open the remote Web UI from the host card when you need it.
-- Sessions over `mirrorMaxEvents` are not mirrored.
+- Sessions over `mirrorMaxEvents` are mirrored from the first complete turn in the available tail;
+  older history stays in the remote session.
 - On plugin restart, old mirrors are archived and recreated.
 
 ## Tools
