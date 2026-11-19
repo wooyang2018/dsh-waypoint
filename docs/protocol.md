@@ -197,15 +197,19 @@ interface HostInfo {
   dshVersion: string
   agentVersion: string
   home: string            // remote DSH home
+  loginShell?: string     // POSIX login shell; absent on older agents
   startedAt: string       // ISO-8601
   protocolVersion: number
   capabilities: AgentCapability[]
   workspaceCount: number
+  modelBaseUrl?: string | null          // provider base URL, never the key
+  modelKeyConfigured?: boolean          // whether a model API key is present remotely
+  modelKeyFingerprint?: string | null   // SHA-256 of that key, for drift detection only
 }
 ```
 
-`hostId` is a client-side identity. The agent echoes the header so a multi-host client can keep its
-caches unambiguous.
+`hostId` is a client-side identity. The agent uses it for diagnostics and cache isolation inside the
+JSON body; it is not echoed as a response header.
 
 ## Workspaces
 
@@ -233,12 +237,16 @@ interface RemoteSessionSummary {
   createdAt: string
   live: boolean
   eventCount: number | null
+  origin?: 'subagent'      // present only for subagent sessions
+  parentSession?: string   // parent session id for a subagent session
 }
 ```
 
 The agent lists sessions from the workspace registry plus persisted sessions that are not in a
 workspace (reported with `workspaceId: null`). `live` means the session is in the remote process
-store. `eventCount` comes from the live store or the persistence snapshot's cheap metadata.
+store. `eventCount` comes from the live store or the persistence snapshot's cheap metadata. Subagent
+sessions are reported with `origin: "subagent"` and their `parentSession`, so a client can keep them
+out of the ordinary workspace list.
 
 ### Snapshot
 
@@ -263,6 +271,23 @@ interface SessionSnapshot {
 - A cold session is read through `sessionPersistence`; a live session through its in-memory
   snapshot.
 - `cursor` is the next sequence number, not the last event's sequence.
+
+Every event in a snapshot or a stream has this shape:
+
+```ts
+interface RemoteSessionEvent {
+  seq: number
+  type: string
+  time: number            // epoch milliseconds
+  data: JsonValue
+  // Optional surface placement, copied from the Host event for native transcript replay.
+  surfaceOp?: 'append' | { op: 'replace'; startSeq: number; endSeq: number }
+  // Earlier surface events cited by this message.
+  sourceEventSeqs?: number[]
+}
+```
+
+`surfaceOp` and `sourceEventSeqs` are omitted when the Host event does not carry them.
 
 ### Event stream
 
