@@ -165,7 +165,7 @@ Previously, in the 0.8.x line:
   destructive actions move into an overflow menu, and every colour now comes
   from the Harness design tokens so the panel follows the active theme.
 - Merge the aliases of one `Host` line into a single entry. A config such as
-  `Host devcloud_64g_weyoungli cloud64` used to appear twice, because grouping
+  `Host devcloud_64g_alice cloud64` used to appear twice, because grouping
   compared alias text; it now groups on the resolved target, shows the longest
   alias as the name, and tags the rest. A machine already registered under a
   sibling alias is no longer offered again.

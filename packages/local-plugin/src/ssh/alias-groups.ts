@@ -4,9 +4,9 @@
  * One `Host` line can declare several names for one machine:
  *
  * ```sshconfig
- * Host devcloud_64g_weyoungli cloud64
- *   HostName 21.91.123.76
- *   User weyoungli
+ * Host devcloud_64g_alice cloud64
+ *   HostName 203.0.113.10
+ *   User alice
  *   Port 36000
  * ```
  *

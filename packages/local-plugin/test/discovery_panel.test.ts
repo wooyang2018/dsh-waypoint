@@ -64,7 +64,7 @@ function discovery(overrides: Partial<SshDiscoveryResult> = {}): SshDiscoveryRes
         alias: 'docker_os4_native1_user00',
         aliases: ['native1'],
         canonical: 'docker_os4_native1_user00',
-        hostname: '21.91.16.78',
+        hostname: '198.51.100.10',
         user: 'user00',
         port: 36000,
         source: '/home/u/.ssh/config',
@@ -75,8 +75,8 @@ function discovery(overrides: Partial<SshDiscoveryResult> = {}): SshDiscoveryRes
         alias: 'cloud32',
         aliases: [],
         canonical: 'cloud32',
-        hostname: '9.135.225.137',
-        user: 'weyoungli',
+        hostname: '192.0.2.10',
+        user: 'alice',
         port: 36000,
         source: '/home/u/.ssh/config',
         proxyJump: false,
@@ -155,7 +155,7 @@ describe('SSH config discovery in the Settings panel', () => {
     const endpoints = renderer.root
       .findAllByProps({ className: 'dshwp-discovered-endpoint' })
       .map(node => node.children.map(child => String(child)).join(''))
-    assert.ok(endpoints.includes('weyoungli@9.135.225.137:36000'), `endpoint missing: ${endpoints.join(' | ')}`)
+    assert.ok(endpoints.includes('alice@192.0.2.10:36000'), `endpoint missing: ${endpoints.join(' | ')}`)
   })
 
   it('marks registered hosts and offers connect only for the rest', async () => {
@@ -224,7 +224,7 @@ describe('SSH config discovery in the Settings panel', () => {
     const endpoints = renderer.root
       .findAllByProps({ className: 'dshwp-discovered-endpoint' })
       .map(node => node.children.map(child => String(child)).join(''))
-    assert.ok(endpoints.includes('user00@21.91.16.78:36000'))
+    assert.ok(endpoints.includes('user00@198.51.100.10:36000'))
   })
 
   it('puts the row actions on the summary row and nowhere else', async () => {

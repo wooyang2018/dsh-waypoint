@@ -855,7 +855,7 @@ export class RemoteHostsService {
           source: host.source,
           proxyJump: host.proxyJump,
           // Any alias in the group counts: registering `cloud64` and then
-          // seeing `devcloud_64g_weyoungli` offered again would create a
+          // seeing `devcloud_64g_alice` offered again would create a
           // duplicate the registry rejects.
           registeredHostId: [group.alias, ...group.aliases]
             .map(name => registered.get(name))
