@@ -7,9 +7,18 @@ touches npm.
 
 - npm account with publish access to `dsh-waypoint`, `dsh-waypoint-agent` and
   `dsh-waypoint-terminal-controller`
-- **2FA enabled on that account, set to "Authorization and Publishing"** — npm asks for the code
-  during `npm publish`
-- GitHub repository write access
+- **a granular access token with "Allow bypass 2FA" enabled**, stored in `~/.npmrc`
+
+```sh
+npm config set //registry.npmjs.org/:_authToken=<token>
+```
+
+> **Why a bypass token rather than a 2FA prompt.** npm stopped accepting new TOTP
+> (authenticator-app) enrolments in 2025, so an account set up today can only use a
+> **security key** — which opens a browser and asks for a fingerprint. That flow cannot
+> produce a 6-digit code, so `--otp` cannot answer it, and a recovery code is rejected
+> the same way. A granular token with bypass 2FA is the documented way to publish
+> without the prompt, and it is the only path that works unattended.
 
 No `NPM_TOKEN` repository secret is involved. If you find one in the repository settings, nothing
 uses it.
@@ -41,10 +50,15 @@ The script (`scripts/publish-local.mjs`) does the whole release:
 
 Step 5 exists because of a real incident: `dsh-waypoint@1.0.0` was recorded on the registry while its
 tarball answered 404. `npm publish` exited 0, the metadata looked complete, and nobody could install
-the package. Registry metadata is written before the tarball is readable, so the exit status alone is
-not evidence.
+the package.
 
-`pnpm release:publish:dry` shows what would be published without publishing.
+Step 5 waits up to **ten minutes**, because the registry writes metadata before the tarball is
+servable and says so — "your package is being processed and may take a few minutes". Measured on the
+1.0.1 publish, the tarball appeared about six minutes after `npm publish` returned. A shorter window
+reports a good release as broken, which is the same false alarm as 1.0.0 in the opposite direction.
+
+`pnpm release:publish:dry` shows what would be published without publishing. `--publish-only` skips
+build and pack and publishes the tarballs a previous run already produced.
 
 ## Cut the GitHub release
 

@@ -137,7 +137,13 @@ async function tarballIsDownloadable(spec) {
     return false
   }
   if (url === '') return false
-  for (let attempt = 1; attempt <= 12; attempt += 1) {
+  // The registry says "your package is being processed and may take a few
+  // minutes". Measured on the 1.0.1 publish, the tarball appeared about six
+  // minutes after `npm publish` exited 0 — a two-minute window reported a
+  // perfectly good release as broken, which is the same false alarm in the
+  // opposite direction from the 1.0.0 incident. Ten minutes with a progress
+  // line is long enough to be right and short enough to notice a real failure.
+  for (let attempt = 1; attempt <= 40; attempt += 1) {
     try {
       const response = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(30_000) })
       if (response.ok) {
@@ -147,7 +153,9 @@ async function tarballIsDownloadable(spec) {
     } catch {
       // Treat a network error like a miss and retry: the point is the final verdict.
     }
-    await new Promise(resolveWait => setTimeout(resolveWait, 10_000))
+    // Silence here looks like a hang; the operator should see it waiting.
+    if (attempt % 5 === 0) process.stdout.write(`      still not available (${attempt * 15}s)\n`)
+    await new Promise(resolveWait => setTimeout(resolveWait, 15_000))
   }
   return false
 }
