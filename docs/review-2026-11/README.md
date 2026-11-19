@@ -9,10 +9,10 @@
 | [security.md](security.md) | 凭据、SSH、终端、审批、持久化 | 14 | 0 | 14 |
 | [mirror.md](mirror.md) | 镜像状态机、事件流、文件与终端路由 | 19 | 0 | 19 |
 | [protocol.md](protocol.md) | 线协议、错误码、路由、导出契约 | 16 | 14 | 2 |
-| [tooling.md](tooling.md) | 安装器、构建脚本、CI、跨平台 | 23 | 6 | 17 |
+| [tooling.md](tooling.md) | 安装器、构建脚本、CI、跨平台 | 24 | 6 | 18 |
 | [ui-docs.md](ui-docs.md) | 客户端 UI、宿主 API、文档 | 27 | 12 | 15 |
 | [privacy.md](privacy.md) | 已提交的真实账号与地址 | 1 | 1 | 0 |
-| **合计** | | **100** | **33** | **67** |
+| **合计** | | **101** | **33** | **68** |
 
 > 「已修」= 已在你批准的分支上提交并验证；「未修」= 你本轮跳过了代码修复，原样保留。
 
@@ -53,7 +53,29 @@ pnpm typecheck                   exit 0   stale-lib 守卫 + scripts checkJs + �
 pnpm test                        exit 0   257 + 67 + 17 + 10 + 19 + 10 + 5 + 10，fail 0
 ```
 
-未覆盖：Playwright（`pnpm test:e2e`，需要真实 DSH Desktop + Chromium，本机未跑）。
+`pnpm verify`（= `build` + `test`）同样 exit 0，与上面两条命令的结果一致。
+
+**5 个客户端渲染测试**（此前因缺 `lib/client.js` 与 esbuild 不可用而全部「未验证」）逐项实跑：
+
+| 测试 | 结果 |
+|---|---|
+| `discovery_panel` | 24/24 |
+| `client_workspace_loading` | 3/3 |
+| `node_panel` | 6/6 |
+| `open_web_ui` | 3/3 |
+| `client-bundle` | 1/1 |
+
+**Playwright E2E** 已实跑：**14 passed / 1 skipped / 0 failed**（6.3 分钟）。
+
+跳过的 1 例是 `mode.spec.ts:382` 的 `test.fixme('lets only one of two windows claim a promoted mirror')`——文档已说明它无法用当前单页 fixture 表达双窗口竞态，同一契约由 `test/lazy-session.test.ts` 覆盖。
+
+**注意版本门槛**：本机安装的 DSH Desktop 是 `0.2.2-rc.5`，而仓库固定的测试目标是 `0.2.2-rc.3`。直接跑 `pnpm test:e2e` 会在 fixture 安装 `@deepseek-ai/dsh-workspace@0.2.2-rc.3` 时被 DSH 的版本门禁拒绝（`installation rejected: Plugin … is incompatible with dsh 0.2.2-rc.5`）。fixture 支持覆盖，用本机版本跑即可：
+
+```sh
+DSH_WAYPOINT_E2E_DSH_VERSION=0.2.2-rc.5 pnpm test:e2e
+```
+
+这暴露了一个值得记录的维护点：`DSH_WAYPOINT_E2E_DSH_VERSION` 的默认值与开发者本机安装的 DSH 版本无关，所以在一台非 rc.3 的机器上，**默认命令必然失败**，报错信息指向「插件不兼容」而非「你的 E2E 版本没对齐」。见 [tooling.md](tooling.md) 的 TOL-24。
 
 ## 附：环境问题的真实成因（此前被误判为「环境限制」）
 

@@ -202,6 +202,31 @@ installerUi(exit22):  {"key":"error.agentInstallNodeOutdated","params":{"require
 
 ---
 
+## TOL-24　Minor　E2E 的默认 DSH 版本与本机安装版本无关　新增（实跑时发现）
+
+**位置**　`test/playwright/dsh-fixture.ts:61`
+
+**现象**　`const DSH_VERSION = process.env.DSH_WAYPOINT_E2E_DSH_VERSION ?? '0.2.2-rc.3'`。fixture 用它往临时 profile 安装 `@deepseek-ai/dsh-workspace@<version>` 与 `@deepseek-ai/dsh-api-terminal-controller@<version>`（`:198-199`），而 DSH 的版本门禁会拒绝与宿主运行时版本不一致的插件。
+
+**证据**　本机 DSH Desktop 为 `0.2.2-rc.5`，直接 `pnpm test:e2e` 四个 spec 全在 fixture 初始化阶段失败：
+
+```
+dsh: installation rejected: Plugin @deepseek-ai/dsh-workspace@0.2.2-rc.3 is incompatible with dsh 0.2.2-rc.5:
+requirements {"@deepseek-ai/dsh-session":"0.2.2-rc.3", …}. Running it may cause crashes or data loss.
+```
+
+设 `DSH_WAYPOINT_E2E_DSH_VERSION=0.2.2-rc.5` 后 **14 passed / 1 skipped / 0 failed**。
+
+**影响**　默认命令在一台非 rc.3 的机器上**必然失败**，而报错指向「插件不兼容 / 可能崩溃」，会把维护者引向插件打包问题，而不是「你的 E2E 版本没对齐」。`test/playwright/README.md` 只写了「defaults to the newest tested release」，没写这个失败模式。
+
+**建议**　二选一：
+1. 让 fixture 在安装前读宿主 `dsh --version`，把默认值改成宿主版本（并对不上时打印一行明确提示）；
+2. 至少在 `test/playwright/README.md` 写明：本机 DSH 不是 `0.2.2-rc.3` 时必须设 `DSH_WAYPOINT_E2E_DSH_VERSION`，否则报错长这样。
+
+**状态**　未修（本轮只记录）。这是文档缺口，属你已批准的「文档类」范畴，但涉及 fixture 行为描述，留给你决定是走文档还是改 fixture。
+
+---
+
 ## 已复核且未发现问题
 
 1. **退出码闭合**：`BOOTSTRAP_EXIT_CODES` = {21,22,23,24,25,26}，脚本实际 `exit` 集合同为这 6 个；`errors.test.ts` 双向断言，7 用例全绿
