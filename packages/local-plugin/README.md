@@ -91,7 +91,8 @@ finishes.
 - The remote browser UI stays available: the remote agent keeps the `dsh-api-remotes` carrier enabled
   and its approval bridge registers with `prepend`, so mirrored approvals still reach the native local
   UI. Open the remote Web UI from the host card when you need it.
-- Sessions over `mirrorMaxEvents` are not mirrored.
+- Sessions over `mirrorMaxEvents` are mirrored from the first complete turn in the available tail;
+  older history stays in the remote session.
 - On plugin restart, old mirrors are archived and recreated.
 
 ## Tools

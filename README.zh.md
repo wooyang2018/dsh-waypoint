@@ -249,7 +249,7 @@ $DSH_HOME/waypoint/test-visibility.json
 
 - 完整的远端 DSH 浏览器 UI 是诊断入口，不是主流程。远端 agent 保持 `dsh-api-remotes` 启用，该界面照常启动；审批桥以 `prepend` 注册，镜像审批仍会到达本地原生 UI。需要远端浏览器时（例如安装远端插件），用主机卡片上的 **打开远端 Web UI**。
 - 本地 workspace anchor 只是元数据句柄。文件列表、预览和终端会路由到远端；远端 diff 和部分高级文件操作仍使用原生 Session 的工具结果。
-- 超过 `mirrorMaxEvents` 的远端 Session 不会镜像；可以调大限制，或直接在远端打开。
+- 超过 `mirrorMaxEvents` 的远端 Session 会从可用尾部里第一个完整 turn 开始镜像；更早的历史留在远端 Session。想镜像更早的内容就调大限制，或直接在远端打开该会话查看。
 - 不支持 Windows 远端，也不支持 relay/NAT 穿透。
 
 ## 故障排查

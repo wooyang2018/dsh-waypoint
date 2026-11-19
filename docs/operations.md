@@ -183,8 +183,9 @@ remote environment manually.
   model before prompting.
 - The mirror polls the remote log at `mirrorPollMs`, appends only contiguous events, and stops when a
   cold remote session is fully caught up. A new prompt restarts it.
-- Remote sessions longer than `mirrorMaxEvents` are skipped with a warning; increase the limit or
-  work on the remote host directly.
+- Remote sessions longer than `mirrorMaxEvents` are mirrored from the first complete turn in the
+  available tail; older history stays in the remote session. Increase the limit to mirror further
+  back, or work on the remote host directly.
 - On plugin restart, old local mirrors are archived and recreated from the current remote log.
 
 ## Configuration

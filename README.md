@@ -326,8 +326,9 @@ The remote agent config remains available for advanced deployments:
 - The local workspace anchor is a metadata handle. File listing, preview, and terminal are routed to
   the remote workspace; remote diffs and some advanced file actions still use the native session's
   own tool results.
-- A remote session longer than `mirrorMaxEvents` is not mirrored; increase the limit or open it on the
-  remote host directly.
+- A remote session longer than `mirrorMaxEvents` is mirrored from the first complete turn in the
+  available tail; older history stays in the remote session. Increase the limit to mirror further
+  back, or open the session on the remote host to read the rest.
 - Windows remotes and relay/NAT traversal are not supported.
 
 ## Troubleshooting
