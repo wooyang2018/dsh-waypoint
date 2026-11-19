@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest published `0.8.x` release. The plugin follows DSH
+Security fixes are applied to the latest published `1.0.x` release. The plugin follows DSH
 pre-release API changes; older releases may not receive backports.
 
 The supported client is the official [DSH Desktop](https://github.com/deepseek-ai/deepseek-harness) [`0.2.2-rc.3`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)
