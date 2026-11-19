@@ -64,7 +64,7 @@ function discovery(overrides: Partial<SshDiscoveryResult> = {}): SshDiscoveryRes
         alias: 'docker_os4_native1_user00',
         aliases: ['native1'],
         canonical: 'docker_os4_native1_user00',
-        hostname: '21.91.16.78',
+        hostname: '198.51.100.10',
         user: 'user00',
         port: 36000,
         source: '/home/u/.ssh/config',
@@ -224,7 +224,7 @@ describe('SSH config discovery in the Settings panel', () => {
     const endpoints = renderer.root
       .findAllByProps({ className: 'dshwp-discovered-endpoint' })
       .map(node => node.children.map(child => String(child)).join(''))
-    assert.ok(endpoints.includes('user00@21.91.16.78:36000'))
+    assert.ok(endpoints.includes('user00@198.51.100.10:36000'))
   })
 
   it('puts the row actions on the summary row and nowhere else', async () => {

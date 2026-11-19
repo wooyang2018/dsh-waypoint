@@ -72,7 +72,7 @@ describe('SSH config discovery through the service', () => {
         'Host *.devcloud.woa.com',
         '  User root',
         'Host docker_os4_native1_user00 native1',
-        '  HostName 21.91.16.78',
+        '  HostName 198.51.100.10',
         '  User user00',
         '  Port 36000',
         'Host plain',
@@ -114,7 +114,7 @@ describe('SSH config discovery through the service', () => {
     // longer primary alias. Matching only the primary would offer to add it
     // again, and the registry would reject the duplicate.
     const { service } = await fixture({
-      configText: 'Host docker_os4_native1_user00 native1\n  HostName 21.91.16.78\n  User user00\n  Port 36000\n',
+      configText: 'Host docker_os4_native1_user00 native1\n  HostName 198.51.100.10\n  User user00\n  Port 36000\n',
       records: [record({ sshTarget: 'native1' })],
     })
     try {

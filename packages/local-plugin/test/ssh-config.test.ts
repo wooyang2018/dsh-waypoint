@@ -53,12 +53,12 @@ describe('SSH config parsing', () => {
   it('splits a multi-alias Host line and keeps declared values', async () => {
     const parsed = await parseSshConfig([
       'Host docker_os4_native1_user00 native1',
-      '  HostName 21.91.16.78',
+      '  HostName 198.51.100.10',
       '  User user00',
       '  Port 36000',
     ].join('\n'), '/home/u/.ssh/config', noIncludes)
     assert.deepEqual(parsed.hosts.map(host => host.alias), ['docker_os4_native1_user00', 'native1'])
-    assert.equal(parsed.hosts[0]?.hostname, '21.91.16.78')
+    assert.equal(parsed.hosts[0]?.hostname, '198.51.100.10')
     assert.equal(parsed.hosts[0]?.user, 'user00')
     assert.equal(parsed.hosts[0]?.port, 36000)
     // Registration stores the alias, so the canonical form is the alias itself.
@@ -173,13 +173,13 @@ describe('ssh -G resolution', () => {
     const resolved = parseResolvedHost([
       'host native1',
       'user user00',
-      'hostname 21.91.16.78',
+      'hostname 198.51.100.10',
       'port 36000',
       'proxyjump none',
       'user ignored',
       'hostname ignored',
     ].join('\n'))
-    assert.deepEqual(resolved, { hostname: '21.91.16.78', user: 'user00', port: 36000, proxyJump: false })
+    assert.deepEqual(resolved, { hostname: '198.51.100.10', user: 'user00', port: 36000, proxyJump: false })
   })
 
   it('flags a real ProxyJump or ProxyCommand', () => {
