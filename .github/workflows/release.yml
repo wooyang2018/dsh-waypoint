@@ -29,8 +29,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
-      - run: pnpm -r typecheck
-      - run: pnpm -r test
+      # Root forms, not `pnpm -r`: `-r` skips the root package, which is where
+      # `scripts/`'s checkJs pass and the `scripts/*.test.mjs` live. Release
+      # must not be gated more weakly than CI, which already runs the root form.
+      - run: pnpm typecheck
+      - run: pnpm test
       - name: Reject prerelease remote agent
         run: |
           VERSION="$(node -p "require('./packages/remote-agent/package.json').version")"

@@ -239,7 +239,11 @@ export async function commandTunnel(options: InstallerOptions): Promise<string> 
 /** Read and validate the discovery state over SSH. */
 export async function discoverState(target: ParsedTarget, options: InstallerOptions): Promise<AgentDiscoveryState> {
   const command = `cat -- ${remoteStatePath(options)} 2>/dev/null`
-  const result = await runRemote(target, command, sshOptions(options))
+  // The state file carries the agent bearer token. Never echo this stdout,
+  // even under --verbose: that token grants the remote agent's whole write
+  // surface, so printing it would put a live credential into the terminal and
+  // whatever captures the installer's stderr.
+  const result = await runRemote(target, command, { ...sshOptions(options), echoStdout: false })
   if (result.stdout.trim() === '') {
     throw new Error(`remote agent state file not found at ${remoteStatePath(options)}`)
   }

@@ -27,6 +27,29 @@ export class SshTargetError extends Error {
   }
 }
 
+/**
+ * Whether one captured stream is also echoed to local stderr.
+ *
+ * Extracted so the rule is testable without spawning anything: on Windows a
+ * stub that accepts arbitrary argv cannot be built from Node alone, so a
+ * process-level test would be skipped there and prove nothing. The rule itself
+ * is where the credential leak lived — remote stdout carries the agent state
+ * file, whose `token` grants the whole remote write surface — so it is the part
+ * worth pinning.
+ *
+ * @param stream which remote stream produced the chunk.
+ * @param options the call's SSH options.
+ * @returns true when `--verbose` is on and this stream may be echoed.
+ */
+export function shouldEcho(
+  stream: 'stdout' | 'stderr',
+  options: { readonly verbose: boolean; readonly echoStdout?: boolean | undefined },
+): boolean {
+  if (!options.verbose) return false
+  // stderr is diagnostics, never a payload; stdout may carry a secret.
+  return stream === 'stderr' || options.echoStdout !== false
+}
+
 /** Validate an SSH destination without invoking a shell. */
 export function parseTarget(raw: string): ParsedTarget {
   const input = raw.trim()
@@ -92,6 +115,15 @@ export interface SshOptions {
   readonly strictHostKeyChecking: 'yes' | 'no' | 'ask' | 'accept-new'
   readonly timeoutMs: number
   readonly verbose: boolean
+  /**
+   * Echo the remote stdout to stderr while `verbose` is on. Defaults to true.
+   *
+   * A command whose output carries a secret must turn this off: `discoverState`
+   * reads the agent state file, whose `token` grants the remote agent's full
+   * write surface, so echoing it would print a live credential into the
+   * terminal, `journald`, and any CI log capturing stderr.
+   */
+  readonly echoStdout?: boolean
   /** Optional streaming callback for the bootstrap script; never used as UI text directly. */
   readonly onOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void
 }
@@ -194,17 +226,17 @@ export function runRemote(
     }, options.timeoutMs)
     timer.unref?.()
 
-    const append = (buffer: Buffer[], chunk: Buffer): void => {
+    const append = (buffer: Buffer[], chunk: Buffer, stream: 'stdout' | 'stderr'): void => {
       bytes += chunk.length
       if (bytes > 4 * 1024 * 1024) {
         child.kill('SIGKILL')
         return
       }
       buffer.push(chunk)
-      if (options.verbose) process.stderr.write(chunk)
+      if (shouldEcho(stream, options)) process.stderr.write(chunk)
     }
-    child.stdout.on('data', (chunk: Buffer) => append(stdout, chunk))
-    child.stderr.on('data', (chunk: Buffer) => append(stderr, chunk))
+    child.stdout.on('data', (chunk: Buffer) => append(stdout, chunk, 'stdout'))
+    child.stderr.on('data', (chunk: Buffer) => append(stderr, chunk, 'stderr'))
     child.once('error', error => {
       if (settled) return
       settled = true

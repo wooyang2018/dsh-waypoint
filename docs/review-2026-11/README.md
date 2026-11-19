@@ -6,13 +6,13 @@
 
 | 文档 | 范围 | 发现数 | 已修 | 未修 |
 |---|---|---|---|---|
-| [security.md](security.md) | 凭据、SSH、终端、审批、持久化 | 14 | 0 | 14 |
+| [security.md](security.md) | 凭据、SSH、终端、审批、持久化 | 14 | 1 | 13 |
 | [mirror.md](mirror.md) | 镜像状态机、事件流、文件与终端路由 | 19 | 0 | 19 |
 | [protocol.md](protocol.md) | 线协议、错误码、路由、导出契约 | 16 | 14 | 2 |
-| [tooling.md](tooling.md) | 安装器、构建脚本、CI、跨平台 | 24 | 6 | 18 |
+| [tooling.md](tooling.md) | 安装器、构建脚本、CI、跨平台 | 24 | 7 | 17 |
 | [ui-docs.md](ui-docs.md) | 客户端 UI、宿主 API、文档 | 27 | 12 | 15 |
 | [privacy.md](privacy.md) | 已提交的真实账号与地址 | 1 | 1 | 0 |
-| **合计** | | **101** | **33** | **68** |
+| **合计** | | **101** | **35** | **66** |
 
 > 「已修」= 已在你批准的分支上提交并验证；「未修」= 你本轮跳过了代码修复，原样保留。
 
@@ -22,7 +22,7 @@
 
 | ID | 位置 | 问题 |
 |---|---|---|
-| [SEC-02](security.md#sec-02) | `installer/src/commands.ts:241` + `ssh.ts:204` | `--verbose` 会把远端 `agent.json`（含 bearer token）打到 stderr。该 token 等于远端 shell + 文件读取全权限 |
+| ~~SEC-02~~ ✅ | `installer/src/commands.ts:241` + `ssh.ts:204` | ~~`--verbose` 会把远端 `agent.json`（含 bearer token）打到 stderr~~　**已修** |
 | [TOL-01](tooling.md#tol-01) | `local-plugin/src/remote/provisioner.ts:133` | `isPermanentInstallFailure` 被 `LocalError` 包裹后失效，「永久失败不重试」整体没生效 |
 | [MIR-02](mirror.md#mir-02) | `mirror/service.ts:2268` | 单个 gap 让镜像**永久重试同一份快照**，每 500ms 打一条 warn |
 | [MIR-03](mirror.md#mir-03) | `mirror/service.ts:2351` | 单个拒收事件让 `lastSeq` 停住，其后所有健康事件永不生效 |
@@ -35,7 +35,7 @@
 - [SEC-04](security.md#sec-04) systemd unit 换行注入（配置项含换行可注入 `ExecStartPre`）
 - [TOL-02](tooling.md#tol-02) systemd 失败回退 nohup 时 unit 仍 enabled → 两个 `dsh web` 抢同一 `$DSH_HOME`
 - [TOL-03](tooling.md#tol-03) `remoteStart: none` 必然在 120 秒后报超时
-- [TOL-04](tooling.md#tol-04) 发布门禁用 `pnpm -r` 跳过 `scripts/`
+- ~~[TOL-04](tooling.md#tol-04) 发布门禁用 `pnpm -r` 跳过 `scripts/`~~　**已修**：改为根形式，与 CI 对齐
 - [PRT-08](protocol.md#prt-08) GET 命中 9 类仅 POST 路由时**不返回任何响应**（文档已改为如实描述现状）
 - [PRT-09](protocol.md#prt-09) SSE 消费者提前 break 时不 cancel 响应体 → socket 泄漏
 - [UIX-13](ui-docs.md#uix-13) 工作区路径是跨主机共享 state，切主机后会建到错误主机的路径
@@ -65,9 +65,9 @@ pnpm test                        exit 0   257 + 67 + 17 + 10 + 19 + 10 + 5 + 10�
 | `open_web_ui` | 3/3 |
 | `client-bundle` | 1/1 |
 
-**Playwright E2E** 已实跑：**14 passed / 1 skipped / 0 failed**（6.3 分钟）。
+**Playwright E2E** 已实跑：**14 passed / 0 skipped / 0 failed**（6.2 分钟）。
 
-跳过的 1 例是 `mode.spec.ts:382` 的 `test.fixme('lets only one of two windows claim a promoted mirror')`——文档已说明它无法用当前单页 fixture 表达双窗口竞态，同一契约由 `test/lazy-session.test.ts` 覆盖。
+原先的 `test.fixme`（「两窗口争抢一次 claim」）已按决定删除，而不是保留为永久跳过——一个永远不会运行的用例只会报告成缺口、永远不会失败。该契约仍由 `packages/local-plugin/test/lazy-session.test.ts` 断言。
 
 **注意版本门槛**：本机安装的 DSH Desktop 是 `0.2.2-rc.5`，而仓库固定的测试目标是 `0.2.2-rc.3`。直接跑 `pnpm test:e2e` 会在 fixture 安装 `@deepseek-ai/dsh-workspace@0.2.2-rc.3` 时被 DSH 的版本门禁拒绝（`installation rejected: Plugin … is incompatible with dsh 0.2.2-rc.5`）。fixture 支持覆盖，用本机版本跑即可：
 

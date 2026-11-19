@@ -23,7 +23,7 @@
 ---
 
 <a id="sec-02"></a>
-## SEC-02　Major　`--verbose` 泄露 agent bearer token
+## SEC-02　Major　`--verbose` 泄露 agent bearer token　✅ 已修
 
 **位置**　`packages/installer/src/ssh.ts:204`，由 `commands.ts:241`、`:226` 触发
 
@@ -35,7 +35,7 @@
 
 **建议**　改走只取非敏感字段的方式（远端 `node -e` 只打印 port/pid/agentVersion），或在 `ssh.ts` 增 `suppressStdoutEcho` 让 `discoverState` 显式关掉回显。
 
-**状态**　未修
+**状态**　✅ 已修。`SshOptions` 新增 `echoStdout?: boolean`（缺省 true，行为不变），`discoverState` 传 `echoStdout: false`；回显判定提成纯函数 `shouldEcho(stream, options)`，stderr 始终回显、stdout 可抑制。回归测试 `packages/installer/test/discover-verbose.test.ts`（5 例，跨平台无跳过），并已用变异测试确认：移除守卫后该测试变红。
 
 ---
 

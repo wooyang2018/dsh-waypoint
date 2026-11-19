@@ -74,7 +74,7 @@ export function isPermanentInstallFailure(error: unknown): boolean {
 ---
 
 <a id="tol-04"></a>
-## TOL-04　Major　发布门禁弱于 CI　未修（本应修但不在批准范围）
+## TOL-04　Major　发布门禁弱于 CI　✅ 已修
 
 **位置**　`.github/workflows/release.yml:31-33`
 
@@ -92,7 +92,7 @@ export function isPermanentInstallFailure(error: unknown): boolean {
       - run: pnpm test
 ```
 
-**状态**　未修——**这条我建议优先修，成本一行，收益是发布路径与 CI 对齐。**
+**状态**　✅ 已修。`release.yml` 改为根形式 `pnpm typecheck` / `pnpm test`，并加注释说明为何不能用 `-r`（`-r` 跳过根包，`scripts/` 的 `checkJs` 与 `scripts/*.test.mjs` 都在根）。发布路径现与 CI 对齐。
 
 ---
 

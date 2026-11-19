@@ -17,11 +17,14 @@ is `dsh.cmd`, which `child_process` cannot start directly, so the fixture
 resolves what that file runs — the Electron binary with `ELECTRON_RUN_AS_NODE`
 and the CLI entry inside `app.asar` — and starts that instead.
 
-One test is marked `test.fixme`: "lets only one of two windows claim a promoted
-mirror". The claim is a one-shot hand-off, and expressing the race needs both
-clients attached to the same blank *before* it is created, which the current
-single-page fixture cannot do. The same contract is covered by the unit tests in
-`packages/local-plugin/test/lazy-session.test.ts`.
+There used to be a `test.fixme` here for "lets only one of two windows claim a
+promoted mirror". It was removed rather than kept as a permanent skip: the claim
+is a one-shot hand-off, and expressing the race needs both clients attached to
+the same blank *before* it is created, which this single-page fixture cannot do.
+The contract itself is still covered by the unit tests in
+`packages/local-plugin/test/lazy-session.test.ts`. A skipped case that can never
+run reports as a gap without ever failing, so it now lives only where it is
+actually asserted.
 
 ## Run
 
@@ -50,8 +53,6 @@ current local plugin tarball into the temporary profile, then verifies:
   create a second one;
 - a disconnected host rejects the workspace `+` action without creating a
   local blank;
-- two simultaneously open windows produce exactly one claim for one promoted
-  mirror;
 - a DSH-created native blank after host restart is promoted on its first prompt.
 
 ## Coverage policy
