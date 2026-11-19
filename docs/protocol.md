@@ -95,21 +95,32 @@ Failure:
 
 | Code | HTTP | Meaning |
 |---|---|---|
-| `protocol/version-mismatch` | 409 | Peer revision is missing/invalid/unsupported |
+| `protocol/version-mismatch` | 409 | Peer revision is missing, malformed, or unsupported. `details: { clientVersion, serverVersion, supported }` |
 | `auth/missing` | 401 | No bearer token |
 | `auth/invalid` | 401 | Wrong bearer token |
-| `auth/forbidden` | 403 | Peer is not loopback (when enforced) |
-| `request/invalid` | 400/405 | Bad method, limit, cursor, or host header |
-| `request/too-large` | 413 | Snapshot scan ceiling exceeded |
+| `auth/forbidden` | 403 | Peer is not loopback while `loopbackOnly` is true |
+| `request/invalid` | 400 / 405 | 400: bad body, `limit`, cursor, or host-id header. 405: wrong method for a known path |
+| `request/too-large` | 413 | Request body over the per-route cap (256 KiB, and 12 MiB for `session.prompt`), or the cold-session scan ceiling was exceeded |
 | `route/not-found` | 404 | Unknown path |
-| `workspace/not-found` | 404 | Workspace not registered |
-| `session/not-found` | 404 | Session not live or persisted |
-| `session/not-live` | 409 | Follow requested for a cold session (cold resume is not implemented) |
-| `agent/not-ready` | 503 | Listener not bound |
+| `workspace/not-found` | 404 | Workspace id is not registered on the host |
+| `session/not-found` | 404 | Session is neither live nor resolvable through persistence |
+| `session/not-live` | 409 | A live-only route (`/sessions/:id/events`, `/sessions/:id/assistant-events`, `/sessions/:id/sandbox`) was used on a cold session; cold resume is not implemented |
+| `session/model-unavailable` | 400 | The selected provider/model is absent from this host's catalog. `retryable: false`, `details: { provider, model }`; resending the same selection cannot succeed |
+| `agent/not-ready` | 503 | The agent has no bound web listener. Raised while mounting, so a client normally never observes it as a response |
+| `workspace-file/not-found` | 404 | A `files/*` target does not exist, or could not be stat-ed |
+| `workspace-file/not-regular-file` | 404 | Target exists but is a directory or another non-regular file. `details.kind` is `directory` or `other` |
+| `workspace-file/not-text` | 404 | `files/read` found a NUL byte, so the page is not text |
+| `directory/unreadable` | 404 | `directories?path=` could not be listed |
+| `terminal/unavailable` | 409 | PTY id is unknown, closed, or no longer running |
+| `terminal/error` | 500 | PTY allocation or control-channel failure |
 | `internal` | 500 | Unexpected agent failure |
 
-`retryable` is advisory. The local plugin reconnects on `agent/not-ready`, transport failures, and
-tunnel exits, not on authentication or protocol errors.
+The table above is the complete `PROTOCOL_ERROR_CODES` list; a code the client does not recognize is
+reported as `internal`, so adding one is a client-visible change.
+
+`retryable` is advisory. `isRetryableCode` marks only `agent/not-ready` and `internal`, and the flag is
+carried through to the local plugin for display. The local plugin does not branch on it: its health
+check and tunnel watcher schedule a bounded reconnect on any transport failure.
 
 ## Routes
 
