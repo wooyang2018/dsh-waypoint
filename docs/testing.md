@@ -60,7 +60,10 @@ CI runs one job, `verify`, against the current target in the workflow's `DSH_TAR
 3. `pnpm install --no-frozen-lockfile` — resolve the re-pinned tree; deliberately outside the lockfile.
 4. Assert the resolved `@deepseek-ai/dsh-session` version equals `DSH_TARGET`, so an override that
    silently failed does not pass the job against the wrong tree.
-5. `pnpm -r build`, `pnpm -r typecheck`, `pnpm -r test`, secret scan, and the installable bundle.
+5. `pnpm -r build`, then the **root** `pnpm typecheck` and `pnpm test`. The root forms are not
+   `pnpm -r`: `-r` skips the root package, which is where `scripts/`'s `checkJs` pass and the
+   `scripts/*.test.mjs` live (the root `pretypecheck` also runs `scripts/check-workspace-libs.mjs`).
+   Then the secret scan and the installable bundle.
 6. Upload both tarballs as the `dsh-waypoint-<DSH_TARGET>` artifact: the plugin bundle and the standalone
    remote-agent bundle, kept for 30 days. The target version is in the artifact name, so a run against
    a newer DSH release is distinguishable from the committed lockfile's tree.
