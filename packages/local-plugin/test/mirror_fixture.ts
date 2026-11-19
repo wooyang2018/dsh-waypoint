@@ -311,9 +311,8 @@ export function harness() {
      * @param remoteSessionId the remote Session to advance.
      */
     async poll(remoteSessionId: string): Promise<void> {
-      await (this.service as unknown as {
-        pollForTest: (remoteSessionId: string) => Promise<void>
-      }).pollForTest(remoteSessionId)
+      const advanced = await this.service.advance(remoteSessionId)
+      if (!advanced) throw new Error(`session ${remoteSessionId} is not mirrored or has no runtime`)
     },
     async state(): Promise<{ sessions: Record<string, { remoteSessionId: string; localSessionId: string; parentSessionId?: string }> }> {
       return JSON.parse(await readFile(join(stateDir, 'mirrors.json'), 'utf8'))

@@ -192,6 +192,9 @@ export interface MirrorLogGap {
   readonly eventType?: string
 }
 
+/** The plugin-record name carrying {@link MirrorLogGap}. */
+const PLUGIN_RECORD = 'plugin:dsh-waypoint/log-gap' as const
+
 declare module '@deepseek-ai/dsh-session' {
   interface PluginRecordMap {
     /** Written by the mirror when a range of the remote log cannot be projected. */
@@ -2399,25 +2402,27 @@ export class RemoteMirrorService {
   }
 
   /**
-   * Drive one poll for a mirrored Session.
+   * Bring one mirrored Session up to date now, instead of on the next poll tick.
    *
-   * `#ensureMirrorOnce` returns early while a runtime is live, so this is the
-   * only incremental path. The test fixture calls it to exercise gap,
-   * rejection, and divergence handling deterministically, without waiting on
-   * the poll timer (which would make those cases slow and flaky).
+   * `#ensureMirrorOnce` returns early while a runtime is live, so the poll timer
+   * is the mirror's only incremental path. Waiting for it is wrong whenever a
+   * caller already knows there is something to collect: `sync()` uses this to
+   * settle a freshly mounted Session before returning, and tests use it to
+   * exercise gap, rejection, and divergence handling without waiting on real
+   * time (which would make those cases slow and flaky).
    *
    * @param remoteSessionId the remote Session to advance.
-   * @internal
+   * @returns false when the Session is not mirrored or has no live runtime.
    */
-  async pollForTest(remoteSessionId: string): Promise<void> {
+  async advance(remoteSessionId: string): Promise<boolean> {
     const record = Object.values(this.#state.sessions)
       .find(candidate => candidate.remoteSessionId === remoteSessionId)
-    if (record === undefined) throw new Error(`session ${remoteSessionId} is not mirrored`)
+    if (record === undefined) return false
     const runtime = this.#runtimes.get(record.localSessionId)
-    if (runtime === undefined) throw new Error(`session ${remoteSessionId} has no runtime`)
+    if (runtime === undefined) return false
     await this.#poll(runtime)
+    return true
   }
-
 
   async #poll(runtime: MirrorRuntime): Promise<void> {
     if (runtime.stopped || this.#disposed) return
@@ -2570,12 +2575,16 @@ export class RemoteMirrorService {
     for (const seq of [...runtime.skippedRemoteSeqs]) {
       if (seq >= nextSeq) runtime.skippedRemoteSeqs.delete(seq)
     }
+    // Read the old position before overwriting it: the log line is the only
+    // record of where the mirror used to be, and printing the new value twice
+    // says nothing.
+    const previous = runtime.record.lastSeq
     runtime.record.lastSeq = nextSeq
     this.#ctx.logger.warn(
       'dsh-waypoint: remote log for %s jumped to seq %s (was %s); realigned from the snapshot',
       runtime.record.remoteSessionId,
       String(nextSeq),
-      String(runtime.record.lastSeq),
+      String(previous),
     )
   }
 
@@ -2623,22 +2632,39 @@ export class RemoteMirrorService {
    * through DSH's plugin-record namespace (`plugin:` types), so it is a normal
    * part of the local Session log and is never sent to the remote.
    */
+  /**
+   * Append a local-only marker describing a hole in the mirrored log.
+   *
+   * `appendPluginRecord` is the correct API: it commits an `ignorable: true`
+   * record, which is exactly what a reader-side annotation is — the projection
+   * skips it, and it never reaches the remote. It is also the only path that
+   * satisfies the record contract, so it is tried first.
+   *
+   * It reaches a `Session` private, so a Session that is not a real instance
+   * (the mirror's own test doubles) cannot take it. Falling back to `append`
+   * keeps the marker — a hole nobody can see is the failure this whole
+   * mechanism exists to prevent — at the cost that such a double records it as
+   * an ordinary event, which is honest for a double and never happens in
+   * production.
+   */
   #appendPlaceholder(runtime: MirrorRuntime, detail: MirrorLogGap): void {
-    const PLUGIN_RECORD = 'plugin:dsh-waypoint/log-gap'
     try {
       appendPluginRecord(runtime.session, PLUGIN_RECORD, detail)
       return
-    } catch {
-      // `appendPluginRecord` reaches a `Session` private, so a test double that
-      // implements only the public surface cannot take it. The plain `append`
-      // path carries the same record under the same name, which keeps the
-      // marker — and the tests asserting on it — working without changing what
-      // a real Session writes.
-    }
-    try {
-      const append = runtime.session.append.bind(runtime.session) as (...args: unknown[]) => unknown
-      append(PLUGIN_RECORD, detail)
     } catch (error) {
+      // A real `Session` reaches its `#appendRecord` private and cannot fail
+      // here for a reason this fallback could fix; a double implements only the
+      // public surface, so this is the expected miss. The two are told apart by
+      // whether the object answers the full `Session` surface.
+      if (!isSessionLike(runtime.session)) {
+        try {
+          const append = runtime.session.append.bind(runtime.session) as (...args: unknown[]) => unknown
+          append(PLUGIN_RECORD, detail)
+          return
+        } catch {
+          // Fall through to the single warning below.
+        }
+      }
       this.#ctx.logger.warn(
         'dsh-waypoint: could not record a log gap for %s: %s',
         runtime.record.remoteSessionId,
@@ -3123,6 +3149,32 @@ function remapRemoteEvent(
 function mergeDegraded(data: unknown, marker: MirrorDegradedEvent): unknown {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) return { ...marker, value: data }
   return { ...(data as Record<string, unknown>), ...marker }
+}
+
+/**
+ * Whether an object answers the members a real `Session` exposes.
+ *
+ * `appendPluginRecord` is the correct way to write a plugin record, but it
+ * reaches a `Session` private, so it only works on a real instance. The mirror
+ * also runs against doubles in its own tests, which implement the public
+ * surface and nothing else; this tells the two apart without an `instanceof`
+ * that a duplicated module instance would defeat.
+ *
+ * @param value the candidate Session.
+ * @returns true when the object looks like a full `Session`.
+ */
+function isSessionLike(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as {
+    append?: unknown
+    snapshotEvents?: unknown
+    requestHeader?: unknown
+    readonly seq?: unknown
+  }
+  return typeof candidate.append === 'function'
+    && typeof candidate.snapshotEvents === 'function'
+    && typeof candidate.requestHeader === 'function'
+    && typeof candidate.seq === 'number'
 }
 
 function isMirrorNoise(event: RemoteSessionEvent): boolean {
