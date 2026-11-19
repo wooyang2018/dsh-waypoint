@@ -56,7 +56,7 @@ The agent advertises its revision on every response:
 
 ```http
 x-dsh-waypoint-server-protocol: 1
-x-dsh-waypoint-agent-version: 0.2.10
+x-dsh-waypoint-agent-version: <AGENT_VERSION>   # the dsh-waypoint-agent package version
 x-dsh-waypoint-host-id: <echoed or local>
 x-dsh-waypoint-request-id: <echoed or generated>
 ```
