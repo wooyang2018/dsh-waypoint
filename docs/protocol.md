@@ -3,7 +3,12 @@
 - **Status**: v1, implemented by `dsh-waypoint-agent` and `@dsh-waypoint/protocol`
 - **Transport**: HTTP/1.1 over an SSH local forward; Server-Sent Events for streamed frames
 - **Encoding**: JSON envelopes; UTF-8
-- **Scope**: host/workspace/session projections plus a small session/workspace write surface. No arbitrary shell or file-content access.
+- **Scope**: host/workspace/session projections, a small session/workspace write surface, a read-only
+  remote filesystem (text line windows and base64 byte windows), and PTY terminals. The filesystem
+  surface returns file content by design, and the terminal surface types arbitrary commands into a
+  remote login shell. Both are reachable by any holder of the bearer token, so the token is equivalent
+  to shell access on the remote host: the trust boundary is the token plus the loopback bind, not a
+  command allowlist.
 
 ## Why this protocol exists
 
@@ -168,10 +173,11 @@ at 256 KiB, and at 12 MiB for `session.prompt` (base64 images); an oversized bod
 paths return a JSON `route/not-found` envelope.
 
 The HTTP write surface creates workspaces and sessions, submits prompts, cancels a turn, reads files
-for the native file tree/preview, and owns PTY terminals. File reads are read-only; terminal input is
-the only path that executes a shell, and it is gated by the same bearer token. File and terminal
-traffic from the local UI travels over the existing SSH tunnel; no per-operation SSH connection is
-opened by the local plugin.
+for the native file tree/preview, and owns PTY terminals. File reads are read-only; the terminal
+surface — both `POST /terminals` (which allocates the PTY and starts the login shell) and
+`POST /terminals/:id/input` — reaches a shell, and both are gated by the same bearer token. File and
+terminal traffic from the local UI travels over the existing SSH tunnel; no per-operation SSH
+connection is opened by the local plugin.
 
 ## Approvals
 
@@ -308,12 +314,12 @@ never logged or stored by the local plugin.
 - `session.create` joins an existing workspace or an explicit remote directory; it never creates an
   arbitrary local path outside the remote DSH workspace registry.
 - `session.prompt` submits text and an optional model selection. File reads and terminal input are
-  separate authenticated endpoints; the file surface is read-only, while terminal input reaches a
-  host shell. Approval questions travel on the dedicated approval stream; the local UI's decision is
+  separate authenticated endpoints; the file surface is read-only, while the terminal surface reaches
+  a host shell. Approval questions travel on the dedicated approval stream; the local UI's decision is
   posted back to this agent. A prompt can still cause the remote DSH agent to use its own tools under
   the remote sandbox and approval policy.
-- The bearer token grants session-writing capability. Treat it as a secret and keep the agent on
-  loopback.
+- The bearer token grants session-writing capability, read access to any file the remote account can
+  read, and a login shell on the remote host. Treat it as a secret and keep the agent on loopback.
 - `session.cancel` only cancels the active turn of an existing live session.
 
 ## Security notes
@@ -323,9 +329,11 @@ never logged or stored by the local plugin.
   disabling it; a direct public port cannot.
 - State files are written atomically with `0600`.
 - The protocol never carries model credentials.
-- The agent's write surface is session/workspace creation, prompts, cancel, and approval answers.
-  Terminal and file traffic for the native UI is carried by the remote agent file/terminal API over the tunnel, not this
-  HTTP protocol.
+- The agent's write surface is session/workspace creation, prompts, cancel, archive, model and sandbox
+  selection, approval answers, and terminal input/rename/close. The native UI's file tree, previews,
+  file watching, and terminals are served by this same HTTP protocol over the existing SSH tunnel
+  (`/files/*`, `/files/watch`, `/terminals/*`); the local plugin never opens a per-operation SSH
+  connection.
 - Adding another mutation verb requires a protocol revision and a re-review of this boundary.
 
 ## Package surface: contract versus internals
