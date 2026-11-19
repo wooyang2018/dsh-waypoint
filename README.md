@@ -238,6 +238,12 @@ plugin to do it, the host card offers **install remote Node.js**: it checks the 
 installs nvm and the latest LTS (`nvm install --lts`), and never touches a shell startup file. Windows
 remotes are not supported.
 
+The remote terminal uses a Python helper (`pty` from the standard library) instead of a native
+`node-pty` build, so **New terminal** needs `python3` on the remote host. Nothing else does: installing,
+connecting, sessions, prompts, files, and the transcript all work without it, and only **New terminal**
+fails — the terminal panel opens and reports the PTY failure. `python3` ships with mainstream Linux
+distributions and macOS; a minimal container image is the usual place it is missing.
+
 `pnpm` and `@deepseek-ai/dsh` are installed **globally**, into the prefix `npm prefix -g` reports, so the
 `dsh` the plugin starts and the `dsh` you type yourself are the same file and the same version. Override the
 prefix with `remoteGlobalPrefix` when npm's answer is not the one you want; there is no fallback location,

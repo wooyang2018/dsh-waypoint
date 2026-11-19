@@ -189,6 +189,8 @@ $DSH_HOME/waypoint/test-visibility.json
 
 **远端：** Linux 或 macOS，带 SSH server。[Node.js 22.19+](https://nodejs.org/en/download) 通过该账号自己的 shell 探测，所以 PATH、nvm、Volta、fnm、Bun、asdf、mise、Nix、Homebrew 都会被识别。安装流程**不会**自行安装 Node.js：选哪个运行时版本是你的决定，机器上多一份正是两个运行时争抢同一个命令的起因；找不到或版本过低时会停下并说明探测到了什么。需要插件代劳时，主机卡片上有 **远端 Node.js → 安装**：先探测，再安装 nvm 与最新 LTS（`nvm install --lts`），且从不修改 shell 启动文件。不支持 Windows 远端。
 
+远端终端用一个 Python 辅助脚本（标准库 `pty`）而不是原生 `node-pty` 编译产物，所以 **New terminal** 需要远端有 `python3`。其它都不需要它：安装、连接、会话、prompt、文件与 transcript 在没有 `python3` 时照常工作，只有 **New terminal** 会失败——终端面板能打开，并报告 PTY 启动失败。`python3` 随主流 Linux 发行版与 macOS 自带；通常只在精简容器镜像里缺失。
+
 `pnpm` 和 `@deepseek-ai/dsh` 一律**全局安装**到 `npm prefix -g` 给出的前缀，因此插件启动的 `dsh` 和你自己敲的 `dsh` 是同一个文件、同一个版本。想换前缀就设 `remoteGlobalPrefix`，没有兜底位置——把 `dsh` 悄悄装到别处才是这次要去掉的分歧。如果该前缀不在你登录 shell 的 `PATH` 上，安装日志会打印唯一一行 `export PATH=…` 让人自行加入；安装器从不改你的 shell 启动文件。前缀不可写时安装会带着 npm 原始错误失败，而不是改装到别处。注意 npm 写的是 `<prefix>/lib/node_modules` 和 `<prefix>/bin`，两者可以一个可写一个不可写，这正是要跑 `dsh-waypoint-install doctor` 的原因。
 
 如果远端需要代理，把 `remoteInstallProxy` 设为**从远端能访问的**代理 URL，例如端口转发后暴露在远端的 `http://127.0.0.1:17890`。安装流程会为 bootstrap 导出 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `npm_config_*`。留空时会使用该账号真实的登录 shell（bash、zsh、fish 等）及其登录/交互启动文件读取 `HTTPS_PROXY` / `HTTP_PROXY`。同一个代理也会写入远端 systemd unit（或由 `nohup` 进程继承），因此远端模型请求也会走代理，而不只是安装阶段。

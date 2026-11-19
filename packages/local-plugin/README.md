@@ -10,6 +10,8 @@ This plugin targets the official **DSH Desktop** application. Supported versions
 - Plugin [`1.0.1`](https://www.npmjs.com/package/dsh-waypoint)
 - Remote DSH [`0.2.2-rc.3`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested; new installs follow the local DSH version)
 - Remote [Node.js `22.19+`](https://nodejs.org/en/download) on Linux/macOS
+- Remote `python3` for **New terminal** only (the remote PTY is a standard-library `pty` helper, not a
+  native `node-pty` build); everything else works without it
 
 Other DSH GUI plugins, forks, modified clients, and other DSH versions have not been tested. The
 desktop client and the remote runtime are tested on `0.2.2-rc.3`; new remote installs follow the
