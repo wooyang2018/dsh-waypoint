@@ -331,7 +331,12 @@ export function installModelCatalogMerge(ctx: Context, api: HostsApi): void {
         // remote cannot route. Prefer, in order: the model the user picked here,
         // then a selection the remote catalog still offers, then the remote's own
         // default. Without this the trigger advertises a model that cannot run.
-        const intended = remembered
+        // A remembered pick is only kept while the remote still offers it: the
+        // catalog can drop a model between renders, and a trigger advertising
+        // one the host cannot route is a menu that lies. When the catalog has no
+        // opinion (null), the memory is the best available answer.
+        const intended = pickStillOffered(remembered, groups)
+          ?? (catalog === null ? remembered : null)
           ?? pickStillOffered(next.current, groups)
           ?? (catalog === null ? null : remoteDefault(groups, catalog))
         const withChoice = intended === null || intended === next.current

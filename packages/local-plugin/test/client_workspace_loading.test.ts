@@ -121,7 +121,11 @@ describe('workspace loading in the real React panel', () => {
       await test.toggleRow()
       await test.fail()
       await test.poll()
+      // A failed listing is not cached as "no workspaces", and it does not
+      // re-request on every poll either: one dropped request must not become a
+      // permanent claim that the host has none, nor a request storm.
       assert.equal(test.calls(), 1)
+      // Reopening the row is the explicit retry.
       await test.toggleRow()
       await test.toggleRow()
       assert.equal(test.calls(), 2)

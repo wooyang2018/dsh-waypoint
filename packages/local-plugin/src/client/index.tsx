@@ -33,7 +33,7 @@ export const inject = ['slots', 'uiWorkspace', 'uiSession', 'locale']
  */
 export { RemoteTreeTab } from './remote-tree-tab.tsx'
 
-/** Register the 杩滅▼寮€鍙?page. */
+/** Register the Remote development settings page. */
 export function apply(ctx: Context): void {
   const api = createHostsApi(ctx)
   const locale = (ctx as unknown as { locale: LocaleFace }).locale
@@ -42,18 +42,32 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const schedule = globalThis.setTimeout
     if (typeof schedule !== 'function') return () => {}
+    /** Steady-state interval: the host's visibility window is 5s, so this is 10x margin. */
+    const STEADY_MS = 500
+    /** Interval while the page is hidden; the window tolerates it. */
+    const HIDDEN_MS = 5_000
+    /** Ceiling for the failure backoff, so a long outage is not a request storm. */
+    const MAX_BACKOFF_MS = 8_000
     let active = true
     let timer: ReturnType<typeof setTimeout> | undefined
+    let backoff = STEADY_MS
     const currentSessionId = (): string | undefined => {
       const key = ctx.uiSession.adapter.current.getSnapshot().key
       return key === undefined ? undefined : String(key)
     }
+    /** Whether this page is visible; a hidden tab must not poll at full rate. */
+    const visible = (): boolean => {
+      const state = globalThis.document?.visibilityState
+      return state === undefined || state === 'visible'
+    }
+    const delay = (): number => (visible() ? backoff : Math.max(backoff, HIDDEN_MS))
     const poll = async (): Promise<void> => {
       if (!active) return
       try {
         // The claim poll doubles as the visibility heartbeat: the host only
         // dispatches approvals while a client shows the mirrored Session.
         const claimed = await api.claimOpenSession(currentSessionId())
+        backoff = STEADY_MS
         if (active && claimed.localSessionId !== undefined) {
           // Do not steal focus if the user moved on to another Session while
           // the remote Session was being created. uiSession is the public
@@ -64,14 +78,26 @@ export function apply(ctx: Context): void {
           }
         }
       } catch {
-        // A later poll retries after the host reconnects.
+        // Back off instead of retrying at full rate: a disconnected host used
+        // to be polled twice a second forever, with the failure swallowed.
+        backoff = Math.min(backoff * 2, MAX_BACKOFF_MS)
       }
-      if (active) timer = schedule(() => { void poll() }, 500)
+      if (active) timer = schedule(() => { void poll() }, delay())
     }
+    // A page that becomes visible again should catch up at once rather than
+    // wait out the hidden interval.
+    const onVisibility = (): void => {
+      if (!active || !visible()) return
+      backoff = STEADY_MS
+      if (timer !== undefined) clearTimeout(timer)
+      timer = schedule(() => { void poll() }, 0)
+    }
+    globalThis.document?.addEventListener('visibilitychange', onVisibility)
     void poll()
     return () => {
       active = false
       if (timer !== undefined) clearTimeout(timer)
+      globalThis.document?.removeEventListener('visibilitychange', onVisibility)
     }
   }, 'dsh-waypoint: reveal promoted draft')
   installNativeWorkspaceRouting(ctx, api, t)

@@ -11,6 +11,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
+import type { WorkspaceFileScope } from '@deepseek-ai/dsh-api-workspace-files'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import { LocalError, asLocalError } from '../errors.ts'
 import { uiForErrorCode } from '../messages.ts'
 import type { RemoteHostsService } from '../service.ts'
@@ -110,7 +112,7 @@ async function dispatch(
       const body = requireRecord(payload)
       return service.add({
         sshTarget: requireStringField(body, 'sshTarget'),
-        ...optionalStringField(body, 'label') === undefined ? {} : { label: optionalStringField(body, 'label') },
+        ...optionalTrimmedField(body, 'label') === undefined ? {} : { label: optionalTrimmedField(body, 'label') },
         ...optionalStringField(body, 'token') === undefined ? {} : { token: optionalStringField(body, 'token') },
         ...optionalNumberField(body, 'remoteAgentPort') === undefined
           ? {}
@@ -153,7 +155,7 @@ async function dispatch(
       const body = requireRecord(payload)
       return service.createWorkspace(requireStringField(body, 'hostId'), {
         path: requireStringField(body, 'path'),
-        ...optionalStringField(body, 'title') === undefined ? {} : { title: optionalStringField(body, 'title') },
+        ...optionalTrimmedField(body, 'title') === undefined ? {} : { title: optionalTrimmedField(body, 'title') },
       })
     }
     case 'host/directory/list': {
@@ -243,7 +245,7 @@ async function dispatch(
       return service.promptSession(
         requireStringField(body, 'hostId'),
         requireStringField(body, 'sessionId'),
-        requireStringField(body, 'text'),
+        requireText(body, 'text'),
         mode,
         provider === undefined || model === undefined
           ? undefined
@@ -308,29 +310,37 @@ async function dispatch(
       const sessionId = requireStringField(body, 'sessionId')
       const path = requireStringField(body, 'path')
       const sessions = ctx.get('sessions')
-      const session = sessions?.get(sessionId as never)
+      const session = sessions?.get(sessionId as SessionId)
       const root = session?.header.cwd
       if (root === undefined || mirrors?.remoteFileContext(root) === undefined) return { mirrored: false }
-      const files = ctx.get('workspaceFiles') as unknown as {
-        list(scope: unknown, path: string, signal: AbortSignal): Promise<unknown>
-        read(scope: unknown, path: string, range: unknown, signal: AbortSignal): Promise<unknown>
-        readBytes(scope: unknown, path: string, options: unknown, signal: AbortSignal): Promise<unknown>
-        stat(scope: unknown, path: string, signal: AbortSignal): Promise<unknown>
-      } | undefined
+      // The real service type, not a hand-copied face: `range`/`options` as
+      // `unknown` let an offset or limit of the wrong shape reach the service
+      // and surface as `internal` instead of `request/invalid`, and a signature
+      // change here would have compiled silently.
+      const files = ctx.get('workspaceFiles')
       if (files === undefined) return { mirrored: false }
-      const scope = { sessionId, workspaceRoot: root }
+      const scope: WorkspaceFileScope = { sessionId: sessionId as SessionId, workspaceRoot: root }
+      const offset = optionalNumberField(body, 'offset')
+      const length = optionalNumberField(body, 'length')
+      const limit = optionalNumberField(body, 'limit')
       if (endpoint === 'host/files/list') return { mirrored: true, value: await files.list(scope, path, signal) }
       if (endpoint === 'host/files/stat') return { mirrored: true, value: await files.stat(scope, path, signal) }
-      if (endpoint === 'host/files/bytes') return { mirrored: true, value: await files.readBytes(scope, path, {
-        range: {
-          ...body.offset === undefined ? {} : { offset: body.offset },
-          ...body.length === undefined ? {} : { length: body.length },
-        },
-      }, signal) }
-      return { mirrored: true, value: await files.read(scope, path, {
-        ...body.offset === undefined ? {} : { offset: body.offset },
-        ...body.limit === undefined ? {} : { limit: body.limit },
-      }, signal) }
+      if (endpoint === 'host/files/bytes') return {
+        mirrored: true,
+        value: await files.readBytes(scope, path, {
+          range: {
+            ...offset === undefined ? {} : { offset },
+            ...length === undefined ? {} : { length },
+          },
+        }, signal),
+      }
+      return {
+        mirrored: true,
+        value: await files.read(scope, path, {
+          ...offset === undefined ? {} : { offset },
+          ...limit === undefined ? {} : { limit },
+        }, signal),
+      }
     }
     default:
       throw new LocalError('request/invalid', `unknown remote-host endpoint: ${JSON.stringify(endpoint)}`)
@@ -358,6 +368,33 @@ function requireStringField(value: unknown, field: string): string {
     throw new LocalError('request/invalid', `payload.${field} must be a non-empty string`)
   }
   return fieldValue.trim()
+}
+
+/**
+ * A required value whose whitespace is content, not noise.
+ *
+ * A prompt is the case: leading indentation carries meaning in a code block,
+ * and trailing spaces carry it in a Markdown continuation. `requireStringField`
+ * trims, which silently rewrote what the user typed.
+ */
+function requireText(value: unknown, field: string): string {
+  const record = requireRecord(value)
+  const fieldValue = record[field]
+  if (typeof fieldValue !== 'string' || fieldValue.trim() === '') {
+    throw new LocalError('request/invalid', `payload.${field} must be a non-empty string`)
+  }
+  return fieldValue
+}
+
+/**
+ * An optional value that is trimmed when present.
+ *
+ * Titles and labels are the case: a whitespace-only title is not a title, and
+ * accepting one put blank rows in the workspace list.
+ */
+function optionalTrimmedField(value: unknown, field: string): string | undefined {
+  const trimmed = optionalStringField(value, field)?.trim()
+  return trimmed === undefined || trimmed === '' ? undefined : trimmed
 }
 
 function optionalStringField(value: unknown, field: string): string | undefined {
