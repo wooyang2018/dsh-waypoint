@@ -66,6 +66,26 @@ function fingerprintKey(value: string): string {
 }
 
 /**
+ * Whether a remote failure is one a reconnect cannot change.
+ *
+ * A rejected or missing bearer token and a protocol revision mismatch are
+ * properties of the two ends, not of the connection: the same request answers
+ * the same way after any amount of retrying. Every other failure — a dropped
+ * tunnel, an agent that has not bound its port yet, a timeout — is worth
+ * another attempt.
+ *
+ * @param error the failure from a health check or an agent call.
+ * @returns true when the host should stop auto-reconnecting.
+ */
+function isUnretryableAgentFailure(error: unknown): boolean {
+  if (!(error instanceof RemoteProtocolError)) return false
+  return error.code === 'auth/missing'
+    || error.code === 'auth/invalid'
+    || error.code === 'auth/forbidden'
+    || error.code === 'protocol/version-mismatch'
+}
+
+/**
  * How long a remote model catalog stays cached.
  *
  * The Settings page polls host state every few seconds, and the catalog only
@@ -1343,7 +1363,11 @@ export class RemoteHostsService {
         `远端 agent 健康检查失败：${error instanceof Error ? error.message : String(error)}`,
         { cause: error, ui: { key: 'error.healthCheckFailed' } },
       ), 'agent/unavailable')
-      this.#scheduleReconnect(id)
+      // Reconnecting cannot fix a rejected credential or a version mismatch: the
+      // same token and the same agent answer the same way every time. Retrying
+      // them burned `provisionRetryLimit` attempts and buried the real cause
+      // under later timeouts, so only transport-level failures reconnect.
+      if (!isUnretryableAgentFailure(error)) this.#scheduleReconnect(id)
     } finally {
       this.#healthInFlight.delete(id)
     }

@@ -139,11 +139,19 @@ export function terminalClosePath(id: string): string {
 /** Encode a path segment after validating it is not empty. */
 function segment(value: string): string | undefined {
   if (value === '') return undefined
+  let decoded: string
   try {
-    return decodeURIComponent(value)
+    decoded = decodeURIComponent(value)
   } catch {
     return undefined
   }
+  // A decoded segment is an opaque id. A control character is never part of
+  // one, and `%00` would otherwise reach a handler and land in logs as a line
+  // break. A separator is allowed: `%2F` is how an id that contains one is
+  // carried (`workspaceSessionsPath('workspace/a')`), and the id never becomes
+  // a filesystem path.
+  if (/[\u0000-\u001f\u007f]/u.test(decoded)) return undefined
+  return decoded
 }
 
 const SESSION_PREFIX = `${AGENT_API_PREFIX}/sessions/`

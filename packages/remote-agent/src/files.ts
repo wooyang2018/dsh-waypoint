@@ -47,6 +47,18 @@ async function fileStat(path: string): Promise<RemoteFileStat> {
   try {
     value = await stat(path, { bigint: true })
   } catch (error) {
+    // A permission failure reported as "not found" sends the reader to check a
+    // path that is correct; directory/unreadable at least says the host could
+    // not look. ENOENT and anything unexpected stay "not found".
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EACCES' || code === 'EPERM') {
+      throw new RemoteProtocolError({
+        code: 'directory/unreadable',
+        message: `permission denied: ${path}`,
+        details: { path },
+        cause: error,
+      })
+    }
     throw new RemoteProtocolError({ code: 'workspace-file/not-found', message: `not found: ${path}`, details: { path }, cause: error })
   }
   if (!value.isFile()) {
