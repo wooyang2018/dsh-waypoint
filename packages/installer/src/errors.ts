@@ -48,7 +48,10 @@ export const BOOTSTRAP_EXIT_CODES: readonly BootstrapExitCode[] = [
   {
     code: 22,
     installerCode: 'install/node-outdated',
-    message: 'the remote Node.js is older than 22.19.0',
+    // Deliberately carries no version number: `MINIMUM_NODE_VERSION` is the one
+    // source, and the operator-facing UI injects it through `installerUi`. The
+    // remote stderr tail appended as `detail` names the version it found.
+    message: 'the remote Node.js is older than the minimum this installer supports',
   },
   {
     code: 23,
