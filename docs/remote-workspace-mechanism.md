@@ -1,86 +1,95 @@
-# 远程工作区是怎么打开的：一次连接、一个镜像、一条隧道
+# How a remote workspace opens: one connection, one mirror, one tunnel
 
-本文解释 `dsh-waypoint` 在运行时如何把「另一台机器上的目录」变成「本地侧边栏里的一个工作区」，
-以及点击它之后为什么用的是**普通会话界面**而不是 iframe 或第二个聊天窗口。读者对象是第一次读这个
-仓库、需要定位修改点或判断边界的开发者；协议字段的逐条定义在 [protocol.md](protocol.md)，运维动作在
-[operations.md](operations.md)，本文不重复这两份文档的内容。
+This page explains how `dsh-waypoint` turns "a directory on another machine" into "a workspace in the
+local sidebar" at runtime, and why clicking it opens the **ordinary conversation UI** instead of an
+iframe or a second chat window. It is written for someone reading this repository for the first time
+who needs to find the place to change or to judge the boundaries. Per-field protocol definitions live
+in [protocol.md](protocol.md) and operator actions in [operations.md](operations.md); this page does
+not repeat either.
 
-文中所有路径、符号与行号来自本次阅读的源码（提交 `1499dd1`），未执行的验证在最后一节单独说明。
+Source locations are cited as `file → symbol` rather than line numbers: line numbers drift with every
+refactor while symbol names stay searchable. The behaviour described corresponds to plugin `1.0.1`.
 
-## 1. 一句话机制与它避开的坑
+## 1. The mechanism in one sentence, and the traps it avoids
 
-本地 DSH 进程里同时存在四个东西：一个**主机注册表**、一条**SSH 隧道**、一个**本地 Session 镜像**、
-一个挂在镜像 Session 上的**自定义 Agent 外观（façade）**。远端跑着一套完整的 `dsh web`，外加一个
-`dsh-waypoint-agent` 插件提供的 HTTP/SSE 接口。左侧列表看到的是本地 Session，执行发生在远端。
+Four things live in the local DSH process at once: a **host registry**, an **SSH tunnel**, a **local
+session mirror**, and a **custom Agent façade** mounted on the mirrored session. The remote side runs a
+complete `dsh web` plus an HTTP/SSE interface provided by the `dsh-waypoint-agent` plugin. The sidebar
+shows a local session; execution happens remotely.
 
 ```text
-本地 DSH 进程                                       远端主机
+local DSH process                                    remote host
 ┌───────────────────────────────────────┐          ┌──────────────────────────────┐
-│ workspaceRegistry.create(anchor)      │          │ dsh web (127.0.0.1:随机端口) │
-│ sessions.create(seed=远端事件日志)    │  ssh -L  │  └ dsh-waypoint-agent 路由   │
+│ workspaceRegistry.create(anchor)      │          │ dsh web (127.0.0.1:random)   │
+│ sessions.create(seed=remote event log)│  ssh -L  │  └ dsh-waypoint-agent routes │
 │ agents.enter(RemoteMirrorAgent)       │◀────────▶│     /dsh-waypoint-agent/api/v1│
 │ HostsApi ── /api/dsh-waypoint ──┐     │          │                              │
-│                                 ▼     │  ssh -R  │ 工作区/会话/PTY/文件读写     │
-│ RemoteHostsService ── RemoteAgentClient ─────────▶│ 模型调用（直连或回本地代理） │
+│                                 ▼     │  ssh -R  │ workspaces/sessions/PTY/files│
+│ RemoteHostsService ── RemoteAgentClient ─────────▶│ model calls (direct or proxy)│
 └───────────────────────────────────────┘          └──────────────────────────────┘
 ```
 
-关键在于**没有第二套 UI，也没有第二套 agent loop**。远端 DSH 始终是执行归属方；本地 Session 只是远端
-提交事件日志的持久投影（`packages/local-plugin/src/mirror/service.ts:1-13` 的模块注释把这一点写成设计约束）。
-这样做的直接收益是：侧边栏、会话组装器、composer、工具卡片、停止按钮全部复用现成代码路径，插件只需要在
-「Session 从哪来」「prompt 发到哪」「事件从哪读」三个接缝上做替换。
+The point is that there is **no second UI and no second agent loop**. The remote DSH stays the owner of
+execution; the local session is only a durable projection of the remote's committed event log (the
+module comment in `packages/local-plugin/src/mirror/service.ts` states this as a design constraint).
+The direct payoff: the sidebar, session assembler, composer, tool cards, and stop button all reuse
+existing code paths, and the plugin only replaces three seams — where a session comes from, where a
+prompt goes, and where events are read from.
 
-代价也在同一处：镜像必须自己维护「远端 seq ↔ 本地 seq」的映射，并且任何一条补不上的缺口都会让镜像停止
-跟随（见第 5.5 节）。
+The cost sits in the same place: the mirror has to maintain its own "remote seq ↔ local seq" mapping,
+and any gap it cannot bridge stops the mirror from following (see §5.5).
 
-## 2. 五个组件各自负责什么
+## 2. What each of the five packages owns
 
-| 包 | 运行时角色 | 入口 |
+| Package | Runtime role | Entry point |
 |---|---|---|
-| `packages/local-plugin` | 主机注册表、隧道、凭据路径、镜像服务、`/api` 路由、Settings 页、工具 | `src/index.ts:34` 的 `apply` |
-| `packages/remote-agent` | 装在远端 `web` profile 里的 DSH 插件，注册 loopback HTTP/SSE 路由 | `packages/remote-agent/src/index.ts:36` |
-| `packages/protocol` | 路由表、信封校验、SSE 解析、typed client | `src/client.ts:149` `RemoteAgentClient` |
-| `packages/installer` | 生成并执行远端 bootstrap 脚本（scp + `bash -s`） | `src/provision.ts:64` |
-| `packages/terminal-controller` | profile fork：按 Session 决定终端走本地还是隧道 | `src/client/routing.js:8` |
+| `packages/local-plugin` | Host registry, tunnel, credential paths, mirror service, `/api` routes, Settings page, tools | `apply` in `src/index.ts` |
+| `packages/remote-agent` | DSH plugin installed into the remote `web` profile; registers loopback HTTP/SSE routes | `apply` in `packages/remote-agent/src/index.ts` |
+| `packages/protocol` | Route table, envelope validation, SSE parsing, typed client | `RemoteAgentClient` in `src/client.ts` |
+| `packages/installer` | Renders and runs the remote bootstrap script (scp + `bash -s`) | `provisionRemoteAgent` in `src/provision.ts` |
+| `packages/terminal-controller` | Profile fork: decides per session whether the terminal is local or tunneled | `applyRouted` in `src/client/routing.js` |
 
-本地插件的 `apply` 把所有部件按依赖顺序挂上：先建 `RemoteHostsService`（主机）与 `RemoteMirrorService`
-（镜像），再 `mirrors.start()` → `service.start()` → `mirrors.sync()`，然后才注册 `/api` 路由、文件适配器、
-终端路由与工具（`src/index.ts:36-64`）。顺序是有意的：镜像必须在第一次 host-store 读取或连接 await
-之前就装好归属关系，否则启动瞬间的回放会把远端会话当成普通会话。
+The local plugin's `apply` mounts everything in dependency order: it builds `RemoteHostsService` (hosts)
+and `RemoteMirrorService` (mirror), then `mirrors.start()` → `service.start()` → `mirrors.sync()`, and
+only after that registers the `/api` routes, the file adapter, the terminal routes, and the tools
+(`apply` in `src/index.ts`). The order is deliberate: the mirror must own its relationships before the
+first host-store read or connection await, otherwise the replay at startup would treat remote sessions
+as ordinary sessions.
 
-## 3. 首次连接：从 SSH 目标到 `connected`
+## 3. The first connection: from an SSH destination to `connected`
 
-### 3.1 时序
+### 3.1 Sequence
 
 ```mermaid
 sequenceDiagram
-    participant UI as Settings 页
+    participant UI as Settings page
     participant S as RemoteHostsService
-    participant SSH as 本地 ssh
+    participant SSH as local ssh
     participant P as RemoteProvisioner
-    participant A as 远端 agent
+    participant A as remote agent
     UI->>S: host/add {sshTarget}
     S->>SSH: cat <remoteDshHome>/waypoint-agent/agent.json
-    alt 状态文件缺失且 autoProvision
+    alt state file missing and autoProvision
         S->>P: ensureInstalled()
         P->>SSH: scp agent.tgz /tmp/...
         P->>SSH: bash -s < bootstrap
-        SSH->>A: npm i -g dsh + dsh plugin add + 启动 dsh web
-        P->>SSH: 轮询 cat agent.json（≤120s）
+        SSH->>A: npm i -g dsh + dsh plugin add + start dsh web
+        P->>SSH: poll cat agent.json (≤120s)
     end
     S->>SSH: ssh -N -L 127.0.0.1:p:127.0.0.1:remotePort
-    S->>A: GET /health（Bearer token）
-    A-->>S: HostInfo（含 capabilities、agentVersion、模型指纹）
+    S->>A: GET /health (Bearer token)
+    A-->>S: HostInfo (capabilities, agentVersion, model fingerprint)
     S-->>UI: phase=connected
 ```
 
-### 3.2 发现：只读一个文件
+### 3.2 Discovery: read exactly one file
 
-连接的第一件事不是开隧道，而是发现端点。`discoverAgent` 用 `execFile` 跑一条**固定**的 `cat` 命令读出
-远端的私有状态文件，再按 `isAgentDiscoveryState` / `isAgentLive` 校验结构
-（`packages/local-plugin/src/ssh/probe.ts:75-142`）。命令本身由 `discoveryCommand` 拼装，路径只来自插件
-配置且经过引号转义（`probe.ts:43-57`）——扫描 SSH 配置和读取状态文件这两条路径都刻意不把用户输入拼进
-shell 语法。
+The first step of a connection is not the tunnel but endpoint discovery. `discoverAgent` runs one
+**fixed** `cat` command through `execFile` to read the remote private state file, then validates its
+shape with `isAgentDiscoveryState` / `isAgentLive` (`discoverAgent` in
+`packages/local-plugin/src/ssh/probe.ts`). The command itself is assembled by `discoveryCommand`, and
+the path comes only from plugin configuration and is quote-escaped (`discoveryCommand` in the same
+file) — neither SSH-config scanning nor the state-file read ever splices user input into shell syntax.
 
 ```ts
 export async function discoverAgent(target, options): Promise<DiscoveryResult> {
@@ -88,38 +97,50 @@ export async function discoverAgent(target, options): Promise<DiscoveryResult> {
   if (!isAgentDiscoveryState(parsed)) throw new LocalError('agent/unavailable', 'remote agent state file has an unexpected shape', ...)
   if (!isAgentLive(parsed)) throw new LocalError('agent/unavailable',
     'remote agent is installed but its DSH web listener is not running; start `dsh web` on the remote host', ...)
+}
 ```
 
-状态文件由远端 agent 自己写：`#bindListener` 从 `ctx.webServer.port` 取真实端口，再原子写入
-`0600` 文件（`packages/remote-agent/src/service.ts:765`、`src/state.ts:122`）。**agent 不监听自己的 TCP
-端口**，它只是把路由注册到远端 DSH web server 上（`src/http.ts:46`），所以 `agent.json` 里的 `port`
-就是那台 `dsh web` 的端口。插件端 `remoteStart: systemd` 生成的 unit 用 `--port 0` 让系统选端口，因此
-每次重启端口都可能变，这也是状态文件里必须写端口、而插件必须每次连接都重新发现的原因。
+The remote agent writes the state file itself: `#bindListener` takes the real port from
+`ctx.webServer.port` and then writes a `0600` file atomically (`#bindListener` in
+`packages/remote-agent/src/service.ts`, `writeState` in `src/state.ts`). **The agent does not listen on
+a TCP port of its own**; it registers its routes on the remote DSH web server (`registerAgentRoutes` in
+`src/http.ts`), so the `port` in `agent.json` is the port of that `dsh web`. The plugin side's
+`remoteStart: systemd` unit passes `--port 0` and lets the OS choose (the default in
+`packages/installer/src/options.ts`), so the port can change on every restart — which is why the state
+file has to record it and why the plugin has to rediscover on every connection.
 
-### 3.3 装不出来就明说：bootstrap 的边界
+### 3.3 When it cannot install, it says so: the bootstrap boundary
 
-`RemoteProvisioner.ensureInstalled` 把一个随插件打包的 `dsh-waypoint-agent-*.tgz` 上传到 `/tmp`，再以
-stdin 方式执行渲染出来的 bash 脚本（`packages/installer/src/provision.ts:64-123`）。脚本做四件事：解析
-账号真实 shell 找到 Node.js、把 `pnpm` 和 `@deepseek-ai/dsh` 装进 npm 全局前缀、`dsh plugin --profile web add`
-那个 tarball、最后启动 `dsh web`（`packages/installer/src/bootstrap.ts:223-477`）。
+`RemoteProvisioner.ensureInstalled` uploads the bundled `dsh-waypoint-agent-*.tgz` to `/tmp` and then
+runs the rendered bash script through stdin (`provisionRemoteAgent` in
+`packages/installer/src/provision.ts`). The script does four things: resolve the account's real shell to
+find Node.js, install `pnpm` and `@deepseek-ai/dsh` into the npm global prefix, `dsh plugin --profile
+web add` that tarball, and finally start `dsh web` (`renderBootstrapScript` in
+`packages/installer/src/bootstrap.ts`).
 
-两个刻意的「不做」比「做」更能解释设计：
+Two deliberate "we do not" decisions explain the design better than the "we do" list:
 
-- **不安装 Node.js**。版本管理器（nvm/fnm/Volta）只在登录/交互式 shell 里生效，非交互式 SSH 命令看到的
-  `node` 可能完全不同。因此 `nodePathPrelude` 先问账号自己的 shell（`-lic`，缺失时退到 `-lc`），再把
-  结果放到 `PATH` 前面（`bootstrap.ts:109-194`）；实在找不到就以 `exit 21` / `exit 22` 带着证据失败，
-  由宿主卡上的「安装远端 Node.js」按钮承担这个决定。
-- **不迁移安装位置**。全局前缀要么是配置值，要么是 `npm prefix -g` 的答案；没有第三个候选
-  （`globalPrefixPrelude`，`bootstrap.ts:206-220`）。写不进去就按 npm 的错误失败，而不是悄悄装到别处。
+- **We do not install a runtime.** Version managers (nvm/fnm/Volta) only take effect in login or
+  interactive shells, so the `node` a non-interactive SSH command sees can be entirely different. So
+  `nodePathPrelude` asks the account's own shell first (`-lic`, falling back to `-lc`) and puts the
+  result at the front of `PATH` (`nodePathPrelude` in the same file); when nothing is found it fails
+  with `exit 21` / `exit 22` plus the evidence, and the host card's **install remote Node.js** action
+  owns that decision.
+- **We do not relocate the install.** The global prefix is either the configured value or whatever
+  `npm prefix -g` answers; there is no third candidate (`globalPrefixPrelude` in the same file). If it
+  is not writable the install fails with npm's own error instead of quietly installing somewhere else.
 
-失败按可恢复性分两类：瞬时失败交给指数退避重连，`install/node-missing`、`install/node-outdated`、
-`install/npm-missing`、`install/profile-migrate-failed` 这类「重传一次也还是这个结果」的原因被记为
-permanent，停止自动重试并保留原始报错（`packages/local-plugin/src/remote/provisioner.ts:296-308`、
-`src/service.ts:974-987`）。
+Failures split by recoverability: transient ones go to exponential-backoff reconnect, while reasons
+that would produce the same result on a retry — `install/node-missing`, `install/node-outdated`,
+`install/npm-missing`, `install/profile-migrate-failed` — are recorded as permanent, stop automatic
+retries, and keep the original error (`PERMANENT_INSTALL_CODES` in
+`packages/local-plugin/src/remote/provisioner.ts`, the failure branch of `#doConnect` in
+`src/service.ts`).
 
-### 3.4 隧道：两条 `-L`/`-R` 决定流量方向
+### 3.4 The tunnel: two `-L`/`-R` forwards decide the traffic direction
 
-隧道只是一个 `ssh -N` 子进程，绑定 `127.0.0.1` 的临时端口并转发到远端 agent 端口：
+The tunnel is just an `ssh -N` child process bound to an ephemeral port on `127.0.0.1`, forwarding to
+the remote agent port:
 
 ```ts
 return [
@@ -134,28 +155,33 @@ return [
 ]
 ```
 
-（`packages/local-plugin/src/ssh/tunnel.ts:32-49`）
+(`tunnelArgs` in `packages/local-plugin/src/ssh/tunnel.ts`)
 
-`-L` 是读路径：本地 `RemoteAgentClient` 打 `http://127.0.0.1:<localPort>` 就等于打远端 agent。`-R` 只在
-「本地 Key 代理」模式出现（第 7 节）。`Tunnel.start` 会先向系统要一个空闲 loopback 端口，再等它真的能
-建连，并且额外检查一次子进程是否还在——端口通了但 ssh 立刻退出，是「假就绪」最常见的样子
-（`tunnel.ts:126-198`）。
+`-L` is the read path: hitting `http://127.0.0.1:<localPort>` from the local `RemoteAgentClient` is
+hitting the remote agent. `-R` appears only in local-key-proxy mode (§7). `Tunnel.start` first asks the
+system for a free loopback port, then waits until it can actually connect, and additionally checks once
+more that the child process is still alive — a port that accepts but whose `ssh` exited immediately is
+the most common shape of a false "ready" (`Tunnel.start` in `src/ssh/tunnel.ts`).
 
-隧道建立后 `#doConnect` 用健康检查收尾，并做两件「连上之后还要核对」的事：
+Once the tunnel is up, `#doConnect` finishes with a health check and then does two things that only
+matter after connecting:
 
-- `#reconcileAgentVersion`：远端 agent 版本与本 build 打包的版本**不相等**（不是「更旧」）就重装一次。
-  注释说明了原因：bundle 可以只改行为不改版本号，而「旧一点没关系」的假设正是让过期
-  `cordis.patch.yml` 一直生效的原因（`src/service.ts:1079-1113`）。
-- `#reconcileModelEnvironment`：把远端报告的 `modelBaseUrl` 与 `DEEPSEEK_API_KEY` 的 sha256 指纹和自己
-  期望的值比较，不一致就重装一次（`src/service.ts:1115-1165`）。远端只回指纹，不回密钥本身
-  （`packages/remote-agent/src/service.ts:178-183`）。
+- `#reconcileAgentVersion`: if the remote agent version is **not equal** to the version this build
+  bundles (not "older"), reinstall once. The comment explains why: a bundle can change behaviour
+  without changing its version, and the "a bit older is fine" assumption is exactly what keeps a stale
+  `cordis.patch.yml` in effect (`#reconcileAgentVersion` in `src/service.ts`).
+- `#reconcileModelEnvironment`: compares the remote-reported `modelBaseUrl` and the sha256 fingerprint
+  of `DEEPSEEK_API_KEY` against the expected values and reinstalls once on a mismatch
+  (`#reconcileModelEnvironment` in `src/service.ts`). The remote only returns the fingerprint, never
+  the key itself (`hostInfo` in `packages/remote-agent/src/service.ts`).
 
-两处都用 `#agentReconciled` / `#modelReconciled` 限制成「每个连接周期一次」，避免健康检查心跳把重装
-变成死循环。
+Both are limited to once per connection cycle by `#agentReconciled` / `#modelReconciled`, so a health
+check heartbeat cannot turn the reconciliation into a reinstall loop.
 
-## 4. 工作区：本地锚点 + 注册表记录
+## 4. Workspaces: a local anchor plus a registry record
 
-远端工作区不会「同步」到本地磁盘，插件只是在本地**注册一个空目录**当锚点，并记住它对应远端哪个路径：
+A remote workspace is not "synced" to local disk. The plugin registers an **empty local directory** as
+an anchor and remembers which remote path it stands for:
 
 ```ts
 const anchor = join(this.#config.stateDir, 'anchors', safe(host.id), safe(remote.workspaceId))
@@ -168,45 +194,54 @@ this.#state.workspaces[ref] = {
 }
 ```
 
-（`packages/local-plugin/src/mirror/service.ts:1775-1787`）
+(`#ensureWorkspace` in `packages/local-plugin/src/mirror/service.ts`)
 
-这就是「远端工作区在侧边栏里像本地工作区」的全部魔法：`workspaceRegistry.create` 是原生的，标题带
-`<host> · <title>` 前缀以便区分，`mirrors.json` 里额外存了 `remoteRoot`。锚点存在有两个后果，都很重要：
+That is the whole magic behind "a remote workspace behaves like a local one in the sidebar":
+`workspaceRegistry.create` is native, the title carries a `<host> · <title>` prefix so rows stay
+distinguishable, and `mirrors.json` stores `remoteRoot` alongside. The anchor has two consequences,
+both important:
 
-1. **本地是空目录**。任何直接用本地 `fs` 读锚点的代码都会看到空目录，所以文件树、预览、git 之类的路径
-   必须被显式接管（第 6 节）。README 的「Known limits」把锚点描述为「metadata handle」，说的就是这件事。
-2. **锚点同时也是镜像 Session 的 `cwd`**。本地 Session 需要一个路径，工具卡片里的相对路径也靠它对齐；
-   远端绝对路径则通过 `remoteFileContext` 反查回 `hostId + remoteRoot`（`service.ts:750-760`）。
+1. **It is empty locally.** Any code that reads the anchor with plain `fs` sees an empty directory, so
+   the file tree, previews, git, and similar paths have to be intercepted explicitly (§6). The README's
+   "Known limits" calls the anchor a metadata handle for exactly this reason.
+2. **It is also the mirrored session's `cwd`.** A local session needs a path, and relative paths in
+   tool cards are aligned against it; a remote absolute path is mapped back to `hostId + remoteRoot`
+   through `remoteFileContext` (`remoteFileContext` in `src/mirror/service.ts`).
 
-`sync()` 每隔 `max(5s, mirrorPollMs×4)` 跑一次，对每个 `connected` 主机调用 `#syncHost`：先列出远端
-工作区并 `#ensureWorkspace`，再列出远端会话并 `#ensureMirror`（`service.ts:641-658`、`1602-1666`）。创建
-路径本身是 check-then-act 且跨多个 await，所以按 `hostId:remoteSessionId` 做了 single-flight 合并，防止
-周期 sync 与按需创建各建一个本地 Session（`service.ts:1949-1960`、`src/mirror/inflight.ts:15`）。
+`sync()` runs every `max(5s, mirrorPollMs×4)` and calls `#syncHost` for each `connected` host: list the
+remote workspaces and `#ensureWorkspace` them, then list the remote sessions and `#ensureMirror` them
+(`sync` and `#syncHost` in `service.ts`). Creation is check-then-act across several awaits, so it is
+coalesced per `hostId:remoteSessionId` with a single-flight table — otherwise the periodic sync and an
+on-demand creation would each build their own local session (`#ensureMirror`, `singleFlight` in
+`src/mirror/inflight.ts`).
 
-工作区身份由 `(hostId, remoteWorkspaceId)` 组合键确定；子代理会话、没有工作区归属的会话分别用父会话锚点
-和 `ungrouped:<cwd hash>` 兜底（`service.ts:1812-1851`）。
+Workspace identity is the `(hostId, remoteWorkspaceId)` pair; subagent sessions and sessions with no
+workspace fall back to the parent session's anchor and to `ungrouped:<cwd hash>` respectively
+(`#ensureUngroupedWorkspace`).
 
-## 5. 会话：把远端事件日志投影成一个本地 Session
+## 5. Sessions: projecting the remote event log into a local session
 
-### 5.1 三种「新建会话」入口，两种来源
+### 5.1 Three "new session" entries, two origins
 
-| 入口 | 走哪条路 |
+| Entry | Path taken |
 |---|---|
-| 工作区行的 `+` / 全局新建（镜像工作区） | `client/routing.ts` 拦截 → `host/session/blank` → 本地空 Session + 懒 Agent |
-| 工作区创建对话框 | `client/workspace-add.ts` → `host/workspace/create` → 等本地镜像 → `host/session/blank` |
-| 远端已有会话 | `sync()` 发现 → `#ensureMirror` 直接建映射 |
-| 原生新建一个会话，其 cwd 落在镜像锚点下 | `agent/pre-step` 拦截 → `#promoteNativeDraft` 提升为远端会话 |
+| Workspace row's `+` / global New Session (mirrored workspace) | `client/routing.ts` intercepts → `host/session/blank` → empty local session + lazy Agent |
+| Workspace creation dialog | `client/workspace-add.ts` → `host/workspace/create` → wait for the local mirror → `host/session/blank` |
+| Session that already exists remotely | `sync()` discovers it → `#ensureMirror` builds the mapping directly |
+| A native new session whose cwd falls under a mirror anchor | `agent/pre-step` intercepts → `#promoteNativeDraft` promotes it to a remote session |
 
-第一、二种都是「**本地先空，首条 prompt 才建远端会话**」：`startBlankSession` 立刻用
-`sessions.create` 造一个本地 Session，挂上 `LazyRemoteMirrorAgent`，远端 `POST /sessions` 直到第一次
-`send/steer` 才发生（`service.ts:1202-1288`、`1392-1449`）。这样「点新建会话」是瞬时完成的，而不会因为
-远端慢而卡住一个空界面。
+The first two are "**local first, remote on the first prompt**": `startBlankSession` immediately creates
+a local session with `sessions.create`, mounts `LazyRemoteMirrorAgent`, and the remote `POST /sessions`
+only happens on the first `send/steer` (`startBlankSession`, `#materializeBlankOnce`). That makes "new
+session" instantaneous instead of parking an empty UI on a slow remote.
 
-第三种是「远端先有，本地补投影」——这正是「打开一个已存在的远程工作区」的场景。
+The third is "remote first, local projection added" — which is exactly the "open an existing remote
+workspace" case.
 
-### 5.2 播种：`sessions.create(seed)`
+### 5.2 Seeding: `sessions.create(seed)`
 
-`#ensureMirrorOnce` 拿到远端快照后，把事件映射成本地 `SessionEvent` 数组一次性播种：
+After `#ensureMirrorOnce` obtains the remote snapshot, it maps the events into a local `SessionEvent`
+array and seeds in one go:
 
 ```ts
 const seed = filtered.map((event, index) => toSeedEvent(event, index, seqMap))
@@ -216,65 +251,75 @@ session = this.#sessions.create(localId as SessionId, {
 })
 ```
 
-（`service.ts:2077-2088`）
+(`#ensureMirrorOnce` in `service.ts`)
 
-播种前有两处清理，都是为了让本地历史**可渲染**而不是「字段齐全」：
+Two filters run before seeding, both so the local history is **renderable** rather than merely
+"complete":
 
-- `isMirrorNoise` 丢掉本地没有对应物的事件：`agent/inbox/spliced`、`compaction/*`，以及
-  `source.kind !== 'user'` 的 `user/message`（远端注入的上下文、技能目录、压缩检查点）
-  （`service.ts:2700-2714`）。把远端注入的合成长消息回放进本地 transcript，不但污染提示词，还可能因为
-  消息过大卡住镜像。
-- `toSeedEvent` / `remapRemoteEvent` 把「替换」类 `surfaceOp` 一律降级成 `append`
-  （`service.ts:2755-2775`、`2678-2698`）。远端替换区间是按远端 seq 定义的，而镜像可能裁掉了前缀或
-  省略了事件，照搬会让本地 surface 投影指向一个已经不存在的节点。
+- `isMirrorNoise` drops events that have no local counterpart: `agent/inbox/spliced`, `compaction/*`,
+  and `user/message` events whose `source.kind !== 'user'` (remote-injected context, skill catalogs,
+  compaction checkpoints) (`isMirrorNoise` in `service.ts`). Replaying a remote-injected synthetic
+  message into the local transcript both pollutes prompts and can stall the mirror on oversized
+  messages.
+- `toSeedEvent` / `remapRemoteEvent` downgrade every replacement-style `surfaceOp` to `append`
+  (`toSeedEvent`, `remapRemoteEvent` in `service.ts`). A remote replacement range is defined in remote
+  seq space, and the mirror may have trimmed a prefix or omitted events, so replaying it verbatim would
+  point the local surface projection at a node that no longer exists.
 
-如果远端日志超过 `mirrorMaxEvents`（默认 2000），快照只有尾部且 `truncated=true`：镜像会从尾部里第一个
-`turn/start` 开始、到最后一个 `turn/end` 结束来播种，保证本地历史从完整 turn 边界开始，更早的内容留在远端
-UI 里（`service.ts:2004-2019`）。尾部窗口里没有 `turn/start` 时按原样播种，不额外裁剪。
+When the remote log exceeds `mirrorMaxEvents` (default 2000) the snapshot holds only the tail with
+`truncated=true`: the mirror seeds from the first `turn/start` in that tail to the last `turn/end`, so
+local history starts on a complete turn boundary and the earlier content stays in the remote UI (the
+truncated branch of `#ensureMirrorOnce`). If the tail contains no `turn/start` it seeds as-is with no
+extra trimming.
 
-### 5.3 自定义 Agent：`RemoteMirrorAgent`
+### 5.3 The custom Agent: `RemoteMirrorAgent`
 
-本地 Session 必须有一个 Agent 才能在会话界面里工作。插件注册的是一个**外观**，只实现界面真正会调用的
-那几个方法（`service.ts:271-349`）：
+A local session needs an Agent to work in the conversation UI. The plugin registers a **façade** that
+implements only the methods the UI actually calls (`RemoteMirrorAgent` in `service.ts`):
 
-| 方法 | 行为 |
+| Method | Behaviour |
 |---|---|
-| `status` | 跟随镜像的 `running` 标记（由远端 `turn/start`、`turn/end` 驱动） |
-| `cancel()` | 清空本地 inbox，然后 `POST /sessions/:id/cancel` |
-| `whenIdle()` | 等 `running` 变 false |
-| `send/followup` | 空闲时立即发；正在跑时进本地 inbox，等 `turn/end` 再发（队列语义） |
-| `steer` | 直接以 `mode: 'steer'` 发出 |
-| `model.current/select()` | 读/写本地 `model/selection` 事件，由事件桥转发给远端 |
+| `status` | Follows the mirror's `running` flag (driven by remote `turn/start` / `turn/end`) |
+| `cancel()` | Clears the local inbox, then `POST /sessions/:id/cancel` |
+| `whenIdle()` | Waits for `running` to become false |
+| `send/followup` | Sends immediately when idle; while running it queues into the local inbox and flushes on `turn/end` |
+| `steer` | Sends immediately with `mode: 'steer'` |
+| `model.current/select()` | Reads/writes the local `model/selection` event; the event bridge forwards it remotely |
 
-`ctx.agents.enter(agent)` 把它挂进本地 Agent registry（`service.ts:2168`），于是 Session 控制器、侧边栏、
-composer 全部按普通 Agent 对待它。`inject()` 是空实现——远端上下文注入还没进镜像协议。
+`ctx.agents.enter(agent)` registers it in the local Agent registry (`#mountRuntime`), so the session
+controller, sidebar, and composer treat it as an ordinary Agent. `inject()` is an empty implementation —
+remote context injection is not part of the mirror protocol yet.
 
-### 5.4 往下发：prompt、模型、取消
+### 5.4 Downward: prompts, model, cancel
 
-`#sendPrompt` 是唯一把本地输入送到远端的出口（`service.ts:1036-1129`）：
+`#sendPrompt` is the single exit that carries local input to the remote (`#sendPrompt` in `service.ts`):
 
-1. 先按 `promptParts` 拆出文本/图片，图片走本地 attachments 服务读成 base64（`1145-1180`）；
-2. 用远端模型目录检查当前 `provider/model` 是否可路由，不可路由就先剔除（`1003-1020`、`1064-1073`）；
-3. `POST /sessions/:id/prompt`，带 `mode`、`selection`、`content`；
-4. 若远端回 `session/model-unavailable`，**去掉 selection 重发一次**，并记住这个选择不可用
-   （`1084-1110`、`2886-2889`）；
-5. 成功后把本地那条乐观 user 消息追加进 Session，并记录它的 `localSeq`（`1113-1121`）。
+1. Split text and images with `promptParts`; images are read through the local attachments service as
+   base64 (`#promptContent`).
+2. Check the current `provider/model` against the remote model catalog and drop the selection first if
+   it is not routable (`#selectionUnavailable`).
+3. `POST /sessions/:id/prompt` with `mode`, `selection`, and `content`.
+4. If the remote answers `session/model-unavailable`, **resend once without the selection** and
+   remember that choice as unusable (the retry branch of `#sendPrompt`, `isSelectionRejection`).
+5. On success, append the optimistic local user message to the session and record its `localSeq` (the
+   tail of `#sendPrompt`).
 
-第 5 步是「不出现重复气泡」的关键：远端回放的 `user/message` 会消费 `pendingUsers`，直接复用本地那条
-消息的位置，而不是再追加一条（`appendRemoteEvent`，`service.ts:2716-2742`）。图片、模型选择、沙箱模式
-也各有一条本地事件 → 远端调用的旁路（`#onLocalSessionEvent`，`2404-2431`）。
+Step 5 is what prevents a duplicated bubble: the replayed remote `user/message` consumes `pendingUsers`
+and reuses the position of that local message instead of appending another (`appendRemoteEvent`).
+Images, model selection, and sandbox mode each have their own local-event → remote-call bypass as well
+(`#onLocalSessionEvent`).
 
-### 5.5 往上收：SSE 跟随、seq 映射与缺口
+### 5.5 Upward: SSE following, seq mapping, and gaps
 
-读路径同时有两条流，外加一条轮询：
+The read path has two streams at once plus one poll:
 
-| 通道 | 内容 | 用途 |
+| Channel | Content | Purpose |
 |---|---|---|
-| `GET /sessions/:id/events?cursor=N` | 已提交的语义事件（SSE），首帧必 `ready` | 追加进本地 Session，驱动 turn 状态 |
-| `GET /sessions/:id/assistant-events` | 进程内 dense token 帧 | 让本地界面在提交前就有流式输出 |
-| `GET /sessions/:id?limit=N` | 最新一页 | 冷会话、断流修复、追赶 |
+| `GET /sessions/:id/events?cursor=N` | Committed semantic events (SSE), first frame always `ready` | Appends into the local session, drives turn state |
+| `GET /sessions/:id/assistant-events` | In-process dense token frames | Gives the local UI streaming output before commit |
+| `GET /sessions/:id?limit=N` | Newest page | Cold sessions, stream repair, catch-up |
 
-跟随逻辑是教科书式的游标推进（`service.ts:2313-2344`）：
+Following is textbook cursor advancement (`#followStream`):
 
 ```ts
 if (event.seq < runtime.record.lastSeq) continue
@@ -286,123 +331,168 @@ this.#appendEvent(runtime, event)
 runtime.record.lastSeq = event.seq + 1
 ```
 
-缺口不是靠重试修补，而是**结束这条流**，把修复交给下一轮 `#poll` 的快照重放
-（`#replaySnapshot`，`service.ts:2257-2276`）。同一套规则在远端也实现了一次
-（`packages/remote-agent/src/stream.ts:34-126`），并且远端会先订阅再读长度，避免快照与订阅之间的窗口丢事件。
+A gap is not repaired by retrying; the stream **ends** and repair is handed to the next `#poll`'s
+snapshot replay (`#replaySnapshot`). The same rule is implemented once on the remote side too
+(`followLiveSession` in `packages/remote-agent/src/stream.ts`), where it subscribes before reading the
+length so nothing appended in the window between snapshot and subscription is lost.
 
-`#appendEvent` 维护三件事（`service.ts:2346-2402`）：本地 seq 映射表、`turn/start`/`turn/end` 驱动的
-running 标记，以及「inbox 里的下一条 prompt 何时放行」。远端 turn 以 `aborted` 结束时清空 inbox，否则在
-`turn/end` 后把下一条排队输入发出去。
+`#appendEvent` maintains three things (`#appendEvent` in `service.ts`): the local seq mapping table, the
+running flag driven by `turn/start`/`turn/end`, and when the next queued prompt in the inbox is
+released. A remote turn that ends as `aborted` clears the inbox; otherwise the next queued input is sent
+after `turn/end`.
 
-还有两个「远端异常」的处理值得单独记住：
+Two remote-failure cases are worth remembering separately:
 
-- **冷会话不能 follow**。远端 `assertCanFollow` 只接受内存里 live 的 Session（`agent/not-live`），
-  所以镜像对已结束的会话只靠轮询追平，追平后停止（`service.ts:2225-2245`）。
-- **远端中途重启会留下没有 `turn/end` 的 turn**。`#closeAbandonedTurn` 依据本地 `turnBoundary` 投影补一个
-  `aborted/disposed` 的 `turn/end`，否则镜像永远认为自己在 running，之后每条 prompt 都进 inbox 且不再跟随
-  （`service.ts:2283-2302`、`src/mirror/recovery.ts:13`）。
+- **A cold session cannot be followed.** The remote `assertCanFollow` only accepts a session that is
+  live in memory (`agent/not-live`), so the mirror catches up on a finished session by polling only and
+  stops once it is caught up (`#poll`).
+- **A remote restart mid-turn leaves a turn with no `turn/end`.** `#closeAbandonedTurn` synthesizes an
+  `aborted/disposed` `turn/end` from the local `turnBoundary` projection; without it the mirror would
+  believe it is running forever, and every later prompt would queue into the inbox without following
+  again (`#closeAbandonedTurn` in `service.ts`, `abandonedTurnEnd` in `src/mirror/recovery.ts`).
 
-### 5.6 审批：走本地弹窗，但决定要回到远端
+### 5.6 Approvals: the prompt is local, the decision goes back
 
-远端 agent 把 DSH 的 `approval/request` waterfall 以 `{ prepend: true }` 接住
-（`packages/remote-agent/src/service.ts:397-445`）——必须前置，因为 `dsh-api-remotes` 也会监听同一个
-waterfall，被它先接走的话本地就永远看不到这个确认框。问题以 `GET /approvals/events` 的 SSE 回放给本地，
-本地再走一次自己的 `approval/request` waterfall，最后 `POST /approvals/answer`
-（`service.ts:1853-1938`、`src/http.ts:551-575`）。
+The remote agent catches DSH's `approval/request` waterfall with `{ prepend: true }`
+(`#bindApprovals` in `packages/remote-agent/src/service.ts`) — it must prepend, because
+`dsh-api-remotes` listens to the same waterfall and would otherwise claim the decision, leaving the
+local UI never seeing the confirmation. The request is replayed to the local side as SSE on
+`GET /approvals/events`, where it runs through the local `approval/request` waterfall again, and finally
+`POST /approvals/answer` (`#ensureApprovalStream` in `service.ts`, `streamApprovals` in
+`packages/remote-agent/src/http.ts`).
 
-一个容易被误读的细节：**只有用户正看着那个会话时才弹**。插件用客户端每 500ms 一次的
-`host/session/open/claim` 请求当可见性心跳（`client/index.tsx:43-63`），服务端维护 5 秒窗口
-（`service.ts:46-47`、`763-778`）；不可见时请求先入队，等会话被打开再派发。这不是省事，而是避免一次重连
-把十几个历史审批同时倒到界面上。
+One easily misread detail: **it only prompts while the user is looking at that session.** The plugin
+uses the client's 500 ms `host/session/open/claim` request as a visibility heartbeat (the poll in
+`apply` in `packages/local-plugin/src/client/index.tsx`), and the server keeps a 5-second window
+(`VISIBLE_SESSION_TTL_MS`, `reportVisibleSession` in `service.ts`); while the session is not visible the
+request is queued and dispatched once it is opened. This is not laziness — it avoids dumping a dozen
+historical approvals onto the screen after one reconnect.
 
-## 6. 文件与终端：两个「按 Session 决定出口」的适配器
+## 6. Files and terminals: two adapters that pick an outlet per session
 
-### 6.1 文件
+### 6.1 Files
 
-文件操作有两层拦截，因为浏览器侧和 Host 侧的调用点不同：
+File operations are intercepted at two layers, because the call sites on the browser side and the host
+side differ:
 
-1. **Host 侧**：`installRemoteWorkspaceFiles` 包住 `workspaceFiles` 服务的 `read/readBytes/stat/list/changes`，
-   用 `mirrors.remoteFileContext(workspaceRoot)` 判断这个 cwd 是否属于某个镜像工作区。属于就改成走
-   `RemoteAgentClient` 的 `file.*` 接口，并把返回值的 `absolutePath` 换回本地锚点路径
-   （`src/remote/files.ts:32-89`）。
-2. **浏览器侧**：Host 生成的 Remote 方法在适配器安装前就已经绑定，所以 `client/remote-files.ts` 把
-   `ctx.remote.workspaceFiles` 换成走 `host/files/*` 端点的代理，端点内部再调同一套 `workspaceFiles`
-   （`client/remote-files.ts:24-51`、`host-api/handler.ts:303-334`）。
-3. **路径换算**：`resolveRemoteFileTarget` 处理两个命名空间——远端绝对路径优先（让 transcript 链接和工具
-   卡片继续可用），其后是锚点内的相对/绝对路径，最后才是「锚点外的远端绝对路径也放行给 agent」
-   （`src/remote/remote-path.ts:57-110`）。这条规则是 Windows 客户端浏览 Linux 工作区的前提。
+1. **Host side**: `installRemoteWorkspaceFiles` wraps `read/readBytes/stat/list/changes` on the
+   `workspaceFiles` service and uses `mirrors.remoteFileContext(workspaceRoot)` to decide whether that
+   cwd belongs to a mirrored workspace. If it does, the call is redirected to the `RemoteAgentClient`
+   `file.*` methods and the returned `absolutePath` is mapped back to the local anchor
+   (`installRemoteWorkspaceFiles` in `src/remote/files.ts`).
+2. **Browser side**: the Host-generated Remote methods are bound before an adapter can replace them, so
+   `client/remote-files.ts` replaces `ctx.remote.workspaceFiles` with a proxy that calls the
+   `host/files/*` endpoints, which in turn call the same `workspaceFiles`
+   (`installRemoteFiles` in `src/client/remote-files.ts`, the `host/files/*` branch in
+   `host-api/handler.ts`).
+3. **Path translation**: `resolveRemoteFileTarget` handles two namespaces — a remote absolute path wins
+   (so transcript links and tool cards keep working), then relative or absolute paths inside the anchor,
+   and finally a remote absolute path outside the anchor is still allowed through to the agent
+   (`resolveRemoteFileTarget` in `src/remote/remote-path.ts`). This rule is what lets a Windows client
+   browse a Linux workspace.
 
-### 6.2 终端
+### 6.2 Terminals
 
-终端比文件更麻烦：`ClientTerminals` 在客户端构造时就拿到了 `ctx.remote.terminal`，没有实例级替换点。
-仓库的解法是一个**构建期 fork**：`packages/terminal-controller/scripts/build.mjs` 读取被 pin 的 stock
-客户端产物，只替换模块 id 和 `apply` 函数，把 `routeTerminal` 那段拼进去，并校验产物里仍存在
-`watch(`、`boundTerminal(`、`isRepresented(` 这些 0.2.2 形态的标记——形状变了就报错要求重新推导，而不是
-静默产出错的东西（`build.mjs:18-53`）。
+Terminals are harder than files: `ClientTerminals` receives `ctx.remote.terminal` when the client is
+constructed, and there is no per-instance replacement point. The repository's answer is a **build-time
+fork**: `packages/terminal-controller/scripts/build.mjs` reads the pinned stock client artifact,
+replaces only the module id and the `apply` function, splices the `routeTerminal` block in, and verifies
+that the artifact still contains the `watch(`, `boundTerminal(`, and `isRepresented(` markers of the
+0.2.2 shape — if the shape changed it errors and asks for a re-derivation instead of silently emitting
+something wrong (the stock-artifact check in `scripts/build.mjs`).
 
-替换后的 provider 用一个「这个 Session 是不是镜像」的判断分流（`src/client/routing.js:14-53`）：是镜像
-就调 `/api/dsh-waypoint-terminal`，不是就退回原实现。Host 侧再由 `installRemoteTerminalController` 把
-gateway 的 `environment/shells/list/create/attach/rename/close/watch/retain` 按 Session 重定向到
-`RemoteTerminals`（`src/remote/terminal-controller.ts:34-111`），后者通过隧道的 `/terminals/*` 操作远端
-PTY（`src/remote/terminal.ts:32-175`）。远端 PTY 用 Python 标准库 `pty` 实现，避免依赖原生 node-pty 编译
-（`packages/remote-agent/src/terminal.ts:60-120`）。
+The replaced provider splits on an "is this session mirrored" check (`routeTerminal` in
+`src/client/routing.js`): mirrored sessions call `/api/dsh-waypoint-terminal`, everything else falls back
+to the original implementation. On the host side `installRemoteTerminalController` redirects the
+gateway's `environment/shells/list/create/attach/rename/close/watch/retain` per session to
+`RemoteTerminals` (`installRemoteTerminalController` in `src/remote/terminal-controller.ts`), which
+drives the remote PTY over the tunnel's `/terminals/*` (`RemoteTerminals` in `src/remote/terminal.ts`).
+The remote PTY is implemented with Python's standard-library `pty` (`PTY_HELPER` in
+`packages/remote-agent/src/terminal.ts`) so it does not depend on a native node-pty build. That carries a
+precondition: the remote host needs `python3`. Without it, installing and sessions still work and only
+**New terminal** fails.
 
-`retain` 特意返回一个「一直开着」的流：rc.2 的 `TerminalWindowHold` 把结束的 hold 流当成终端不可用。
+`retain` deliberately returns a stream that stays open: rc.2's `TerminalWindowHold` treats a finished hold
+stream as "terminal unavailable".
 
-## 7. 模型凭据：两条路径，按主机选择
+## 7. Model credentials: two paths, chosen per host
 
-默认是 **Remote direct**：本地解析出的 key 被写进远端 `dsh web` 的启动环境——systemd unit 里是
-`Environment="DEEPSEEK_API_KEY=..."`（unit 文件 `chmod 600`），nohup 模式是行内环境变量
-（`packages/installer/src/bootstrap.ts:64-90`、`510-524`）。远端直接打 `https://api.deepseek.com/anthropic`。
+The default is **Remote direct**: the locally resolved key is written into the remote `dsh web` launch
+environment — an `Environment="DEEPSEEK_API_KEY=..."` line in the systemd unit (written `chmod 600`), or
+an inline environment variable under nohup (`renderSystemdUnit`, `renderNohup` in
+`packages/installer/src/bootstrap.ts`). The remote then calls
+`https://api.deepseek.com/anthropic` directly.
 
-可选是 **Local key proxy**：远端只拿到每主机一个占位 token 和内网地址，隧道额外加 `-R`，本地
-`ModelCredentialProxy` 校验 token、注入真实 key、转发到上游（`src/credentials/proxy.ts:41-145`、
-`src/service.ts:1175-1283`）。代理是单个 loopback server，多个可以共用，靠每主机不同的 token 区分，因此
-一台 direct 主机永远拿不到 proxy token，一台 proxy 主机永远拿不到真 key。
+The optional path is the **Local key proxy**: the remote only receives a per-host placeholder token and
+an internal address, the tunnel adds `-R`, and the local `ModelCredentialProxy` validates the token,
+injects the real key, and forwards upstream (`ModelCredentialProxy` in `src/credentials/proxy.ts`,
+`#modelPathFor` in `src/service.ts`). The proxy is a single loopback server that many hosts can share,
+distinguished by per-host tokens, so a direct host never receives a proxy token and a proxy host never
+receives the real key.
 
-两条路径都靠第 3.4 节的 `#reconcileModelEnvironment` 保持一致，切换来源则直接复用 provisioning 流程
-（远端进程必须带新环境重启）：`setModelSource` 只是存下选择再调 `provision`（`src/service.ts:408-425`）。
+Both paths are kept consistent by `#reconcileModelEnvironment` from §3.4, and switching sources reuses
+the provisioning flow directly (the remote process has to restart with the new environment):
+`setModelSource` only stores the choice and calls `provision` (`setModelSource` in `src/service.ts`).
 
-## 8. 版本、重连与降级边界
+## 8. Versions, reconnects, and degradation boundaries
 
-- **协议版本是硬门**：`PROTOCOL_VERSION = 1`，不匹配返回 `409 protocol/version-mismatch`，没有静默降级
-  （`packages/protocol/src/version.ts:13-19`、`packages/remote-agent/src/http.ts:89-101`）。这与
-  [protocol.md](protocol.md) 的「Version rules」一致。
-- **agent 版本按「不等即换」**，见 3.4。**DSH 运行时版本只提示不阻断**：远端比本地旧时宿主卡出现
-  「更新远端 DSH」，由用户决定（`src/version.ts:63-71`）。
-- **重连有上限**：指数退避（1s 起、上限 `maxReconnectDelayMs`），超过 `provisionRetryLimit`（默认 3）就停在
-  错误态等人处理；permanent 安装失败连退避都不进（`src/service.ts:1352-1388`）。
-- **镜像记录会被回收**：本地 Session 已经不存在的映射会在 sync 时清掉，但「内存里全查不到」这种一次性
-  全 miss 需要拿磁盘归档再确认一次，避免把未 hydrate 的注册表误判成「全部消失」
-  （`src/mirror/service.ts:673-747`）。
+- **The protocol version is a hard gate**: `PROTOCOL_VERSION = 1`, and a mismatch returns
+  `409 protocol/version-mismatch` with no silent downgrade (`PROTOCOL_VERSION` in
+  `packages/protocol/src/version.ts`, the negotiation block in `packages/remote-agent/src/http.ts`). This
+  matches "Version rules" in [protocol.md](protocol.md).
+- **The agent version is "different means replace"**, see §3.4. **The DSH runtime version only warns**:
+  when the remote is older the host card offers **update remote DSH** and the user decides
+  (`dshUpdateFor` in `src/version.ts`).
+- **Reconnects are bounded**: exponential backoff (from 1 s up to `maxReconnectDelayMs`), and after
+  `provisionRetryLimit` (default 3) attempts the host stops in an error state and waits for a person; a
+  permanent install failure does not even enter backoff (`#scheduleReconnect` in `src/service.ts`).
+- **Mirror records are collected**: mappings whose local session no longer exists are dropped during
+  sync, but a one-off all-miss pass is confirmed against the on-disk archive first, so a not-yet-hydrated
+  registry is not mistaken for "everything disappeared" (`#pruneDetachedSessions` in
+  `src/mirror/service.ts`).
 
-## 9. 代价与已知限制
+## 9. Costs and known limits
 
-| 限制 | 直接原因 |
+| Limit | Direct cause |
 |---|---|
-| 超过 `mirrorMaxEvents` 的远端会话只镜像尾部 | 快照是「最新一页」，更早历史仍在远端 UI |
-| 冷会话没有事件流，只有轮询 | 远端 `session/not-live`，cold resume 未实现 |
-| 锚点是空目录，本地直接读 `fs` 会看到空 | 远端内容从不落地到本地磁盘 |
-| remote diff / 部分高级文件动作仍用本地工具的既有结果 | 只接管了 `workspaceFiles` 与终端两个接缝 |
-| 需要 SSH 可达，无 relay/NAT 穿透 | 当前只有 ssh `-L`/`-R` |
-| Windows 远端不支持 | bootstrap 是 POSIX bash，Node.js 也按 Linux/macOS 处理 |
+| Remote sessions over `mirrorMaxEvents` mirror only the tail | The snapshot is "the newest page"; earlier history stays in the remote UI |
+| Cold sessions have no event stream, only polling | The remote answers `session/not-live`; cold resume is not implemented |
+| The anchor is empty, so reading `fs` locally sees nothing | Remote content never lands on local disk |
+| Remote diffs / some advanced file actions still use the native tool results | Only `workspaceFiles` and the terminal are intercepted |
+| SSH reachability required; no relay/NAT traversal | Only ssh `-L`/`-R` today |
+| Windows remotes unsupported | The bootstrap is POSIX bash, and Node.js is handled as Linux/macOS |
+| The remote terminal needs `python3` | The PTY is a Python standard-library `pty` helper, not a native node-pty build |
 
-## 10. 想动手改，从哪里进
+## 10. Where to start when you want to change something
 
-| 想改的行为 | 入口 |
+| Behaviour you want to change | Entry point |
 |---|---|
-| 连接阶段/重试/凭据路径 | `packages/local-plugin/src/service.ts`（`#doConnect:905`、`#modelPathFor:1175`） |
-| 远端安装流程 | `packages/installer/src/bootstrap.ts` + `src/provision.ts` |
-| 工作区/会话映射与同步 | `packages/local-plugin/src/mirror/service.ts`（`sync:641`、`#syncHost:1602`、`#ensureMirrorOnce:1962`） |
-| 本地 prompt → 远端 | `#sendPrompt:1036`、`RemoteMirrorAgent:271` |
-| 远端事件 → 本地 Session | `#appendEvent:2346`、`toSeedEvent:2755`、`isMirrorNoise:2700` |
-| 新增远端能力 | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
-| 文件/终端路由 | `src/remote/files.ts`、`src/remote/terminal-controller.ts`、`packages/terminal-controller/scripts/build.mjs` |
-| Settings 页行为 | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
+| Connection phases, retry, credential path | `packages/local-plugin/src/service.ts` (`#doConnect`, `#modelPathFor`) |
+| Remote installation flow | `packages/installer/src/bootstrap.ts` + `src/provision.ts` |
+| Workspace/session mapping and sync | `packages/local-plugin/src/mirror/service.ts` (`sync`, `#syncHost`, `#ensureMirrorOnce`) |
+| Local prompt → remote | `#sendPrompt`, `RemoteMirrorAgent` |
+| Remote events → local session | `#appendEvent`, `toSeedEvent`, `isMirrorNoise` |
+| Adding a remote capability | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
+| File/terminal routing | `src/remote/files.ts`, `src/remote/terminal-controller.ts`, `packages/terminal-controller/scripts/build.mjs` |
+| Settings page behaviour | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
 
-## 11. 验证状态
+## 11. Verification status
 
-本文是对源码的静态阅读结果：所有符号、行号与行为描述都对应上面引用的文件。**没有**运行 `pnpm test`
-或 `pnpm typecheck`，也没有连接真实远端主机复现时序；第 3.1 节的时序图是按代码路径整理，未做图形渲染
-验证。若要确认某条结论，最小的复现路径是 `./scripts/test-sandbox.sh` 起隔离环境，再按
-[docs/testing.md](testing.md) 的可见性约定跑一次集成用例。
+**Checked statically** (read against the source of `1.0.1`, item by item):
+
+- every `file → symbol` reference in this page resolves to exactly one definition;
+- the code excerpts quoted in §3.2, §3.4, §5.2, and §5.5 match the source;
+- the configuration defaults referenced here (`mirrorMaxEvents`, `mirrorPollMs`, `maxReconnectDelayMs`,
+  `provisionRetryLimit`) match the schema defaults in `src/config.ts`.
+
+**Not checked**:
+
+- `pnpm test` and `pnpm typecheck` were not run for this page: it introduces no executable artifact and
+  the change is documentation only;
+- no live remote host was connected, so the ordering, timeouts, and sequencing are read from the code
+  paths rather than observed;
+- the mermaid sequence diagram in §3.1 is hand-written and has not been rendered.
+
+To confirm any single claim the smallest reproduction is `./scripts/test-sandbox.sh`, which builds and
+installs into an isolated environment, followed by one integration run under the visibility rules in
+[docs/testing.md](testing.md).

@@ -89,7 +89,9 @@ this repository:
 - `docs/adapting-to-dsh-releases.md` — moving to a new DSH release.
 - `docs/remote-workspace-mechanism.md` — how a remote directory becomes a local
   workspace at runtime: discovery, tunnel, the session mirror, and how files and
-  terminals are rerouted. Start here before changing the mirror.
+  terminals are rerouted. Start here before changing the mirror. The Chinese copy
+  (`docs/remote-workspace-mechanism.zh.md`) mirrors it; edit both, and treat the
+  English page as canonical.
 - `docs/testing.md` — test workspace visibility, mirror regressions, CI steps.
 - `docs/development.md` — workspace layout, build scripts, the Windows
   package-manager shims this repository has to work around.
