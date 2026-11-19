@@ -55,7 +55,11 @@ describe('remote terminal', () => {
       controller.abort()
       await reader
     } finally {
-      manager.dispose()
+      // `dispose` waits for the helpers to exit, so the directory can be removed
+      // without racing a socket error from a process nobody is watching. That
+      // window only shows up where the test actually runs — it skips on Windows,
+      // which is why CI saw it first.
+      await manager.dispose()
       await rm(dir, { recursive: true, force: true })
     }
   })

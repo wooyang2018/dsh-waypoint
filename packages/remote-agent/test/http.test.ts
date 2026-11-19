@@ -38,7 +38,7 @@ describe('agent HTTP file and terminal surface', () => {
   })
 
   after(async () => {
-    manager.dispose()
+    await manager.dispose()
     await new Promise<void>(resolve => server.close(() => resolve()))
     await rm(dir, { recursive: true, force: true })
   })

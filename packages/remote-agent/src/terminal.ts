@@ -279,13 +279,32 @@ export class RemoteTerminalManager {
     }
   }
 
-  /** Terminate every PTY. */
-  dispose(): void {
+  /**
+   * Terminate every PTY, optionally waiting for the helpers to exit.
+   *
+   * `SIGHUP` detaches the child, but the child may still be tearing down its
+   * socket when this returns. Anything the caller does next — removing the
+   * working directory, ending a test — then races a `ECONNRESET` emitted by a
+   * process nobody is watching. Awaiting the exits makes the teardown ordered
+   * instead of hopeful.
+   *
+   * @returns A promise that settles once every helper has exited.
+   */
+  dispose(): Promise<void> {
+    const exits: Promise<void>[] = []
     for (const record of this.#terminals.values()) {
       record.closed = true
+      if (record.child.exitCode === null && record.child.signalCode === null) {
+        exits.push(new Promise<void>(resolveExit => {
+          record.child.once('exit', () => resolveExit())
+          // A helper that ignores SIGHUP must not hang the caller.
+          setTimeout(resolveExit, 2_000)
+        }))
+      }
       record.child.kill('SIGHUP')
     }
     this.#terminals.clear()
+    return Promise.all(exits).then(() => undefined)
   }
 
   #output(record: TerminalRecord, data: string): void {

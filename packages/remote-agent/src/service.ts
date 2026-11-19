@@ -753,7 +753,7 @@ export class RemoteAgentService {
 
   /** Publish the final state and wait for it to reach disk. */
   async dispose(): Promise<void> {
-    this.terminals.dispose()
+    await this.terminals.dispose()
     try {
       this.#state = withStopped(this.#state)
       await writeState(this.config.stateFile, this.#state)
