@@ -136,6 +136,16 @@ function labels(renderer: ReactTestRenderer): string[] {
     .map(node => node.children.join(''))
 }
 
+/** Every rendered row, in document order. A directory row also carries
+ *  `dshwp-tree-dir` (and a hidden one `dshwp-tree-hidden`), so this matches the
+ *  class list rather than one exact string. */
+function rowsOf(renderer: ReactTestRenderer) {
+  return renderer.root.findAll(node => {
+    const className = node.props?.className
+    return typeof className === 'string' && className.split(' ').includes('dshwp-tree-row')
+  })
+}
+
 describe('remote files tab', () => {
   it('registers one tab descriptor with a namespaced id', async () => {
     const loaded = await load()
@@ -201,7 +211,7 @@ describe('remote files tab', () => {
       },
     })
     const renderer = await render(loaded, api, 'local-1')
-    const rows = renderer.root.findAll(node => node.props?.className === 'dshwp-tree-row')
+    const rows = rowsOf(renderer)
     await act(async () => { rows[0]!.props.onClick() })
     assert.deepEqual(api.calls, ['mirror:local-1', 'list:local-1:', 'list:local-1:src'])
     assert.deepEqual(labels(renderer), ['src', 'main.ts'])
@@ -218,7 +228,7 @@ describe('remote files tab', () => {
       files: { 'big.txt': { text: 'line one', lines: 1, eof: false } },
     })
     const renderer = await render(loaded, api, 'local-1')
-    const rows = renderer.root.findAll(node => node.props?.className === 'dshwp-tree-row')
+    const rows = rowsOf(renderer)
     await act(async () => { rows[0]!.props.onClick() })
     assert.deepEqual(api.calls, ['mirror:local-1', 'list:local-1:', 'read:local-1:big.txt:1'])
     const pre = renderer.root.findByType('pre')
@@ -229,6 +239,76 @@ describe('remote files tab', () => {
     assert.equal(forward?.props.disabled, false)
     await act(async () => { forward!.props.onClick() })
     assert.deepEqual(api.calls.at(-1), 'read:local-1:big.txt:201')
+    await act(async () => { renderer.unmount() })
+  })
+
+  it('marks a directory row the way the sidebar does, without a caret', async () => {
+    const loaded = await load()
+    const api = fakeApi({
+      mirrored: true,
+      listings: {
+        '': {
+          path: '',
+          truncated: false,
+          entries: [
+            { name: 'src', type: 'directory' },
+            { name: 'README.md', type: 'file' },
+          ],
+        },
+      },
+    })
+    const renderer = await render(loaded, api, 'local-1')
+    const rows = rowsOf(renderer)
+    assert.equal(rows.length, 2)
+
+    const classes = (row: (typeof rows)[number]) => String(row.props.className).split(' ')
+    assert.ok(classes(rows[0]!).includes('dshwp-tree-dir'), 'a directory row carries the bold-label marker')
+    assert.equal(classes(rows[0]!).includes('dshwp-tree-dir'), true)
+    assert.equal(classes(rows[1]!).includes('dshwp-tree-dir'), false, 'a file row is not bold')
+
+    // The host's tree indicates expansion with the folder glyph, not a caret,
+    // and shows no byte size — copying both is what keeps the two trees looking
+    // like one surface.
+    assert.equal(renderer.root.findAll(node => node.props?.className === 'dshwp-tree-caret').length, 0,
+      'no disclosure caret: the glyph carries the state')
+    assert.equal(renderer.root.findAll(node => node.props?.className === 'dshwp-tree-size').length, 0,
+      'no size column')
+    // Both rows render a leading 14px glyph.
+    assert.equal(renderer.root.findAllByType('svg').length, 2, 'one glyph per row')
+    await act(async () => { renderer.unmount() })
+  })
+
+  it('dims a hidden entry and indents by the same 22px step as the sidebar', async () => {
+    const loaded = await load()
+    const api = fakeApi({
+      mirrored: true,
+      listings: {
+        '': { path: '', truncated: false, entries: [{ name: 'src', type: 'directory' }] },
+        src: {
+          path: 'src',
+          truncated: false,
+          entries: [
+            { name: '.env', type: 'file' },
+            { name: 'main.ts', type: 'file' },
+          ],
+        },
+      },
+    })
+    const renderer = await render(loaded, api, 'local-1')
+    await act(async () => { rowsOf(renderer)[0]!.props.onClick() })
+
+    const rows = rowsOf(renderer)
+    const byName = (name: string) => rows.find(row =>
+      row.findAll(node => node.props?.className === 'dshwp-tree-name')
+        .some(node => node.children.join('') === name))!
+
+    assert.ok(String(byName('.env').props.className).includes('dshwp-tree-hidden'),
+      'a dotfile is dimmed')
+    assert.equal(String(byName('main.ts').props.className).includes('dshwp-tree-hidden'), false)
+
+    // depth 0 → 6px, depth 1 → 28px: the host's `depth * 22 + 6`.
+    assert.equal(byName('src').props.style.paddingLeft, '6px')
+    assert.equal(byName('main.ts').props.style.paddingLeft, '28px')
     await act(async () => { renderer.unmount() })
   })
 

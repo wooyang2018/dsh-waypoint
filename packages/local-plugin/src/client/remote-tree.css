@@ -2,72 +2,96 @@
  * Styles for the "Remote files" tab contributed to dsh-better-sidebar.
  *
  * The tab renders inside another plugin's sidebar, so nothing here may depend
- * on that plugin's class names or CSS-module hashes. Every value resolves
- * through the Harness `--dsw-*` alias layer, which is what a theme or skin
- * overrides; no literal colour is picked here.
+ * on that plugin's class names or CSS-module hashes. The METRICS, however, are
+ * deliberately copied from its tree (`sidebar.module.css` → `.explorerRow`,
+ * `.explorerBody`): a row is 28px tall with a 22px indent step, uses the same
+ * small type token, and marks a directory with a bolder label and a folder
+ * glyph instead of a disclosure triangle. Matching those numbers is what makes
+ * the two trees look like one surface rather than two.
+ *
+ * Every colour resolves through the Harness `--dsw-*` alias layer, which is what
+ * a theme or skin overrides; no literal colour is picked here.
  */
 
 .dshwp-tree {
   display: flex;
   flex-direction: column;
+  /* `flex: 1` + `min-height: 0` lets the body scroll inside the sidebar's
+     column instead of stretching it; `overflow-x: hidden` keeps a deep row's
+     inline indent from widening the pane (labels truncate instead). */
+  flex: 1;
   min-height: 0;
-  gap: 2px;
-  padding: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 8px 8px;
   color: var(--dsw-alias-label-primary);
-  font: 13px/20px var(--dsw-font-family, inherit);
 }
 
 .dshwp-tree-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
+  /* border-box keeps the inline indent padding (depth * 22 + 6) INSIDE the
+     row's 100% width — without it deep rows overflow and force a horizontal
+     scrollbar on the tree body. */
+  box-sizing: border-box;
   width: 100%;
-  padding: 3px 8px;
-  border: 0;
-  border-radius: var(--dsw-radius-xs);
+  max-width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 4px;
   background: transparent;
-  color: inherit;
-  font: inherit;
+  font: var(--dsw-font-xxs-12, 12px/18px system-ui);
+  color: var(--dsw-alias-label-primary);
   text-align: left;
   cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
 }
 
 .dshwp-tree-row:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-.dshwp-tree-caret {
-  flex: none;
-  width: 10px;
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 10px;
-  line-height: 1;
+.dshwp-tree-row:focus-visible {
+  outline: 2px solid var(--dsw-alias-link, #4f7cff);
+  outline-offset: -2px;
+}
+
+/* A directory row reads as a container: bolder label, same metrics. */
+.dshwp-tree-dir {
+  font: var(--dsw-font-xxs-strong-12, 600 12px/18px system-ui);
+}
+
+/* POSIX convention: a leading dot is a hidden entry, dimmed like the host's. */
+.dshwp-tree-hidden {
+  opacity: 0.45;
 }
 
 .dshwp-tree-name {
-  flex: 1;
+  /* `min-width: 0` lets the flex item shrink below its content so the label
+     truncates with an ellipsis instead of widening the row. */
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.dshwp-tree-size {
-  flex: none;
-  color: var(--dsw-alias-label-caption);
-  font-size: 11px;
-}
-
+/* Notices (loading / empty / error / truncated) share the row's type scale so
+   a message does not jump out of the tree's rhythm. */
 .dshwp-tree-note {
   margin: 4px 8px;
   color: var(--dsw-alias-label-caption);
-  font-size: 12px;
-  line-height: 18px;
+  font: var(--dsw-font-xxs-12, 12px/18px system-ui);
 }
 
 .dshwp-tree-error {
   color: var(--dsw-alias-state-error-primary);
 }
+
+/* ---- file preview ------------------------------------------------------ */
 
 .dshwp-tree-preview {
   display: flex;
@@ -90,11 +114,10 @@
   height: 24px;
   padding: 0 10px;
   border: 1px solid var(--dsw-alias-border-l4);
-  border-radius: var(--dsw-radius-sm);
+  border-radius: var(--dsw-radius-sm, 4px);
   background: transparent;
   color: var(--dsw-alias-label-secondary);
-  font: inherit;
-  font-size: 12px;
+  font: var(--dsw-font-xxs-12, 12px/18px system-ui);
   cursor: pointer;
 }
 
@@ -112,7 +135,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
+  font: var(--dsw-font-xxs-12, 12px/18px system-ui);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -123,7 +146,7 @@
   padding: 8px;
   overflow: auto;
   border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: var(--dsw-radius-sm);
+  border-radius: var(--dsw-radius-sm, 4px);
   background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
   font: 12px/18px var(--dsw-font-family-mono, ui-monospace, monospace);

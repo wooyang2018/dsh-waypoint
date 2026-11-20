@@ -29,6 +29,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { HostsApi } from './api.ts'
 import { localizedError } from './errors.ts'
 import type { Translate } from './locale.ts'
+import { fileGlyph, folderGlyph, isHiddenName } from './remote-tree-icons.tsx'
 import treeCss from './remote-tree.css'
 
 /** One row the tree renders. */
@@ -37,7 +38,6 @@ interface TreeRow {
   /** Workspace path of the child: the listed `path` joined with `/name`. */
   readonly path: string
   readonly directory: boolean
-  readonly size: number | undefined
 }
 
 /** What one expanded directory resolved to. */
@@ -182,7 +182,6 @@ export function RemoteTreeTab({ api, t, sessionId, visible }: RemoteTreeTabProps
             name: entry.name,
             path: childPath(path, entry.name),
             directory: entry.type === 'directory',
-            size: entry.type === 'file' ? entry.size : undefined,
           })),
           truncated: listing.truncated === true,
         },
@@ -254,21 +253,31 @@ export function RemoteTreeTab({ api, t, sessionId, visible }: RemoteTreeTabProps
     const output: JSX.Element[] = []
     for (const row of state.rows) {
       const open = expanded.has(row.path)
+      // The sidebar's own tree marks a directory with its glyph and a bolder
+      // label rather than a disclosure triangle, so a row here uses the same
+      // vocabulary: no caret column, one 14px leading glyph.
       output.push(
-        <button
+        <div
           key={row.path}
-          type="button"
-          className="dshwp-tree-row"
-          style={{ paddingLeft: `${8 + depth * 12}px` }}
-          onClick={() => { if (row.directory) toggle(row.path); else loadPage(row.path, 1) }}
+          role="button"
+          tabIndex={0}
+          className={row.directory
+            ? (isHiddenName(row.name) ? 'dshwp-tree-row dshwp-tree-dir dshwp-tree-hidden' : 'dshwp-tree-row dshwp-tree-dir')
+            : (isHiddenName(row.name) ? 'dshwp-tree-row dshwp-tree-hidden' : 'dshwp-tree-row')}
+          style={{ paddingLeft: `${depth * 22 + 6}px` }}
+          title={row.path}
           aria-expanded={row.directory ? open : undefined}
+          onClick={() => { if (row.directory) toggle(row.path); else loadPage(row.path, 1) }}
+          onKeyDown={event => {
+            if (event.key !== 'Enter' && event.key !== ' ') return
+            event.preventDefault()
+            if (row.directory) toggle(row.path)
+            else loadPage(row.path, 1)
+          }}
         >
-          <span className="dshwp-tree-caret" aria-hidden="true">
-            {row.directory ? (open ? '▾' : '▸') : ''}
-          </span>
+          {row.directory ? folderGlyph(open) : fileGlyph(row.name)}
           <span className="dshwp-tree-name">{row.name}</span>
-          {row.size !== undefined && <span className="dshwp-tree-size">{row.size}</span>}
-        </button>,
+        </div>,
       )
       if (row.directory && open) output.push(...renderLevel(row.path, depth + 1))
     }
