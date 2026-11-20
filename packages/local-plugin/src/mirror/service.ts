@@ -21,6 +21,7 @@ import { createScope, scopeTarget, type Scope } from '@deepseek-ai/dsh-scope'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-api-session-controller/types'
+import { appendPluginRecord } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type { Workspace, WorkspaceId, WorkspaceDomainState } from '@deepseek-ai/dsh-workspace'
 import type {
@@ -94,6 +95,16 @@ interface MirrorState {
 
 interface PendingUser {
   readonly message: unknown
+  /**
+   * Flattened text of the prompt, used to tell which remote `user/message`
+   * this optimistic entry belongs to.
+   *
+   * Pairing by position alone is what let a cancelled prompt claim the next
+   * message another client sent: the queue shifted whatever arrived. Matching
+   * on text cannot bind the wrong entry, and an unmatched remote message then
+   * falls through to a normal append instead of overwriting a local one.
+   */
+  readonly text: string
   localSeq: number
 }
 
@@ -129,9 +140,67 @@ interface MirrorRuntime {
    * again. An explicit choice clears its entry (`forgetRejectedSelection`).
    */
   rejectedSelections: Set<string>
+  /**
+   * Remote seqs this mirror deliberately did not project.
+   *
+   * Two things land here: an event whose local append threw (a poison event
+   * must not freeze every later one), and a remote `turn/end` for a turn this
+   * mirror already closed itself. Both are consumed when remapping
+   * `sourceEventSeqs`, so an event citing a skipped seq degrades instead of
+   * pointing at a node that never existed.
+   */
+  skippedRemoteSeqs: Set<number>
+  /**
+   * Turns this mirror closed on its own behalf, so the remote's own `turn/end`
+   * for the same turn is skipped rather than closing it twice.
+   */
+  closedTurns: Set<number>
+  /**
+   * Set once the remote log is observed moving backwards.
+   *
+   * A remote that restarts can resume its sequence numbers from the start. That
+   * is a different history under the same session id, so the mirror stops
+   * following and says so instead of silently overwriting what the user already
+   * read. Cleared only by re-mounting the mirror.
+   */
+  diverged: { readonly reason: string } | undefined
 }
 
 type ReasoningEffort = NonNullable<ModelSelection['reasoningEffort']>
+
+/**
+ * Model selection used only when neither the remote log nor this deployment
+ * names one — an empty remote tail on a session that never ran a request.
+ */
+const FALLBACK_MODEL: MirrorModelSelection = { provider: 'deepseek-official', model: 'deepseek-flash' }
+
+/**
+ * A hole in the mirrored log, recorded as a local plugin record.
+ *
+ * `gap` — the remote log moved past a range the mirror never saw (a truncated
+ * snapshot window, or a real jump). `event-skipped` — the remote sent an event
+ * the local projection rejected. `diverged` — the remote's sequence numbers
+ * moved backwards, so the log is a different history under the same id.
+ */
+export interface MirrorLogGap {
+  readonly reason: 'gap' | 'event-skipped' | 'diverged'
+  /** First remote seq the mirror does not have. */
+  readonly fromSeq: number
+  /** Last remote seq the mirror does not have; equal to `fromSeq` for one event. */
+  readonly toSeq: number
+  /** Remote event type, for `event-skipped`. */
+  readonly eventType?: string
+}
+
+/** The plugin-record name carrying {@link MirrorLogGap}. */
+const PLUGIN_RECORD = 'plugin:dsh-waypoint/log-gap' as const
+
+declare module '@deepseek-ai/dsh-session' {
+  interface PluginRecordMap {
+    /** Written by the mirror when a range of the remote log cannot be projected. */
+    'plugin:dsh-waypoint/log-gap': MirrorLogGap
+  }
+}
 
 interface MirrorModelSelection {
   provider: string
@@ -1036,7 +1105,7 @@ export class RemoteMirrorService {
   async #sendPrompt(runtime: MirrorRuntime, message: unknown, mode: PromptDeliveryMode): Promise<void> {
     if (this.#detached(runtime)) throw new Error('remote mirror is no longer active')
     if (promptParts(message).length === 0) throw new Error('prompt has no content')
-    const pending: PendingUser = { message, localSeq: -1 }
+    const pending: PendingUser = { message, text: promptText(message), localSeq: -1 }
     runtime.pendingUsers.push(pending)
     if (!runtime.running) {
       runtime.awaitingTurn = runtime.latestTurn + 1
@@ -1185,6 +1254,15 @@ export class RemoteMirrorService {
     void this.#hosts.cancelSession(runtime.record.hostId, runtime.record.remoteSessionId).then(() => {
       runtime.awaitingTurn = null
       runtime.awaitingStarted = false
+      // Drop the optimistic entries the cancel just invalidated. They are the
+      // prompts the remote may or may not have accepted; keeping them would let
+      // one of them pair with the next message another client sends.
+      runtime.pendingUsers.length = 0
+      // Stop locally first: the user pressed Stop, so the UI must show a turn
+      // that ended. If the remote had already accepted the prompt, its
+      // `user/message` arrives later and is appended as ordinary history —
+      // visible, rather than swallowed by a stale pending entry.
+      this.#closeTurnForCancel(runtime)
       this.#setRunning(runtime, false)
     }).catch(error => {
       runtime.lastError = error instanceof Error ? error.message : String(error)
@@ -1192,6 +1270,36 @@ export class RemoteMirrorService {
       // Keep the local Agent running so the UI can offer Stop again.
       this.#setRunning(runtime, true)
     })
+  }
+
+  /**
+   * Close the turn a cancel interrupted, so the local projection shows an end.
+   *
+   * A prompt can be accepted before the remote appends `turn/start`, in which
+   * case there is no open turn to close here; the prompt is left to arrive as
+   * ordinary history (see `cancel`).
+   */
+  #closeTurnForCancel(runtime: MirrorRuntime): void {
+    const projections = this.#ctx.get('sessionProjections') as unknown as {
+      stateOf?: (session: Session, key: string) => unknown
+    } | undefined
+    const boundary = projections?.stateOf?.(runtime.session, 'turnBoundary') as
+      | { openTurnStartSeq?: unknown }
+      | undefined
+    const event = abandonedTurnEnd(boundary, runtime.latestTurn)
+    if (event === undefined) return
+    try {
+      runtime.session.append('turn/end', event as never)
+      // Remember it: the remote's own `turn/end` for this turn must not be
+      // replayed on top of the one just written.
+      runtime.closedTurns.add(event.turn)
+    } catch (error) {
+      this.#ctx.logger.warn(
+        'dsh-waypoint: could not close the cancelled turn of %s: %s',
+        runtime.record.remoteSessionId,
+        String(error),
+      )
+    }
   }
 
   /**
@@ -2040,14 +2148,16 @@ export class RemoteMirrorService {
     for (const [index, event] of filtered.entries()) remoteToLocalSeq.set(event.seq, index)
 
     if (reuse !== undefined) {
-      const localEvents = reuse.snapshotEvents()
-      for (let index = 0; index < Math.min(localEvents.length, filtered.length); index += 1) {
-        const localEvent = localEvents[index]
-        const remoteEvent = filtered[index]
-        if (localEvent !== undefined && remoteEvent !== undefined) {
-          remoteToLocalSeq.set(remoteEvent.seq, localEvent.seq)
-        }
-      }
+      // Re-attaching reuses the local Session, so the mapping must describe the
+      // events actually in it. Positional rebuilding (local[i] ↔ remote[i]) only
+      // holds when both logs have the same length and order, which they do not:
+      // the local log contains `model/selection`, optimistic user messages, and
+      // other events the remote never sent. An offset there silently pointed
+      // every later remote seq at the wrong local node.
+      //
+      // So reuse only what the runtime recorded, and let `#replaySnapshot`
+      // continue strictly from `lastSeq`. `#mountRuntime` loads the persisted
+      // mapping; `#trustedMapping` decides whether it may be believed.
       const record = existing as MirrorRecord
       await this.#attach(target.workspace, reuse.id)
       if (this.#anchorRemoved(host.id, anchor) || this.#disposed) return undefined
@@ -2130,6 +2240,70 @@ export class RemoteMirrorService {
     return record
   }
 
+  /**
+   * Drop mapping entries that the local log cannot vouch for, and clamp
+   * `lastSeq` so a replay cannot duplicate history.
+   *
+   * Two independent failures are covered here. A mapping entry above the local
+   * log's last seq points at a node that does not exist. A `lastSeq` above what
+   * the local log can explain means the mirror recorded progress it never
+   * persisted, and replaying from it would append events the user already sees.
+   *
+   * Both are conservative: unprovable entries are dropped, and `lastSeq` is
+   * lowered to the highest remote seq the local log can justify. The snapshot
+   * re-supplies anything above it.
+   */
+  #reconcileMapping(
+    record: MirrorRecord,
+    session: Session,
+    remoteToLocal: Map<number, number>,
+  ): void {
+    const events = session.snapshotEvents()
+    const lastLocalSeq = events.at(-1)?.seq
+    if (lastLocalSeq === undefined) {
+      // No local events at all: nothing the mapping claims can be honoured.
+      if (remoteToLocal.size > 0) {
+        this.#ctx.logger.warn(
+          'dsh-waypoint: dropping %d mapping entries for %s; the local log is empty',
+          remoteToLocal.size,
+          record.remoteSessionId,
+        )
+        remoteToLocal.clear()
+      }
+      record.lastSeq = 0
+      return
+    }
+    let dropped = 0
+    let highest = 0
+    for (const [remoteSeq, localSeq] of [...remoteToLocal.entries()]) {
+      if (localSeq > lastLocalSeq) {
+        remoteToLocal.delete(remoteSeq)
+        dropped += 1
+        continue
+      }
+      highest = Math.max(highest, remoteSeq)
+    }
+    if (dropped > 0) {
+      this.#ctx.logger.warn(
+        'dsh-waypoint: dropped %d mapping entries for %s beyond local seq %s',
+        dropped,
+        record.remoteSessionId,
+        String(lastLocalSeq),
+      )
+    }
+    // The mirror can only have seen the remote seqs it mapped, plus the one that
+    // was in flight. Anything higher is progress this process never persisted.
+    const provable = Math.max(highest + 1, remoteToLocal.size)
+    if (record.lastSeq > provable) {
+      this.#ctx.logger.warn(
+        'dsh-waypoint: clamping lastSeq for %s from %s to %s; the local log explains less',
+        record.remoteSessionId,
+        String(record.lastSeq),
+        String(provable),
+      )
+      record.lastSeq = provable
+    }
+  }
   async #mountRuntime(
     record: MirrorRecord,
     session: Session,
@@ -2138,6 +2312,12 @@ export class RemoteMirrorService {
     latestTurn: number,
     live: boolean,
   ): Promise<void> {
+    // Reconcile the persisted mapping against the local log before anything
+    // replays. `lastSeq` is written with `#save()`, while the events are
+    // persisted by DSH itself, so an unclean shutdown can leave the two out of
+    // step: replaying from a stale `lastSeq` then duplicates history, and
+    // trusting a mapping whose nodes are gone points at nothing.
+    this.#reconcileMapping(record, session, remoteToLocalSeq)
     const runtime = {
       record,
       agent: null as unknown as MirrorAgent,
@@ -2159,9 +2339,18 @@ export class RemoteMirrorService {
       pendingUsers: [],
       waiters: [],
       rejectedSelections: new Set(),
+      skippedRemoteSeqs: new Set(),
+      closedTurns: new Set(),
+      diverged: undefined,
     } satisfies MirrorRuntime
-    const options = this.#defaultSelection() ?? modelOptions(snapshot.events)
-    const agent = new RemoteMirrorAgent(this, runtime, this.#ctx, options)
+    // The remote log is the authority on which model this Session actually used.
+    // A local deployment default only fills in when the remote log carries no
+    // header (an empty tail, or a session too old to have one) — otherwise the
+    // selector would advertise a model the remote never ran.
+    const options = modelOptions(snapshot.events) ?? this.#defaultSelection()
+    // The Agent stores a mutable selection; fall back to the documented default
+    // only when neither the remote log nor this deployment names one.
+    const agent = new RemoteMirrorAgent(this, runtime, this.#ctx, options ?? FALLBACK_MODEL)
     runtime.agent = agent
     let detach: () => void
     try {
@@ -2212,6 +2401,29 @@ export class RemoteMirrorService {
     runtime.timer = setTimeout(() => { void this.#poll(runtime) }, Math.max(500, this.#config.mirrorPollMs))
   }
 
+  /**
+   * Bring one mirrored Session up to date now, instead of on the next poll tick.
+   *
+   * `#ensureMirrorOnce` returns early while a runtime is live, so the poll timer
+   * is the mirror's only incremental path. Waiting for it is wrong whenever a
+   * caller already knows there is something to collect: `sync()` uses this to
+   * settle a freshly mounted Session before returning, and tests use it to
+   * exercise gap, rejection, and divergence handling without waiting on real
+   * time (which would make those cases slow and flaky).
+   *
+   * @param remoteSessionId the remote Session to advance.
+   * @returns false when the Session is not mirrored or has no live runtime.
+   */
+  async advance(remoteSessionId: string): Promise<boolean> {
+    const record = Object.values(this.#state.sessions)
+      .find(candidate => candidate.remoteSessionId === remoteSessionId)
+    if (record === undefined) return false
+    const runtime = this.#runtimes.get(record.localSessionId)
+    if (runtime === undefined) return false
+    await this.#poll(runtime)
+    return true
+  }
+
   async #poll(runtime: MirrorRuntime): Promise<void> {
     if (runtime.stopped || this.#disposed) return
     try {
@@ -2228,10 +2440,22 @@ export class RemoteMirrorService {
         this.#config.mirrorMaxEvents,
       )
       if (runtime.stopped || this.#disposed) return
+      // A remote that restarted can resume its sequence numbers from the start.
+      // That is a different history under the same id, so stop and say so
+      // rather than silently overwriting what the user already read.
+      if (this.#detectDivergence(runtime, snapshot)) {
+        await this.#save()
+        return
+      }
       this.#replaySnapshot(runtime, snapshot)
       runtime.record.updatedAt = new Date().toISOString()
       if (!snapshot.live && runtime.record.lastSeq >= snapshot.cursor) {
         if (runtime.running) this.#closeAbandonedTurn(runtime)
+        // Backstop: a cold remote that is fully caught up cannot be running,
+        // whatever `turnBoundary` reports. Without this, a prompt accepted but
+        // never started by the remote left `running` true forever, so the mirror
+        // polled forever and queued every later prompt in its inbox.
+        if (runtime.running) this.#setRunning(runtime, false)
         if (!runtime.running) {
           runtime.stopped = true
           runtime.stream?.abort()
@@ -2254,24 +2478,198 @@ export class RemoteMirrorService {
     this.#schedule(runtime)
   }
 
+  /**
+   * Detect a remote log that moved backwards and stop following it.
+   *
+   * The remote is authoritative, but "authoritative" cannot mean replacing a
+   * transcript the user has already read without telling them. Stopping keeps
+   * the local history intact and surfaces the divergence; re-adding the
+   * workspace is the deliberate way to start over.
+   *
+   * @returns true when the mirror is now diverged and must not follow further.
+   */
+  #detectDivergence(runtime: MirrorRuntime, snapshot: SessionSnapshot): boolean {
+    if (runtime.diverged !== undefined) return true
+    const last = runtime.record.lastSeq
+    // A cursor behind what we already mirrored means the remote's log restarted
+    // or was replaced. The snapshot's own tail must be behind too; a truncated
+    // window legitimately starts early but still ends past `lastSeq`.
+    const tail = snapshot.events.at(-1)?.seq ?? snapshot.cursor - 1
+    if (last > 0 && snapshot.cursor < last && tail < last - 1) {
+      runtime.diverged = { reason: `remote cursor ${String(snapshot.cursor)} is behind mirror ${String(last)}` }
+      runtime.stopped = true
+      runtime.stream?.abort()
+      runtime.assistant?.abort()
+      this.#setRunning(runtime, false)
+      this.#ctx.logger.warn(
+        'dsh-waypoint: remote log for %s moved backwards (%s); mirror stopped instead of overwriting history',
+        runtime.record.remoteSessionId,
+        runtime.diverged.reason,
+      )
+      this.#appendPlaceholder(runtime, {
+        reason: 'diverged',
+        fromSeq: snapshot.cursor,
+        toSeq: Math.max(snapshot.cursor, tail),
+      })
+      return true
+    }
+    return false
+  }
+
   #replaySnapshot(runtime: MirrorRuntime, snapshot: SessionSnapshot): void {
+    if (runtime.diverged !== undefined) return
     if (snapshot.truncated && (snapshot.events[0]?.seq ?? 0) > runtime.record.lastSeq) {
       const first = snapshot.events[0]?.seq
       this.#ctx.logger.warn(
-        'dsh-waypoint: remote log for %s skipped ahead to seq %s (window %d)',
+        'dsh-waypoint: remote log for %s skipped ahead to seq %s (window %d); the gap is marked in the transcript',
         runtime.record.remoteSessionId,
         String(first ?? snapshot.cursor),
         this.#config.mirrorMaxEvents,
       )
+      this.#noteGap(runtime, runtime.record.lastSeq, (first ?? snapshot.cursor) - 1)
       runtime.record.lastSeq = first ?? snapshot.cursor
     }
     for (const event of snapshot.events) {
       if (event.seq < runtime.record.lastSeq) continue
       if (event.seq !== runtime.record.lastSeq) {
-        throw new Error(`remote event gap at ${event.seq}, mirror ${runtime.record.lastSeq}`)
+        // A gap is not an error to retry: the snapshot is the authority on the
+        // remote log, so adopt its sequence and rebuild the mapping from it.
+        // Throwing here used to make `#poll` replay the same snapshot forever,
+        // reporting the same gap on every tick.
+        this.#noteGap(runtime, runtime.record.lastSeq, event.seq - 1)
+        this.#adoptSnapshotSequence(runtime, event.seq)
+        if (event.seq < runtime.record.lastSeq) continue
       }
-      this.#appendEvent(runtime, event)
+      if (this.#isClosedTurnEnd(runtime, event)) {
+        // This turn was already closed locally; replaying the remote's own
+        // `turn/end` would close it twice.
+        runtime.skippedRemoteSeqs.add(event.seq)
+        runtime.record.lastSeq = event.seq + 1
+        continue
+      }
+      try {
+        this.#appendEvent(runtime, event)
+      } catch (error) {
+        // One event the local projection rejects must not freeze every event
+        // after it. Skipping keeps the mirror live; the transcript records the
+        // hole so the loss is visible rather than silent.
+        runtime.skippedRemoteSeqs.add(event.seq)
+        this.#noteSkipped(runtime, event, error)
+      }
       runtime.record.lastSeq = event.seq + 1
+    }
+  }
+
+  /**
+   * Adopt the snapshot's sequence after a gap.
+   *
+   * Every mapping entry at or beyond the gap describes a node the mirror cannot
+   * prove is still on the local surface, so it is dropped; the snapshot above
+   * the gap rebuilds it. Dropping is what makes this converge instead of
+   * oscillating between the same two positions.
+   */
+  #adoptSnapshotSequence(runtime: MirrorRuntime, nextSeq: number): void {
+    for (const seq of [...runtime.remoteToLocalSeq.keys()]) {
+      if (seq >= nextSeq) runtime.remoteToLocalSeq.delete(seq)
+    }
+    for (const seq of [...runtime.skippedRemoteSeqs]) {
+      if (seq >= nextSeq) runtime.skippedRemoteSeqs.delete(seq)
+    }
+    // Read the old position before overwriting it: the log line is the only
+    // record of where the mirror used to be, and printing the new value twice
+    // says nothing.
+    const previous = runtime.record.lastSeq
+    runtime.record.lastSeq = nextSeq
+    this.#ctx.logger.warn(
+      'dsh-waypoint: remote log for %s jumped to seq %s (was %s); realigned from the snapshot',
+      runtime.record.remoteSessionId,
+      String(nextSeq),
+      String(previous),
+    )
+  }
+
+  /** Whether this event is a remote `turn/end` for a turn already closed here. */
+  #isClosedTurnEnd(runtime: MirrorRuntime, event: RemoteSessionEvent): boolean {
+    if (event.type !== 'turn/end' || runtime.closedTurns.size === 0) return false
+    const turn = typeof event.data === 'object' && event.data !== null
+      ? (event.data as { turn?: unknown }).turn
+      : undefined
+    return typeof turn === 'number' && runtime.closedTurns.has(turn)
+  }
+
+  /** Record a hole in the mirrored log as a visible transcript entry. */
+  #noteGap(runtime: MirrorRuntime, fromSeq: number, toSeq: number): void {
+    if (toSeq < fromSeq) return
+    this.#appendPlaceholder(runtime, {
+      reason: 'gap',
+      fromSeq,
+      toSeq,
+    })
+  }
+
+  /** Record one event the local projection rejected. */
+  #noteSkipped(runtime: MirrorRuntime, event: RemoteSessionEvent, error: unknown): void {
+    this.#ctx.logger.warn(
+      'dsh-waypoint: skipped remote %s (seq %s) for %s: %s',
+      event.type,
+      String(event.seq),
+      runtime.record.remoteSessionId,
+      error instanceof Error ? error.message : String(error),
+    )
+    this.#appendPlaceholder(runtime, {
+      reason: 'event-skipped',
+      fromSeq: event.seq,
+      toSeq: event.seq,
+      eventType: event.type,
+    })
+  }
+
+  /**
+   * Append a local-only marker describing a hole in the mirrored log.
+   *
+   * A projected marker is the only honest shape: the reader sees that history is
+   * missing and why, instead of a silently discontinuous transcript. It goes
+   * through DSH's plugin-record namespace (`plugin:` types), so it is a normal
+   * part of the local Session log and is never sent to the remote.
+   */
+  /**
+   * Append a local-only marker describing a hole in the mirrored log.
+   *
+   * `appendPluginRecord` is the correct API: it commits an `ignorable: true`
+   * record, which is exactly what a reader-side annotation is — the projection
+   * skips it, and it never reaches the remote. It is also the only path that
+   * satisfies the record contract, so it is tried first.
+   *
+   * It reaches a `Session` private, so a Session that is not a real instance
+   * (the mirror's own test doubles) cannot take it. Falling back to `append`
+   * keeps the marker — a hole nobody can see is the failure this whole
+   * mechanism exists to prevent — at the cost that such a double records it as
+   * an ordinary event, which is honest for a double and never happens in
+   * production.
+   */
+  #appendPlaceholder(runtime: MirrorRuntime, detail: MirrorLogGap): void {
+    try {
+      appendPluginRecord(runtime.session, PLUGIN_RECORD, detail)
+      return
+    } catch (error) {
+      // A real `Session` reaches its `#appendRecord` private and cannot fail
+      // here for a reason this fallback could fix; a double implements only the
+      // public surface, so this is the expected miss. The two are told apart by
+      // whether the object answers the full `Session` surface.
+      if (!isSessionLike(runtime.session)) {
+        try {
+          const append = runtime.session.append.bind(runtime.session) as (...args: unknown[]) => unknown
+          append(PLUGIN_RECORD, detail)
+          return
+        } catch {
+          // Fall through to the single warning below.
+        }
+      }
+      this.#ctx.logger.warn(
+        'dsh-waypoint: could not record a log gap for %s: %s',
+        runtime.record.remoteSessionId,
+        String(error),
+      )
     }
   }
 
@@ -2291,6 +2689,9 @@ export class RemoteMirrorService {
     if (event === undefined) return
     try {
       runtime.session.append('turn/end', event as never)
+      // Remember it, so the remote's own `turn/end` for this turn is skipped
+      // instead of closing the same turn twice.
+      runtime.closedTurns.add(event.turn)
     } catch (error) {
       this.#ctx.logger.warn(
         'dsh-waypoint: could not close the abandoned turn of %s: %s',
@@ -2349,7 +2750,11 @@ export class RemoteMirrorService {
     let mappedSeq: number | undefined
     try {
       if (!isMirrorNoise(event)) {
-        mappedSeq = appendRemoteEvent(runtime.session, remapRemoteEvent(event, runtime.remoteToLocalSeq), runtime)
+        mappedSeq = appendRemoteEvent(
+          runtime.session,
+          remapRemoteEvent(event, runtime.remoteToLocalSeq, runtime.skippedRemoteSeqs),
+          runtime,
+        )
       }
     } finally {
       runtime.applyingRemote = false
@@ -2675,26 +3080,101 @@ export class RemoteMirrorService {
   }
 }
 
+/**
+ * Marker placed on a remote event the mirror could not reproduce faithfully.
+ *
+ * A remote `surfaceOp: { op: 'replace', startSeq, endSeq }` names a range in the
+ * *remote* log. The mirror omits events (prefix trimming, local-only optimistic
+ * messages, non-surface events), so that range cannot always be resolved to
+ * local seqs. Degrading to `append` keeps the projection valid at the cost of
+ * leaving the replaced node on screen; recording why lets a reader tell a real
+ * duplicate from a mirror artifact.
+ */
+interface MirrorDegradedEvent {
+  readonly mirrorDegraded: 'replace-unmapped' | 'event-skipped'
+}
+
+/** Whether a mapped replacement range covers every seq it claims to. */
+function replacementResolves(
+  event: RemoteSessionEvent,
+  remoteToLocal: ReadonlyMap<number, number>,
+): boolean {
+  if (typeof event.surfaceOp !== 'object') return false
+  const { startSeq, endSeq } = event.surfaceOp
+  if (!Number.isSafeInteger(startSeq) || !Number.isSafeInteger(endSeq)) return false
+  if (startSeq > endSeq) return false
+  for (let seq = startSeq; seq <= endSeq; seq += 1) {
+    if (!remoteToLocal.has(seq)) return false
+  }
+  return true
+}
+
 function remapRemoteEvent(
   event: RemoteSessionEvent,
   remoteToLocal: ReadonlyMap<number, number>,
+  skipped: ReadonlySet<number> = new Set(),
 ): RemoteSessionEvent {
-  // Remote replacement ranges are defined in the remote log's sequence space.
-  // A mirror can omit events (prefix trimming, local-only optimistic messages,
-  // non-surface events), so replaying the original replacement can target a
-  // node that is no longer the current local surface. Append the replacement as
-  // a fresh surface event instead of risking the whole history projection.
+  // A replacement is reproducible only when its whole remote range still has a
+  // local counterpart and none of it was skipped. Otherwise replaying it could
+  // target a node that is not the current local surface, so it degrades to an
+  // append and says so.
   const hadReplacement = typeof event.surfaceOp === 'object'
-  const sourceEventSeqs = hadReplacement
-    ? undefined
+  const resolvable = replacementResolves(event, remoteToLocal)
+  const citesSkipped = (event.sourceEventSeqs ?? []).some(seq => skipped.has(seq))
+  const degraded: MirrorDegradedEvent | undefined = hadReplacement && !resolvable
+    ? { mirrorDegraded: 'replace-unmapped' }
+    : citesSkipped
+      ? { mirrorDegraded: 'event-skipped' }
+      : undefined
+
+  const sourceEventSeqs = hadReplacement && resolvable
+    ? event.sourceEventSeqs
+      ?.map(seq => remoteToLocal.get(seq))
+      .filter((seq): seq is number => seq !== undefined)
     : event.sourceEventSeqs
       ?.map(seq => remoteToLocal.get(seq))
       .filter((seq): seq is number => seq !== undefined)
+
   return {
     ...event,
     ...sourceEventSeqs === undefined || sourceEventSeqs.length === 0 ? {} : { sourceEventSeqs },
-    ...hadReplacement ? { surfaceOp: 'append' as const } : event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp },
+    ...hadReplacement && !resolvable
+      ? { surfaceOp: 'append' as const }
+      : event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp },
+    ...degraded === undefined ? {} : { data: mergeDegraded(event.data, degraded) },
   } as RemoteSessionEvent
+}
+
+/** Attach the degradation marker without discarding the payload. */
+function mergeDegraded(data: unknown, marker: MirrorDegradedEvent): unknown {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return { ...marker, value: data }
+  return { ...(data as Record<string, unknown>), ...marker }
+}
+
+/**
+ * Whether an object answers the members a real `Session` exposes.
+ *
+ * `appendPluginRecord` is the correct way to write a plugin record, but it
+ * reaches a `Session` private, so it only works on a real instance. The mirror
+ * also runs against doubles in its own tests, which implement the public
+ * surface and nothing else; this tells the two apart without an `instanceof`
+ * that a duplicated module instance would defeat.
+ *
+ * @param value the candidate Session.
+ * @returns true when the object looks like a full `Session`.
+ */
+function isSessionLike(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as {
+    append?: unknown
+    snapshotEvents?: unknown
+    requestHeader?: unknown
+    readonly seq?: unknown
+  }
+  return typeof candidate.append === 'function'
+    && typeof candidate.snapshotEvents === 'function'
+    && typeof candidate.requestHeader === 'function'
+    && typeof candidate.seq === 'number'
 }
 
 function isMirrorNoise(event: RemoteSessionEvent): boolean {
@@ -2721,11 +3201,19 @@ function appendRemoteEvent(
   // The remote user message carries the remote request id. Reuse the local
   // optimistic message instead so the client settles its pending submission,
   // and keep the remote event's position in the turn.
+  //
+  // Match by text, never by position: a cancelled or rejected prompt leaves an
+  // entry behind, and shifting the queue would make that entry claim a message
+  // another client sent — silently replacing real remote content.
   if (event.type === 'user/message' && runtime.pendingUsers.length > 0) {
     const source = (event.data as { source?: { kind?: unknown } }).source
     if (source?.kind === 'user') {
-      const pending = runtime.pendingUsers.shift()
-      if (pending !== undefined && pending.localSeq >= 0) return pending.localSeq
+      const text = promptTextFromRemote(event.data)
+      const index = runtime.pendingUsers.findIndex(pending => pending.text !== '' && pending.text === text)
+      if (index >= 0) {
+        const [pending] = runtime.pendingUsers.splice(index, 1)
+        if (pending !== undefined && pending.localSeq >= 0) return pending.localSeq
+      }
     }
   }
   const append = session.append.bind(session) as (...args: unknown[]) => unknown
@@ -2774,20 +3262,40 @@ function toSeedEvent(event: RemoteSessionEvent, seq: number, map: ReadonlyMap<nu
   } as unknown as SessionEvent
 }
 
-function modelOptions(events: readonly RemoteSessionEvent[]): MirrorAgent['options'] {
+/**
+ * Read the model the remote Session actually used from its own log.
+ *
+ * The `request/header` event carries an `EpochHeader` under `data.header`:
+ * `{ header: { config: { provider, model, reasoningEffort } }, reason }`. An
+ * earlier version read `data.config`, which never matched, so every mirror
+ * advertised the fallback model no matter what the remote ran.
+ *
+ * The newest header wins: a session that switched models mid-flight should show
+ * the one in force at the end. `reason` needs no filtering — every variant
+ * (`initial`/`resume`/`change`/`series`) carries the header in force at that
+ * point, and the newest one is still the answer.
+ *
+ * @returns the selection, or `undefined` when the log has no usable header.
+ */
+function modelOptions(events: readonly RemoteSessionEvent[]): MirrorAgent['options'] | undefined {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
     if (event?.type !== 'request/header') continue
-    const data = event.data as { config?: { provider?: unknown; model?: unknown; reasoningEffort?: unknown } }
-    if (typeof data.config?.provider === 'string' && typeof data.config.model === 'string') {
+    const data = event.data as {
+      header?: { config?: { provider?: unknown; model?: unknown; reasoningEffort?: unknown } }
+      /** Pre-`header` shape, still accepted so an older log tail is readable. */
+      config?: { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
+    }
+    const config = data.header?.config ?? data.config
+    if (typeof config?.provider === 'string' && typeof config.model === 'string') {
       return {
-        provider: data.config.provider,
-        model: data.config.model,
-        ...typeof data.config.reasoningEffort === 'string' ? { reasoningEffort: data.config.reasoningEffort } : {},
+        provider: config.provider,
+        model: config.model,
+        ...typeof config.reasoningEffort === 'string' ? { reasoningEffort: config.reasoningEffort } : {},
       }
     }
   }
-  return { provider: 'deepseek-official', model: 'deepseek-flash' }
+  return undefined
 }
 
 function latestSelection(session: Session): { provider: string; model: string; reasoningEffort?: string } | undefined {
@@ -2831,6 +3339,38 @@ function isUserPromptMessage(message: unknown): boolean {
   if (record.source === undefined) return true
   return typeof record.source === 'object' && record.source !== null
     && (record.source as { kind?: unknown }).kind === 'user'
+}
+
+/**
+ * Flatten a prompt's text parts into one comparable string.
+ *
+ * Only text is compared: an image part has no stable identity a remote
+ * `user/message` would echo back, and a prompt carrying one still has to pair
+ * with something. Comparing text alone is enough to reject the wrong entry,
+ * which is the failure to prevent.
+ */
+function promptTextFromRemote(data: unknown): string {
+  const content = typeof data === 'object' && data !== null
+    ? (data as { content?: unknown }).content
+    : undefined
+  if (Array.isArray(content)) {
+    return content
+      .map(part => typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'text'
+        ? String((part as { text?: unknown }).text ?? '')
+        : '')
+      .filter(text => text.trim() !== '')
+      .map(text => text.trim())
+      .join('\n')
+  }
+  const text = typeof data === 'object' && data !== null ? (data as { text?: unknown }).text : undefined
+  return typeof text === 'string' ? text.trim() : ''
+}
+
+function promptText(message: unknown): string {
+  return promptParts(message)
+    .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+    .map(part => part.text.trim())
+    .join('\n')
 }
 
 function promptParts(message: unknown): Array<{ type: 'text'; text: string } | { type: 'image'; attachment: unknown; name?: string }> {

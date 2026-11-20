@@ -250,6 +250,15 @@ export async function handleAgentRequest(
       case 'session-archive':
       case 'approval-answer':
         throw new RemoteProtocolError({ code: 'request/invalid', message: 'POST is required', httpStatus: 405 })
+      default:
+        // Every POST-only route that is not listed above lands here. Without
+        // this the request had no response at all and the client waited for its
+        // timeout, which reads as a hung agent rather than a wrong method.
+        throw new RemoteProtocolError({
+          code: 'request/invalid',
+          message: `${route.kind} does not accept GET`,
+          httpStatus: 405,
+        })
     }
   } catch (error) {
     if (res.headersSent) {

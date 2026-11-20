@@ -7,7 +7,7 @@
  * @module dsh-waypoint/hosts/store
  */
 
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isHostId } from './id.ts'
@@ -150,6 +150,16 @@ export class HostStore {
     const run = async (): Promise<HostRecord[]> => {
       const loaded = await this.load()
       const next = change(loaded.hosts)
+      // Validate before writing, not after reading. `load()` drops a record it
+      // cannot parse — with only a warning — so an invalid record written here
+      // would exist in this process and vanish on the next start, which reads
+      // as "the host disappeared by itself".
+      for (const record of next) {
+        if (!isHostRecord(record as unknown)) {
+          const id = (record as { id?: unknown }).id
+          throw new Error(`host registry update produced an invalid record: ${JSON.stringify(id)}`)
+        }
+      }
       await this.#write(next)
       return next
     }
@@ -159,8 +169,14 @@ export class HostStore {
   }
 
   async #write(hosts: readonly HostRecord[]): Promise<void> {
-    await mkdir(dirname(this.file), { recursive: true, mode: 0o700 })
-    await chmod(dirname(this.file), 0o700).catch(() => undefined)
+    // Tighten only a directory this call created. `stateDir` is configurable,
+    // and pointing it at a shared directory must not narrow that directory's
+    // mode out from under whatever else lives there; the registry file itself is
+    // still written 0600.
+    const directory = dirname(this.file)
+    const existed = await stat(directory).then(() => true, () => false)
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    if (!existed) await chmod(directory, 0o700).catch(() => undefined)
     const temp = `${this.file}.${randomUUID()}.tmp`
     const document: HostStoreFile = { version: HOST_STORE_VERSION, hosts }
     await writeFile(temp, `${JSON.stringify(document, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })

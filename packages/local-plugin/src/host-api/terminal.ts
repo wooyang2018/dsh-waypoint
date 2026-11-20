@@ -89,9 +89,22 @@ export function registerTerminalApi(ctx: Context, terminals: RemoteTerminals): (
                   controller.enqueue(encoder.encode(`event: frame\ndata: ${JSON.stringify(frame)}\n\n`))
                 }
               } catch (error) {
-                controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ message: String(error) })}\n\n`))
+                // The consumer may already be gone: closing a tab or dropping
+                // the connection cancels this stream, and writing to a cancelled
+                // controller throws `Invalid state`. Same guard `retain` uses.
+                if (!signal.aborted) {
+                  try {
+                    controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ message: String(error) })}\n\n`))
+                  } catch {
+                    // Consumer gone between the check and the write.
+                  }
+                }
               } finally {
-                controller.close()
+                try {
+                  controller.close()
+                } catch {
+                  // Already closed or cancelled by the consumer.
+                }
               }
             },
           })

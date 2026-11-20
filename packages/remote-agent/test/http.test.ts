@@ -5,7 +5,17 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
-import { RemoteAgentClient, sessionArchivePath } from '@dsh-waypoint/protocol'
+import {
+  AGENT_ROUTES,
+  RemoteAgentClient,
+  sessionArchivePath,
+  sessionCancelPath,
+  sessionModelPath,
+  sessionPromptPath,
+  terminalClosePath,
+  terminalInputPath,
+  terminalRenamePath,
+} from '@dsh-waypoint/protocol'
 import { handleAgentRequest } from '../src/http.ts'
 import type { RemoteAgentService } from '../src/service.ts'
 import { RemoteTerminalManager } from '../src/terminal.ts'
@@ -77,6 +87,40 @@ describe('agent HTTP file and terminal surface', () => {
       },
     })
     assert.equal(response.status, 405)
+  })
+
+  it('answers a GET on every POST-only route instead of hanging', async () => {
+    // These are the routes the GET switch does not name individually, so they
+    // reach its `default`. Before that `default` existed the request got no
+    // response at all: the client waited out its timeout and reported the agent
+    // as unreachable rather than the method as wrong.
+    const paths = [
+      sessionModelPath('s1'),
+      // Not exported from the package surface; the path shape is what matters here.
+      `${AGENT_ROUTES.sessions}/s1/sandbox`,
+      sessionPromptPath('s1'),
+      sessionCancelPath('s1'),
+      terminalInputPath('t1'),
+      terminalRenamePath('t1'),
+      terminalClosePath('t1'),
+      AGENT_ROUTES.fileStat,
+      AGENT_ROUTES.fileList,
+      AGENT_ROUTES.fileRead,
+      AGENT_ROUTES.fileBytes,
+      AGENT_ROUTES.approvalAnswer,
+    ]
+    for (const path of paths) {
+      const response = await fetch(`${baseUrl}${path}`, {
+        headers: {
+          authorization: `Bearer ${token}`,
+          'x-dsh-waypoint-protocol': '1',
+        },
+        signal: AbortSignal.timeout(5_000),
+      })
+      assert.equal(response.status, 405, `${path} must answer 405, not hang`)
+      const body = await response.json() as { error?: { code?: string } }
+      assert.equal(body.error?.code, 'request/invalid', `${path} must name the failure`)
+    }
   })
 
   // The terminal surface rides the same POSIX pty helper, so it cannot run on

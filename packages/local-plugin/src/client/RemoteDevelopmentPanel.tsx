@@ -258,10 +258,34 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
   /** Open "install remote Node.js" panel: which host, and where it stands. */
   const [nodePanel, setNodePanel] = useState<NodePanelState | null>(null)
   const [workspaces, setWorkspaces] = useState<Record<string, RemoteWorkspace[] | undefined>>({})
+  /** Hosts whose last listing request failed; rendered as a failure, not as "none". */
+  const [workspaceFailures, setWorkspaceFailures] = useState<Record<string, boolean>>({})
+  /**
+   * Whether this component is still mounted.
+   *
+   * The listing requests outlive a Settings visit, and a late response used to
+   * call setState on a torn-down component.
+   */
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
   const loadingWorkspaces = useRef(new Map<string, Promise<void>>())
   const loadingCatalogs = useRef(new Map<string, Promise<void>>())
   const [catalogs, setCatalogs] = useState<Record<string, ModelCatalogResult | undefined>>({})
-  const [workspaceDraft, setWorkspaceDraft] = useState('')
+  /**
+   * One draft path per host.
+   *
+   * A single shared string let a path typed for one host survive a switch to
+   * another, and pressing Enter then created that path — which usually exists
+   * on both hosts — as a real workspace on the wrong machine.
+   */
+  const [workspaceDrafts, setWorkspaceDrafts] = useState<Record<string, string>>({})
+  const workspaceDraftFor = (hostId: string): string => workspaceDrafts[hostId] ?? ''
+  const setWorkspaceDraftFor = (hostId: string, value: string): void => {
+    setWorkspaceDrafts(previous => ({ ...previous, [hostId]: value }))
+  }
   const [discovery, setDiscovery] = useState<SshDiscoveryResult | null>(null)
   const [discoveryError, setDiscoveryError] = useState<string | null>(null)
   const scanning = useRef(false)
@@ -303,10 +327,13 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
 
   useEffect(() => {
     const host = hosts.find(item => item.id === expandedHost)
-    if (host?.phase === 'connected' && workspaces[host.id] === undefined) {
+    // A failed load keeps its entry absent so a later visit can retry, but it
+    // must not retry on every poll: the failure flag gates the automatic path,
+    // and reopening the row clears it (see `toggleHost`).
+    if (host?.phase === 'connected' && workspaces[host.id] === undefined && workspaceFailures[host.id] !== true) {
       void loadWorkspaces(host.id, false)
     }
-  }, [hosts, expandedHost, workspaces])
+  }, [hosts, expandedHost, workspaces, workspaceFailures])
 
   useEffect(() => {
     void scan(false)
@@ -444,6 +471,14 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
       return
     }
     setExpandedHost(host.id)
+    // Reopening is the explicit retry for a listing that failed: clear the flag
+    // so the automatic path runs again instead of leaving the failure on screen.
+    setWorkspaceFailures(current => {
+      if (current[host.id] !== true) return current
+      const next = { ...current }
+      delete next[host.id]
+      return next
+    })
     // Only a connected host has an agent to ask. Loading here otherwise fails
     // with "host is not connected" and shows a banner for something the user
     // just clicked, which reads as an error they caused.
@@ -490,11 +525,21 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
     const request = (async () => {
       try {
         const result = await api.workspaces(hostId)
+        if (!mountedRef.current) return
         setWorkspaces(current => ({ ...current, [hostId]: [...result.workspaces] }))
+        setWorkspaceFailures(current => {
+          if (current[hostId] !== true) return current
+          const next = { ...current }
+          delete next[hostId]
+          return next
+        })
       } catch {
-        setWorkspaces(current => ({ ...current, [hostId]: [] }))
-        // A failed listing leaves an empty list; the host row already reports
-        // its own state, so there is nothing extra to say here.
+        if (!mountedRef.current) return
+        // Do NOT write `[]`. That is indistinguishable from "this host has no
+        // workspaces", it stops the automatic load (which only runs while the
+        // entry is `undefined`), and it turns one dropped request into a
+        // permanent, wrong statement about the host.
+        setWorkspaceFailures(current => ({ ...current, [hostId]: true }))
       }
     })()
     loadingWorkspaces.current.set(hostId, request)
@@ -513,9 +558,9 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
    * by editing the field afterwards.
    */
   async function browseWorkspace(host: HostView): Promise<void> {
-    const start = workspaceDraft.trim() === '' ? '~' : workspaceDraft.trim()
+    const start = workspaceDraftFor(host.id).trim() === '' ? '~' : workspaceDraftFor(host.id).trim()
     await pickRemoteDirectory({ api, t, host, initialPath: start }, path => {
-      setWorkspaceDraft(path)
+      setWorkspaceDraftFor(host.id, path)
     }).catch(() => {
       // A cancelled or failed browse leaves the field as it was; the picker
       // reports its own failures inline.
@@ -523,14 +568,14 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
   }
 
   async function addWorkspace(host: HostView): Promise<void> {
-    const path = workspaceDraft.trim()
+    const path = workspaceDraftFor(host.id).trim()
     if (path === '') return
     setBusy(`workspace:${host.id}`)
     try {
       // Name the workspace after the folder unless the agent already has one.
       // A bare path is hard to scan in the list, and the server accepts a title.
       await api.createWorkspace(host.id, { path, title: folderName(path) })
-      setWorkspaceDraft('')
+      setWorkspaceDraftFor(host.id, '')
       await loadWorkspaces(host.id)
       setExpandedHost(host.id)
     } catch {
@@ -918,8 +963,8 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                       <div className="dshwp-workspaces">
                         <div className="dshwp-workspace-add">
                           <input
-                            value={workspaceDraft}
-                            onChange={event => setWorkspaceDraft(event.target.value)}
+                            value={workspaceDraftFor(host.id)}
+                            onChange={event => setWorkspaceDraftFor(host.id, event.target.value)}
                             placeholder={t('settings.workspacePathPlaceholder')}
                             spellCheck={false}
                             onKeyDown={event => {
@@ -946,22 +991,24 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                             {busy === `workspace:${host.id}` ? t('settings.addingWorkspace') : t('settings.addWorkspace')}
                           </button>
                         </div>
-                        {workspaces[host.id] === undefined
-                          ? <p className="dshwp-empty">{t('settings.readingWorkspaces')}</p>
-                          : workspaces[host.id]?.length === 0
-                            ? <p className="dshwp-empty">{t('settings.noWorkspaces')}</p>
-                            : (
+                        {workspaceFailures[host.id] === true
+                          ? <p className="dshwp-empty">{t('error.hostNotConnected')}</p>
+                          : workspaces[host.id] === undefined
+                            ? <p className="dshwp-empty">{t('settings.readingWorkspaces')}</p>
+                            : workspaces[host.id]?.length === 0
+                              ? <p className="dshwp-empty">{t('settings.noWorkspaces')}</p>
+                              : (
                               <ul className="dshwp-workspace-list">
-                                {workspaces[host.id]?.map(workspace => (
-                                  <li key={workspace.workspaceId} className="dshwp-workspace-item">
-                                    <code>{workspace.path}</code>
-                                    <span className="dshwp-count">
-                                      {workspace.sessionIds.length} {t('settings.sessionsUnit')}
-                                    </span>
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
+                                  {workspaces[host.id]?.map(workspace => (
+                                    <li key={workspace.workspaceId} className="dshwp-workspace-item">
+                                      <code>{workspace.path}</code>
+                                      <span className="dshwp-count">
+                                        {workspace.sessionIds.length} {t('settings.sessionsUnit')}
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
                       </div>
                     )}
                   </div>

@@ -3,13 +3,19 @@ import { describe, it } from 'node:test'
 import { RemoteUiError } from '../src/client/api.ts'
 import { formatUiText, localizedError } from '../src/client/errors.ts'
 import { en, zh, type CopyKey } from '../src/client/locale.ts'
-import { toHostView, idleRuntime, type HostRecord } from '../src/hosts/types.ts'
+import { toHostView, idleRuntime, HOST_PHASES, type HostRecord } from '../src/hosts/types.ts'
 import { HOST_DETAILS, UI_TEXT_KEYS, uiForErrorCode } from '../src/messages.ts'
 
 const t = (key: CopyKey): string => zh[key]
 
 describe('plugin localization', () => {
   it('has both dictionaries for every host status and UI message key', () => {
+    for (const phase of HOST_PHASES) {
+      // `phase.*` is read through `` `phase.${host.phase}` ``, so nothing but
+      // this loop connects the union to the dictionaries.
+      assert.ok(`phase.${phase}` in zh, `missing zh phase.${phase}`)
+      assert.ok(`phase.${phase}` in en, `missing en phase.${phase}`)
+    }
     for (const detail of HOST_DETAILS) {
       assert.ok(`detail.${detail}` in zh, `missing zh detail.${detail}`)
       assert.ok(`detail.${detail}` in en, `missing en detail.${detail}`)

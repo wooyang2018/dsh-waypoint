@@ -104,6 +104,16 @@ export async function* parseSseStream(
       }
     }
   } finally {
+    // Cancel before releasing. A consumer that stops early (`break`, or a
+    // `return` on `event: end`) leaves the response body half-read, and
+    // releasing the lock alone keeps the HTTP connection and the agent's
+    // follower alive — one leaked socket and one leaked generator per abandoned
+    // stream. `cancel()` on an already-finished stream is a no-op.
+    try {
+      await reader.cancel()
+    } catch {
+      // The peer may already be gone; the lock still has to be released.
+    }
     reader.releaseLock()
   }
 }

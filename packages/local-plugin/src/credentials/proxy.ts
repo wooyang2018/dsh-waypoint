@@ -17,6 +17,27 @@ import { request as httpsRequest } from 'node:https'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
+/**
+ * Headers that describe this connection rather than the request, per RFC 7230.
+ *
+ * They are not forwarded: the provider's leg is a different connection, and
+ * `proxy-authorization` names a credential addressed to a proxy this request is
+ * no longer talking to.
+ */
+const HOP_BY_HOP_HEADERS: ReadonlySet<string> = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authorization',
+  'proxy-connection',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+])
+
+/** Headers this proxy sets itself; an inbound value would be overwritten anyway. */
+const REPLACED_HEADERS: ReadonlySet<string> = new Set(['host', 'authorization', 'x-api-key'])
+
 /** Options for one proxy instance. */
 export interface CredentialProxyOptions {
   /** Real provider key. Never logged or returned. */
@@ -118,7 +139,11 @@ export class ModelCredentialProxy {
     const headers: Record<string, string | string[]> = {}
     for (const [name, value] of Object.entries(req.headers)) {
       if (value === undefined) continue
-      if (name === 'host' || name === 'authorization' || name === 'x-api-key' || name === 'connection') continue
+      // Credentials are replaced below, and hop-by-hop headers describe this
+      // connection, not the request: forwarding them would tell the provider
+      // about a proxy hop that is not part of its leg, and `proxy-authorization`
+      // would hand it a credential meant for one.
+      if (HOP_BY_HOP_HEADERS.has(name) || REPLACED_HEADERS.has(name)) continue
       headers[name] = value
     }
     headers.authorization = `Bearer ${this.#apiKey}`

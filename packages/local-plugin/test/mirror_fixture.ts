@@ -87,11 +87,27 @@ function session(id: string, meta: Record<string, unknown>, seed: Snapshot['even
       record.seq += 1
       return seq
     },
+    /**
+     * Plugin-record append, mirroring the real `Session` contract.
+     *
+     * `appendPluginRecord` reaches a `#appendRecord` private and therefore
+     * requires a real `Session` instance, which this fake is not. The mirror
+     * writes its log-gap markers through that API, so the fake has to honour
+     * the same shape — otherwise the only way to observe a marker in a test
+     * would be to stop writing one.
+     */
+    appendRecord(type, data) {
+      const seq = record.seq
+      events.push({ seq, type, data })
+      record.seq += 1
+      return seq
+    },
     snapshotEvents: () => events,
   }
   return record
 }
 
+export const pollMs = 40
 export function harness() {
   const stateDir = mkdtempSync(join(tmpdir(), 'dsh-waypoint-mirror-subagents-'))
   tempDirs.push(stateDir)
@@ -123,6 +139,8 @@ export function harness() {
   let createdPreset: string | undefined
   const attached: string[] = []
   const archived: string[] = []
+  /** Remote Sessions whose active turn was cancelled. */
+  const cancelled: string[] = []
   const remoteArchived: string[] = []
   const warnings: string[] = []
   let workspaceSeq = 0
@@ -197,6 +215,8 @@ export function harness() {
     async *followSessionEvents() {},
     async *followAssistantFrames() {},
     async setSandboxMode() {},
+    /** Cancel the active turn; the fixture records it so tests can assert it. */
+    async cancelSession(_host: string, sessionId: string) { cancelled.push(sessionId) },
     async selectModel(_host: string, _session: string, selection: unknown) { selections.push(selection) },
     async createSession(_host: string, request: { workspaceId?: string; cwd?: string; agentPreset?: string }) {
       remoteCreates.push(request)
@@ -264,6 +284,7 @@ export function harness() {
     sessions,
     attached,
     archived,
+    cancelled,
     remoteArchived,
     warnings,
     setRemote(next: Summary[]) { remote = next },
@@ -279,6 +300,20 @@ export function harness() {
     setHostPhase(value: 'connected' | 'disconnected') { host.phase = value },
     setCreatedPreset(value: string | undefined) { createdPreset = value },
     setSnapshot(id: string, snapshot: Snapshot) { snapshots.set(id, snapshot) },
+    /**
+     * Run exactly one poll for a mirrored Session and wait for it to settle.
+     *
+     * `#ensureMirrorOnce` returns early while a runtime is live, so the poll
+     * timer is the mirror's only incremental path. Driving one tick explicitly
+     * (rather than waiting on a timer) keeps these cases deterministic and free
+     * of real-time flake.
+     *
+     * @param remoteSessionId the remote Session to advance.
+     */
+    async poll(remoteSessionId: string): Promise<void> {
+      const advanced = await this.service.advance(remoteSessionId)
+      if (!advanced) throw new Error(`session ${remoteSessionId} is not mirrored or has no runtime`)
+    },
     async state(): Promise<{ sessions: Record<string, { remoteSessionId: string; localSessionId: string; parentSessionId?: string }> }> {
       return JSON.parse(await readFile(join(stateDir, 'mirrors.json'), 'utf8'))
     },

@@ -24,6 +24,22 @@ export type InstallerErrorCode =
   | 'install/dsh-missing'
   /** A legacy `dsh-waypoint-agent` profile entry could not be migrated. */
   | 'install/profile-migrate-failed'
+  /**
+   * The systemd unit could not be withdrawn, so the nohup fallback was refused.
+   *
+   * Falling back while the unit is still active leaves two `dsh web` processes
+   * writing one `agent.json`, which is worse than a failed install: the host
+   * then looks broken in a way no retry repairs.
+   */
+  | 'install/service-still-running'
+  /**
+   * `npm prefix -g` printed nothing, so the global prefix is unknown.
+   *
+   * Distinct from `install/dsh-missing` on purpose: the old shared code sent the
+   * operator to look at the dsh install and the Node.js version, when npm itself
+   * could not answer. Transient — a broken npm environment is worth retrying.
+   */
+  | 'install/prefix-unreadable'
 
 /** One bootstrap exit code and what it means. */
 export interface BootstrapExitCode {
@@ -72,6 +88,16 @@ export const BOOTSTRAP_EXIT_CODES: readonly BootstrapExitCode[] = [
     code: 26,
     installerCode: 'install/profile-migrate-failed',
     message: 'a legacy dsh-waypoint-agent profile entry could not be migrated',
+  },
+  {
+    code: 28,
+    installerCode: 'install/service-still-running',
+    message: 'the systemd user unit is still running, so the nohup fallback was refused',
+  },
+  {
+    code: 27,
+    installerCode: 'install/prefix-unreadable',
+    message: '`npm prefix -g` printed nothing, so the global prefix is unknown',
   },
 ]
 

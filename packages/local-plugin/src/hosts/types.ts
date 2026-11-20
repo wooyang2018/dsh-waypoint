@@ -20,15 +20,25 @@ import type { HostDetail, UiText } from '../messages.ts'
  */
 export type ModelSource = 'proxy' | 'direct'
 
+/**
+ * Every lifecycle phase, as a value.
+ *
+ * The union is derived from this list so a test can iterate it: `phase.*` locale
+ * keys are read through a template literal, which no literal search finds, and
+ * a renamed phase would otherwise render the raw key instead of a sentence.
+ */
+export const HOST_PHASES = [
+  'idle',
+  'discovering',
+  'installing',
+  'connecting',
+  'connected',
+  'disconnected',
+  'error',
+] as const
+
 /** Lifecycle phase shown by the Settings page. */
-export type HostPhase =
-  | 'idle'
-  | 'discovering'
-  | 'installing'
-  | 'connecting'
-  | 'connected'
-  | 'disconnected'
-  | 'error'
+export type HostPhase = (typeof HOST_PHASES)[number]
 
 /** Durable host record (mode 0600 state file). */
 export interface HostRecord {

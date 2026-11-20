@@ -47,6 +47,18 @@ async function fileStat(path: string): Promise<RemoteFileStat> {
   try {
     value = await stat(path, { bigint: true })
   } catch (error) {
+    // A permission failure reported as "not found" sends the reader to check a
+    // path that is correct; directory/unreadable at least says the host could
+    // not look. ENOENT and anything unexpected stay "not found".
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EACCES' || code === 'EPERM') {
+      throw new RemoteProtocolError({
+        code: 'directory/unreadable',
+        message: `permission denied: ${path}`,
+        details: { path },
+        cause: error,
+      })
+    }
     throw new RemoteProtocolError({ code: 'workspace-file/not-found', message: `not found: ${path}`, details: { path }, cause: error })
   }
   if (!value.isFile()) {
@@ -87,8 +99,13 @@ export async function readText(path: string, offsetInput?: number, limitInput?: 
         sawMore = true
         break
       }
-      const truncated = Buffer.byteLength(raw) > MAX_LINE
-      const line = truncated ? `${raw.slice(0, MAX_LINE)}… [line truncated]` : raw
+      // `MAX_LINE` is a byte budget, so cut by bytes. Slicing the string by
+      // character left a CJK line three bytes long per character, i.e. up to
+      // ~3x the intended page size for a line that still read as "truncated".
+      const encoded = Buffer.from(raw, 'utf8')
+      const line = encoded.length > MAX_LINE
+        ? `${encoded.subarray(0, MAX_LINE).toString('utf8')}… [line truncated]`
+        : raw
       if (line.includes('\u0000')) {
         throw new RemoteProtocolError({ code: 'workspace-file/not-text', message: `not UTF-8 text: ${path}`, details: { path } })
       }

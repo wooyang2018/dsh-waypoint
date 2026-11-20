@@ -512,7 +512,12 @@ export class RemoteAgentClient {
         code: isProtocolErrorCode(envelope.error.code) ? envelope.error.code : 'internal',
         message: envelope.error.message,
         retryable: envelope.error.retryable,
-        details: isDetails(envelope.error.details) ? envelope.error.details : undefined,
+        // Keep the wire code even when this client does not know it: a failure
+        // from a newer agent still names its cause instead of collapsing into
+        // `internal`. `isSelectionRejection` in the mirror already reads
+        // `details.remoteCode`, so this is the same convention, applied at the
+        // one place every response passes through.
+        details: withRemoteCode(envelope.error.code, envelope.error.details),
       })
     }
 
@@ -550,7 +555,7 @@ export class RemoteAgentClient {
         code: isProtocolErrorCode(body.error.code) ? body.error.code : 'internal',
         message: body.error.message,
         retryable: body.error.retryable,
-        details: isDetails(body.error.details) ? body.error.details : undefined,
+        details: withRemoteCode(body.error.code, body.error.details),
         httpStatus: response.status,
       })
     }
@@ -574,6 +579,24 @@ export class RemoteAgentClient {
 
 function isDetails(value: unknown): value is Record<string, unknown> {
   return isRecord(value)
+}
+
+/**
+ * Attach the wire error code to the details of a failure this client raised.
+ *
+ * A code the client does not recognise becomes `internal`, which is right for
+ * control flow — there is no handler to dispatch to — but it erases what the
+ * agent actually said. Recording it under `remoteCode` keeps the cause
+ * available to a caller that does know it, which is how the mirror distinguishes
+ * a model the host cannot serve (`session/model-unavailable`) from a real
+ * failure.
+ *
+ * @param code the code from the wire envelope.
+ * @param details the envelope's own details, if any.
+ * @returns details carrying `remoteCode`.
+ */
+function withRemoteCode(code: string, details: unknown): Record<string, unknown> {
+  return { ...(isDetails(details) ? details : {}), remoteCode: code }
 }
 
 export { isApiFailure }

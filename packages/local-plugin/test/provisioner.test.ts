@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { InstallerError, NodeProvisionError, installerErrorForExit } from '@dsh-waypoint/installer'
+import { LocalError } from '../src/errors.ts'
 import { agentVersionDiffers, agentVersionMatches, agentVersionTransition, installerCodeOf, installerUi, isPermanentInstallFailure, resolveRemoteDshVersion } from '../src/remote/provisioner.ts'
 
 describe('agent install target', () => {
@@ -135,7 +136,55 @@ describe('permanent install failures', () => {
     assert.equal(installerUi(new NodeProvisionError('node/no-downloader', 'no')).key, 'error.nodeUnsupported')
     assert.equal(installerUi(new NodeProvisionError('node/verify-failed', 'no')).key, 'error.nodeVerifyFailed')
     assert.equal(installerUi(new NodeProvisionError('node/install-failed', 'no')).key, 'error.nodeInstallFailed')
-    // A failed Node.js install is never worth an automatic retry.
+    // A host that cannot take a Node.js, has no downloader, or produced one
+    // that does not verify will answer the same way on every attempt.
     assert.equal(isPermanentInstallFailure(unsupported), true)
+  })
+
+  it('retries a Node.js install that failed on the network', () => {
+    // `node/install-failed` is the nvm download failing, which is the same
+    // class of cause as any other transient network error here. Treating it as
+    // permanent would block a host until someone clicked Reinstall by hand.
+    assert.equal(isPermanentInstallFailure(new NodeProvisionError('node/install-failed', 'no')), false)
+  })
+
+  it('sees the code through the wrapper that provisioning failures arrive in', () => {
+    // `ensureInstalled` catches the installer error and rethrows a LocalError
+    // carrying the code under `details.installerCode`. Only the raw shape was
+    // read before, so every wrapped failure looked transient: a host with no
+    // Node.js re-ran the whole bootstrap on each reconnect and `#installBlocked`
+    // was never populated.
+    const wrapped = new LocalError('agent/unavailable', '远端自动安装失败：no node', {
+      details: { host: 'user@example.invalid', installerCode: 'install/node-missing' },
+      retryable: true,
+      cause: installerErrorForExit(21),
+    })
+    assert.equal(isPermanentInstallFailure(wrapped), true)
+
+    const wrappedTransient = new LocalError('agent/unavailable', 'boom', {
+      details: { installerCode: 'install/dsh-missing' },
+      retryable: true,
+    })
+    assert.equal(isPermanentInstallFailure(wrappedTransient), false)
+  })
+
+  it('ignores a wrapped code that is not a known installer code', () => {
+    const bogus = new LocalError('agent/unavailable', 'boom', {
+      details: { installerCode: 'install/not-a-real-code' },
+      retryable: true,
+    })
+    assert.equal(isPermanentInstallFailure(bogus), false)
+    // A null code is what the wrapper writes when the failure had none.
+    const nulled = new LocalError('agent/unavailable', 'boom', {
+      details: { installerCode: null },
+      retryable: true,
+    })
+    assert.equal(isPermanentInstallFailure(nulled), false)
+  })
+
+  it('stops retrying when the systemd unit would not stop', () => {
+    // The fallback refused to start a second `dsh web`; retrying runs the same
+    // commands against the same stuck unit.
+    assert.equal(isPermanentInstallFailure(installerErrorForExit(28)), true)
   })
 })
