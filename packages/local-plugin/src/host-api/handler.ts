@@ -308,7 +308,13 @@ async function dispatch(
     case 'host/files/bytes': {
       const body = requireRecord(payload)
       const sessionId = requireStringField(body, 'sessionId')
-      const path = requireStringField(body, 'path')
+      // A workspace path is relative to the workspace root and EMPTY for the
+      // root itself (`WorkspaceDirectoryListing.path` in
+      // `@deepseek-ai/dsh-api-workspace-files`). `requireStringField` rejects an
+      // empty string, which made the root unlistable: every "Remote files" tab
+      // opened on a remote workspace answered `request/invalid` ("invalid
+      // request") instead of listing the directory it names.
+      const path = requireWorkspacePath(body, 'path')
       const sessions = ctx.get('sessions')
       const session = sessions?.get(sessionId as SessionId)
       const root = session?.header.cwd
@@ -366,6 +372,24 @@ function requireStringField(value: unknown, field: string): string {
   const fieldValue = record[field]
   if (typeof fieldValue !== 'string' || fieldValue.trim() === '') {
     throw new LocalError('request/invalid', `payload.${field} must be a non-empty string`)
+  }
+  return fieldValue.trim()
+}
+
+/**
+ * Read a workspace path, which may legitimately be the empty string.
+ *
+ * Every path this plugin forwards lives in the workspace-files namespace, where
+ * a relative path resolves against the workspace root and THE ROOT ITSELF is
+ * spelled `''`. Rejecting that spelling makes the root unreachable, so this is
+ * deliberately not {@link requireStringField}. Surrounding whitespace is still
+ * trimmed: a path of spaces names nothing and means the root.
+ */
+function requireWorkspacePath(value: unknown, field: string): string {
+  const record = requireRecord(value)
+  const fieldValue = record[field]
+  if (typeof fieldValue !== 'string') {
+    throw new LocalError('request/invalid', `payload.${field} must be a string`)
   }
   return fieldValue.trim()
 }
