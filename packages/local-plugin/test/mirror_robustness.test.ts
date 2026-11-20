@@ -6,7 +6,13 @@ import { harness, parent } from './mirror_fixture.ts'
 /**
  * Regression coverage for the mirror's failure modes.
  *
- * Each describe block corresponds to a finding in `docs/review-2026-11/mirror.md`.
+ * Five defects shared one property: the mirror reacted to a bad remote log by
+ * retrying the same position, so a single defect stopped the whole Session
+ * permanently. Each now converges or stops deliberately — a gap realigns from
+ * the snapshot, a rejected event is skipped and recorded, a divergent remote
+ * stops, a caught-up cold Session is never left running, and a cancelled prompt
+ * cannot claim someone else's message.
+ *
  * They share one file because the fixes share `#replaySnapshot`, `#poll`, and the
  * runtime state that lets them converge; splitting them would hide the
  * interactions that matter.
