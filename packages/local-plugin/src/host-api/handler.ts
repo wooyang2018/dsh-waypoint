@@ -21,11 +21,13 @@ import { listRemoteDirectories } from '../remote/directory.ts'
 import { listLocalDirectories } from '../remote/local-directory.ts'
 import {
   HOST_API_PATH,
+  type ForwardsResult,
   type HostApiEndpoint,
   type HostApiRequest,
   type HostApiResult,
   type HostApiValues,
 } from './contract.ts'
+import { forwardUrl } from '../hosts/types.ts'
 
 /** Register the route; returns its asynchronous disposer. */
 export function registerHostApi(
@@ -261,6 +263,25 @@ async function dispatch(
     }
     case 'host/web-url':
       return service.webUrl(requireStringField(payload, 'hostId'))
+    case 'host/ports':
+      return forwardsResult(service, requireStringField(payload, 'hostId'))
+    case 'host/ports/add': {
+      const body = requireRecord(payload)
+      const hostId = requireStringField(body, 'hostId')
+      await service.addForward(hostId, {
+        remotePort: requireNumberField(body, 'remotePort'),
+        ...optionalNumberField(body, 'localPort') === undefined
+          ? {}
+          : { localPort: optionalNumberField(body, 'localPort') },
+      })
+      return forwardsResult(service, hostId)
+    }
+    case 'host/ports/remove': {
+      const body = requireRecord(payload)
+      const hostId = requireStringField(body, 'hostId')
+      await service.removeForward(hostId, requireNumberField(body, 'remotePort'))
+      return forwardsResult(service, hostId)
+    }
     case 'host/model-catalog':
       return service.modelCatalog(requireStringField(payload, 'hostId'))
     case 'host/model-source': {
@@ -387,6 +408,23 @@ function jsonResult(result: HostApiResult<unknown>): Response {
   })
 }
 
+/**
+ * Project the forward rows into the shape the Settings card loads.
+ *
+ * The URL is resolved here, not in the browser, so the client never has to know
+ * that the address must be `127.0.0.1` rather than `localhost`; that distinction
+ * is the whole reason `forwardUrl` exists.
+ */
+function forwardsResult(service: RemoteHostsService, hostId: string): ForwardsResult {
+  const forwards = service.forwards(hostId)
+  return {
+    forwards,
+    urls: forwards
+      .filter((forward): forward is typeof forward & { localPort: number } => forward.localPort !== null)
+      .map(forward => ({ remotePort: forward.remotePort, localPort: forward.localPort, url: forwardUrl(forward.localPort) })),
+  }
+}
+
 function requireRecord(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new LocalError('request/invalid', 'payload must be a JSON object')
@@ -466,6 +504,20 @@ function optionalNumberField(value: unknown, field: string): number | undefined 
     throw new LocalError('request/invalid', `payload.${field} must be a number`)
   }
   return fieldValue
+}
+
+/**
+ * A required number, validated only as "finite number" here.
+ *
+ * Port ranges are checked by the forward planner, which is also what the argv
+ * builder enforces: two validators for the same rule is how they drift apart.
+ */
+function requireNumberField(value: unknown, field: string): number {
+  const parsed = optionalNumberField(value, field)
+  if (parsed === undefined) {
+    throw new LocalError('request/invalid', `payload.${field} must be a number`)
+  }
+  return parsed
 }
 
 function optionalBooleanField(value: unknown, field: string): boolean | undefined {

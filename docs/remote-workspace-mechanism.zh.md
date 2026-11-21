@@ -486,6 +486,88 @@ if (this.store[key]) throw new Error(`service "${name}" has been registered at <
 
 `retain` 特意返回一个「一直开着」的流：rc.2 的 `TerminalWindowHold` 把结束的 hold 流当成终端不可用。
 
+## 6.5 端口：让远端 dev server 可达
+
+远端工作区上的 dev server 是本插件唯一不能像文件、终端、Git 那样"路由"的东西，所以值得说清原因，以及它改用了什么。
+
+### 侧栏浏览器是纯客户端渲染器，没有 Host 对应物
+
+`@deepseek-ai/dsh-client-ui-sidebar-browser` 是右侧栏的 `browser` 标签类型。它的 **Host 半身是空的**
+（`packages/client/ui-sidebar-browser/src/index.ts` 的 `apply`），清单声明 `dsh.client.platform: "web"`。
+客户端半身按 `globalThis.dshDesktop?.browser` 选载体：Web 用 `createIframePage` → `IframeImpl` +
+`IframePresentation`（DSH 文档里的 `<iframe src>`），Desktop 用 `createElectronPage` →
+`ElectronWebViewImpl`（主进程租约下的原生 `<webview>`）。两者都在**客户端**用
+`element.src` / `element.loadURL(url)` 导航。
+
+这很关键，因为 §6.1–6.3 的文件与终端缝在这里都不存在。那些之所以可行，是因为它们替换的是**Host 服务**——
+Host 与客户端都经由 Gateway 解析它（`installRemoteWorkspaceFiles` 遮蔽 `workspaceFiles`；
+`installRemoteTerminalController` 遮蔽 `terminalController`）。浏览器没有这样的服务：页面字节按其 URL
+来自 HTTP，而 URL 由**绘制这个 frame 的那台机器**解析。没有东西可遮蔽；`sidebarRightTabs.register` 是每个
+kind 一个槽位的注册表，body 按 definition 自己的 id 分发，所以"替换"浏览器意味着把它的整套 UI 做成构建期
+fork（§6.3 的重锤），而收益为零。
+
+所以远端 dev server 打不开的原因比"渲染器在本地"更简单：在这个浏览器里输入 `http://localhost:5173`，
+解析发生在**用户**机器上。修法与 **Open remote Web UI** 动作已经在用的那个相同——把远端 loopback 端口发布
+到本机 loopback，交给未修改的浏览器加载。
+
+### 转发本身
+
+`PortForwardTunnel`（`src/ssh/forward.ts`）是每台主机一个 `ssh -N` 子进程，把该主机**所有**转发作为额外的
+`-L` 参数一次带上：
+
+```text
+-L 127.0.0.1:<local>:127.0.0.1:<remote>
+```
+
+两个性质是承重的，且都不可配置：
+
+- **远端侧是字面量 `127.0.0.1`**。允许用户指定主机会把它变成通往远端内网的代理，所以任何请求字段、工具参数
+  或配置值都不会进入那个位置。
+- **本地侧是 `127.0.0.1`，URL 也写成它**。`-L` 只绑一个地址，而 Windows 上 `localhost` 会优先解析到 `::1`，
+  转发会直接拒连。因此 `src/hosts/types.ts` 的 `forwardUrl` 拼出 `http://127.0.0.1:<port>/`，客户端自己
+  不构造这个字符串。
+
+它与 agent 隧道（`Tunnel`，§3.4）**刻意分成两个子进程**：agent 隧道承载镜像跟随的事件流，为加一条 `-L`
+而重启它会让所有镜像会话抖动一下。转发子进程可以随时重启，也的确在期望集合变化时重启。
+
+### 期望态与实际态
+
+`HostRecord.forwards` 是**期望**集合，且是持久的——DSH 重启后 dev server 还在同一个端口。
+`HostRuntime.forwards` / `HostView.forwards` 是**实际**状态，每个请求端口一行，`idle` / `listening` /
+`error`。该字段可选，因此本特性之前写下的记录照常加载，`HOST_STORE_VERSION` 仍是 `1`；
+`src/hosts/store.ts` 的 `isForwardRequestList` 会拒绝畸形条目而不是修复它——一个悄悄改了端口的转发，
+发布的服务就不是用户要的那个了。
+
+`#syncForwards`（`src/service.ts`）每次同步都重新规划每个条目，这正是重连能回到一个可用端口、而不是撞上
+上一个子进程仍占着端口的那个的原因。规划器（`planForwards`）优先用远端端口号、回退到临时端口——但
+**显式指定的本地端口被占用时报错，而不是搬家**，因为把页面发布到用户没要的地址比说"端口被占用"更糟。
+`ExitOnForwardFailure=yes` 让任何被占用的端口立刻退出子进程，规划器的判断因此是可观测的。
+
+转发失败刻意**不是**主机失败：只有那一行变 `error`，主机保持 `connected`，`PortForwardTunnel` 的退出处理
+按行记录原因，而不是把主机拖出 `connected`。agent 隧道是兄弟，不是依赖。
+
+### 到达浏览器的那一段
+
+`host/ports`、`host/ports/add`、`host/ports/remove`（`src/host-api/handler.ts`）返回行与已解析好的 URL，
+所以设置页卡片和 Agent 工具消费同一个形状。卡片的 **在侧栏打开** 调用
+`openForwardedPort`（`src/client/open-browser.ts`），它请求
+`ctx.sidebarRight.openTab('browser', { params: { url } })`——与指南和聊天链接同一个调用——并在其抛错时回退
+`window.open`，因为 Web profile 默认禁用原生 `ui-sidebar-browser` 行。sidebarRight 这个面用 duck-typing
+而不是 import，与 `client/routing.ts` 对待 `ctx.uiWorkspace` 的方式一致，本插件不因此依赖另一个 DSH 包。
+
+三个 Agent 工具共用同一个服务：`remote_port_forward`、`remote_ports_list`、
+`remote_port_forward_remove`。它们**不在** `HOST_WRITE_TOOLS` 里：那道门禁存在的原因是连接主机会复制本地
+模型密钥，而端口转发不复制任何凭据，也只暴露一个 loopback 监听。
+
+### 值得知道的边界
+
+| 边界 | 直接原因 |
+|---|---|
+| 本地端口复用时，dev server 的绝对 URL 会失效 | 页面写的是自己的 origin；卡片用 `ports.mismatch` 提示，修法是相对路径或 base URL |
+| Web 载体下 iframe 拒绝与混合内容限制照旧 | 那是原生浏览器自己的策略；转发改变的是可达性，不是嵌入规则 |
+| 不做端口自动发现 | 可移植地枚举监听端口需要新的 agent 能力与重装；手填 + `remote_port_forward` 已覆盖该流程 |
+| 只做 TCP、只到远端 loopback | `-L` 就是这个语义；UDP 与远端内网代理不在范围内 |
+
 ## 7. 模型凭据：两条路径，按主机选择
 
 默认是 **Remote direct**：本地解析出的 key 被写进远端 `dsh web` 的启动环境——systemd unit 里是
@@ -527,6 +609,8 @@ if (this.store[key]) throw new Error(`service "${name}" has been registered at <
 | 需要 SSH 可达，无 relay/NAT 穿透 | 当前只有 ssh `-L`/`-R` |
 | Windows 远端不支持 | bootstrap 是 POSIX bash，Node.js 也按 Linux/macOS 处理 |
 | 远端终端需要 `python3` | PTY 是 Python 标准库 `pty` 辅助脚本，不是原生 node-pty |
+| 转发到不同本地端口会破坏 dev server 的绝对 URL | 页面写的是自己的 origin；卡片会提示，修法是相对路径或 base URL（6.5） |
+| 远端 dev server 可达，但侧栏仍拒绝渲染 | 原生浏览器的 iframe 策略（`X-Frame-Options`、混合内容）不因转发而改变（6.5） |
 
 ## 10. 想动手改，从哪里进
 
@@ -539,6 +623,7 @@ if (this.store[key]) throw new Error(`service "${name}" has been registered at <
 | 远端事件 → 本地 Session | `#appendEvent`、`toSeedEvent`、`isMirrorNoise` |
 | 新增远端能力 | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
 | 文件/终端路由 | `src/remote/files.ts`、`src/remote/terminal-controller.ts`、`packages/terminal-controller/scripts/build.mjs` |
+| 远端 dev server 端口 | `src/ssh/forward.ts`、`src/service.ts` 的 `#syncForwards`、`src/host-api/` 的 `host/ports*` |
 | Settings 页行为 | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
 
 ## 11. 验证状态
@@ -553,8 +638,22 @@ if (this.store[key]) throw new Error(`service "${name}" has been registered at <
 **未验证**：
 
 - 没有为本文运行 `pnpm test` 或 `pnpm typecheck`:本文不引入可执行产物，改动只有文档;
-- 没有连接真实远端主机，因此时序、超时与顺序是从代码路径读出来的，不是观测到的；
-- §3.1 的 mermaid 时序图是手写的，没有渲染验证。
+- 没有连接真实远端主机，因此时序、超时与顺序是从代码路径读出来的，不是观测到的——**§6.5 例外**,
+  它的远端实测记录如下；
+
+**已实测**（§6.5，一台真实 SSH 主机，隔离 `DSH_HOME`）：
+
+- 对一个远端确实在监听的端口调 `host/ports/add`，返回 `phase: 'listening'` 且
+  `localPort === remotePort`，并且本机 `http://127.0.0.1:<port>/` 能取到远端页面；
+- 同一条转发上的 WebSocket 升级完成（`HTTP/1.1 101`）并收到了远端帧——那正是 dev server 的 HMR
+  客户端所用的通道；
+- 占住首选的本地端口后，转发落到临时端口且仍可用；而**显式指定**的端口被占用时返回 `port/invalid`,
+  该行留在 `phase: 'error'`；
+- `disconnect` 释放本地端口、行变 `idle`；`connect` 按记录恢复到原端口；
+- 原生右侧栏浏览器在 iframe 里渲染了这个转发 URL；
+- 远端 agent 记录的版本与 pid 未被本次运行触碰，因为 `autoProvision: false` 让两条 reconcile 路径都
+  在第一条语句就返回（§3.4）。该远端的 agent 在本次会话中确实重启过两次，但原因是该主机上两个无关的
+  `dsh web` 进程在写同一个 `agent.json`——即 README 排障表里那一条，而非本插件的 reconcile。
 
 若要确认某条结论，最小的复现路径是 `./scripts/test-sandbox.sh` 起隔离环境，再按
 [docs/testing.md](testing.md) 的可见性约定跑一次集成用例。

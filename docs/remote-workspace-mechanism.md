@@ -557,6 +557,99 @@ precondition: the remote host needs `python3`. Without it, installing and sessio
 `retain` deliberately returns a stream that stays open: rc.2's `TerminalWindowHold` treats a finished hold
 stream as "terminal unavailable".
 
+## 6.5 Ports: making a remote dev server reachable
+
+A dev server on a remote workspace is the one thing this plugin cannot route the way it routes files,
+terminals and Git, so it is worth stating why — and what it does instead.
+
+### The sidebar browser is a client renderer with no Host counterpart
+
+`@deepseek-ai/dsh-client-ui-sidebar-browser` is the right-Sidebar `browser` tab type. Its **Host half is
+empty** (`apply` in `packages/client/ui-sidebar-browser/src/index.ts`) and its manifest declares
+`dsh.client.platform: "web"`. The client half picks a carrier from `globalThis.dshDesktop?.browser`:
+Web uses `createIframePage` → `IframeImpl` + `IframePresentation` (an `<iframe src>` in the DSH document),
+Desktop uses `createElectronPage` → `ElectronWebViewImpl` (a native `<webview>` under a main-process lease).
+Both navigate with `element.src` / `element.loadURL(url)` **in the client**.
+
+That matters because the file and terminal seams from §6.1–6.3 are unavailable here. Those work by
+replacing a **Host service** that both the Host and the client reach through the Gateway
+(`installRemoteWorkspaceFiles` shadows `workspaceFiles`; `installRemoteTerminalController` shadows
+`terminalController`). The browser has no such service: a page's bytes arrive over HTTP from wherever its
+URL points, and the URL is resolved by the machine that draws the frame. There is nothing to shadow;
+`sidebarRightTabs.register` is a registry with one slot per kind, and the body is dispatched under the
+definition's own id, so "replacing" the browser would mean reimplementing its whole UI as a build-time
+fork — the §6.3 hammer, for no benefit.
+
+So a remote dev server fails for a simpler reason than "the renderer is local": `http://localhost:5173`
+typed into that browser resolves on the **user's** machine. The fix is the same one the **Open remote Web
+UI** action already uses — publish the remote loopback port on local loopback, and let the unmodified
+browser load it.
+
+### The forward
+
+`PortForwardTunnel` (`src/ssh/forward.ts`) is one `ssh -N` child per host carrying **all** of that host's
+forwards as additional `-L` arguments:
+
+```text
+-L 127.0.0.1:<local>:127.0.0.1:<remote>
+```
+
+Two properties are load-bearing and neither is configurable:
+
+- **The remote end is the literal `127.0.0.1`.** A user-supplied host would turn this into a proxy into
+  the remote LAN, so no request field, tool argument or config value ever reaches that position.
+- **The local end is `127.0.0.1` and the URL says so.** `-L` binds one address, and `localhost` resolves
+  to `::1` first on Windows, where the forward would refuse. `forwardUrl` in `src/hosts/types.ts` therefore
+  composes `http://127.0.0.1:<port>/`, and the client never builds this string itself.
+
+It is a **separate child from the agent tunnel** (`Tunnel`, §3.4) on purpose: the agent tunnel carries the
+event streams the mirror follows, so restarting it to add a `-L` would blip every mirrored session. The
+forward child can be restarted freely, and is, whenever the desired set changes.
+
+### Desired versus actual
+
+`HostRecord.forwards` is the **desired** set and it is durable — a dev server is still at the same port
+after a DSH restart. `HostRuntime.forwards`/`HostView.forwards` is the **actual** state, one row per
+requested port with `idle` / `listening` / `error`. The field is optional, so records written before this
+feature keep loading and `HOST_STORE_VERSION` stays `1`; `isForwardRequestList` in `src/hosts/store.ts`
+rejects a malformed entry rather than repairing it, because a forward that quietly changed its port would
+publish a different service than the one requested.
+
+`#syncForwards` (`src/service.ts`) re-plans every entry on each sync, which is what makes a reconnect
+return to a working port instead of colliding with one the previous child still held. The planner
+(`planForwards`) prefers the remote number and falls back to an ephemeral one — but **an explicitly
+requested local port that is taken is an error, not a relocation**, because publishing the page at an
+address the user did not ask for is worse than saying the port is busy. `ExitOnForwardFailure=yes` turns
+any occupied port into an immediate child exit, which is how the planner's decision becomes observable.
+
+A forward failure is deliberately **not** a host failure: only that row turns `error`, the host stays
+`connected`, and `PortForwardTunnel`'s exit handler records the reason per row rather than moving the host
+out of `connected`. The agent tunnel is a sibling, not a dependency.
+
+### What reaches the browser
+
+`host/ports`, `host/ports/add` and `host/ports/remove` (`src/host-api/handler.ts`) answer with the rows
+plus pre-resolved URLs, so the Settings card and the agent tools both consume one shape. The card's **Open
+in sidebar** button calls `openForwardedPort` (`src/client/open-browser.ts`), which asks
+`ctx.sidebarRight.openTab('browser', { params: { url } })` — the same call the guide and chat links make —
+and falls back to `window.open` when that throws, because the stock `ui-sidebar-browser` row is disabled in
+Web profiles. The sidebar face is duck-typed instead of imported, the way `client/routing.ts` treats
+`ctx.uiWorkspace`, so this plugin does not take a dependency on another DSH package for one call.
+
+Three agent tools share the same service: `remote_port_forward`, `remote_ports_list` and
+`remote_port_forward_remove`. They are **not** in `HOST_WRITE_TOOLS`: that gate exists because connecting a
+host can copy the local model key, while a forward copies no credential and exposes nothing beyond one
+loopback listener.
+
+### Bounds worth knowing
+
+| Bound | Cause |
+|---|---|
+| A local port that cannot be reused breaks the dev server's absolute URLs | The page names its own origin; the card warns with `ports.mismatch` and the fix is a relative/base URL |
+| Iframe refusal and mixed content still apply on Web | The stock browser's own policy; a forward changes reachability, not embedding rules |
+| No automatic port discovery | Enumerating listeners portably needs a new agent capability and a reinstall; manual entry plus `remote_port_forward` covers the flow |
+| TCP only, remote loopback only | That is what `-L` does; UDP and remote-LAN proxying are out of scope |
+
 ## 7. Model credentials: two paths, chosen per host
 
 The default is **Remote direct**: the locally resolved key is written into the remote `dsh web` launch
@@ -605,6 +698,8 @@ the provisioning flow directly (the remote process has to restart with the new e
 | SSH reachability required; no relay/NAT traversal | Only ssh `-L`/`-R` today |
 | Windows remotes unsupported | The bootstrap is POSIX bash, and Node.js is handled as Linux/macOS |
 | The remote terminal needs `python3` | The PTY is a Python standard-library `pty` helper, not a native node-pty build |
+| A forwarded port on a different local number breaks the dev server's absolute URLs | The page names its own origin; the card warns and the fix is a relative or base URL (6.5) |
+| A remote dev server is reachable but still refuses to render in the sidebar | The stock browser's iframe policy (`X-Frame-Options`, mixed content) is unchanged by a forward (6.5) |
 
 ## 10. Where to start when you want to change something
 
@@ -617,6 +712,7 @@ the provisioning flow directly (the remote process has to restart with the new e
 | Remote events → local session | `#appendEvent`, `toSeedEvent`, `isMirrorNoise` |
 | Adding a remote capability | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
 | File/terminal routing | `src/remote/files.ts`, `src/remote/terminal-controller.ts`, `packages/terminal-controller/scripts/build.mjs` |
+| Remote dev-server ports | `src/ssh/forward.ts`, `#syncForwards` in `src/service.ts`, `host/ports*` in `src/host-api/` |
 | Settings page behaviour | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
 
 ## 11. Verification status
@@ -633,8 +729,23 @@ the provisioning flow directly (the remote process has to restart with the new e
 - `pnpm test` and `pnpm typecheck` were not run for this page: it introduces no executable artifact and
   the change is documentation only;
 - no live remote host was connected, so the ordering, timeouts, and sequencing are read from the code
-  paths rather than observed;
-- the mermaid sequence diagram in §3.1 is hand-written and has not been rendered.
+  paths rather than observed — **except §6.5**, whose remote run is recorded below;
+
+**Checked by running** (§6.5, one real SSH host, an isolated `DSH_HOME`):
+
+- `host/ports/add` for a remotely listening port answered `phase: 'listening'` with
+  `localPort === remotePort`, and `http://127.0.0.1:<port>/` served the remote page from this machine;
+- a WebSocket upgrade through the same forward completed (`HTTP/1.1 101`) and delivered the remote
+  frame, which is the transport a dev server's HMR client uses;
+- occupying the preferred local port moved the forward to an ephemeral port and stayed usable, while an
+  **explicitly** requested busy port answered `port/invalid` with that row in `phase: 'error'`;
+- `disconnect` released the local port and left the rows `idle`; `connect` restored the bound port from
+  the record;
+- the stock right-Sidebar browser rendered the forwarded URL in its iframe;
+- the remote agent's recorded version and pid were not touched by the run, because `autoProvision: false`
+  short-circuits both reconcile paths (§3.4). The remote agent did restart twice during the session, but
+  from two unrelated `dsh web` processes on that host writing the same `agent.json` — the condition the
+  README's troubleshooting table names, not this plugin's reconcile.
 
 To confirm any single claim the smallest reproduction is `./scripts/test-sandbox.sh`, which builds and
 installs into an isolated environment, followed by one integration run under the visibility rules in

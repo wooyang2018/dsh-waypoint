@@ -87,6 +87,67 @@ carry over to the next build.
 Do not test agent behaviour on a host whose desktop profile still ships an older plugin: every
 verification you run will be of the old code.
 
+## Port forward checks
+
+The forwarding path has three layers of coverage, cheapest first.
+
+1. **`packages/local-plugin/test/forward-args.test.ts`** — the `ssh -L` argv. Both ends are `127.0.0.1`,
+   no caller can inject a remote host, privileged/duplicate/oversized sets are refused, and the planner
+   prefers the remote number, falls back to an ephemeral one, and reports an explicitly requested busy
+   port instead of silently moving it.
+2. **`packages/local-plugin/test/forward-transport.test.ts`** — real bytes. A stand-in for the ssh child
+   forwards TCP to an in-process dev server; the test asserts the page arrives **and** that a WebSocket
+   upgrade completes with the remote frame, which is the transport HMR uses. It also asserts that stopping
+   a forward releases its local port, and that `PortForwardTunnel.start` rejects when ssh cannot reach its
+   target rather than resolving into a dead forward.
+3. **A real remote host** — the only layer that exercises `ssh -L` itself.
+
+For the third layer, use an isolated home so no production profile is touched:
+
+```sh
+export DSH_HOME="$(mktemp -d)"
+dsh plugin --profile web add "$TARBALL"
+```
+
+Write the profile patch before connecting anything:
+
+```yaml
+- id: ui-sidebar-browser
+  disabled: false
+- id: dsh-waypoint
+  config:
+    autoProvision: false
+    reconnect: false
+```
+
+`autoProvision: false` is not optional here. Both reconcile paths return immediately when it is off, so
+the run cannot reinstall the remote agent or rewrite the remote model environment. Record the remote
+agent's `agentVersion` and `pid` from `<remoteDshHome>/waypoint-agent/agent.json` before the run and
+compare afterwards: a changed pid means something restarted it, which is a finding rather than a detail.
+(On a host where two `dsh web` processes write the same `agent.json`, the agent restarts on its own; the
+README's troubleshooting table names that condition.)
+
+Copy `hosts.json` from the profile under test into `$DSH_HOME/waypoint/`, start a dev server on the
+remote loopback, then:
+
+```sh
+# 1. publish it through the authenticated route the Settings card uses
+curl -s "http://127.0.0.1:<port>/api/dsh-waypoint" -H 'content-type: application/json' \
+  -b "$COOKIE" -d '{"endpoint":"host/ports/add","payload":{"hostId":"<id>","remotePort":27123}}'
+# 2. the page arrives here
+curl -s http://127.0.0.1:27123/
+# 3. HMR's transport survives: a 101 plus the remote frame
+node .e2e/ws-check.mjs 27123
+```
+
+Then walk the four state transitions in the Settings card: occupying the preferred local port moves the
+forward to an ephemeral port; an explicitly named busy port answers `port/invalid` and leaves that row in
+`Failed`; **Disconnect** releases the local port and greys the row; **Connect** restores the bound port
+from the record. Finally open the forwarded URL in the sidebar Browser tab.
+
+Do the disconnect step with `ss`/`netstat` open. A row can read `Not started` while a stale `ssh` child
+still holds the port, and that difference is invisible in the UI.
+
 ## Mirror regression checks
 
 After `pnpm -r build`, run the focused checks from the repository root:

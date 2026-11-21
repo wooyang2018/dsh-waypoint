@@ -76,8 +76,34 @@ describe('plugin localization', () => {
     }
   })
 
-  it('renders every Node.js panel sentence in both languages', () => {
+  it('renders the Ports card copy in both languages', () => {
+    // The card reads these through `t('ports.x')` literals, but `ports.mismatch`
+    // and `ports.remoteLabel` go through `fill`, which takes a `CopyKey`; a
+    // missing placeholder would render an empty port number rather than fail.
     for (const key of [
+      'ports.title',
+      'ports.hint',
+      'ports.local',
+      'ports.add',
+      'ports.adding',
+      'ports.remotePlaceholder',
+      'ports.localPlaceholder',
+      'ports.empty',
+      'ports.needHost',
+      'ports.open',
+      'ports.copy',
+      'ports.remove',
+    ] as const) {
+      assert.ok(zh[key].length > 0, `zh ${key} is empty`)
+      assert.ok(en[key].length > 0, `en ${key} is empty`)
+    }
+    for (const key of ['ports.mismatch', 'ports.remoteLabel'] as const) {
+      assert.match(zh[key], /\{\w+\}/u, `zh ${key} must keep a placeholder`)
+      assert.match(en[key], /\{\w+\}/u, `en ${key} must keep a placeholder`)
+    }
+  })
+
+  it('renders every Node.js panel sentence in both languages', () => {    for (const key of [
       'node.title',
       'node.checking',
       'node.satisfied',

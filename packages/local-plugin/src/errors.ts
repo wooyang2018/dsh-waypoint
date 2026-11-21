@@ -22,6 +22,8 @@ export type LocalErrorCode =
   | 'agent/unavailable'
   | 'agent/error'
   | 'directory/unreadable'
+  | 'port/invalid'
+  | 'port/forward-failed'
   | 'internal'
 
 /** Error carrying a stable code and JSON-safe details. */

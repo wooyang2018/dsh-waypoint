@@ -71,6 +71,21 @@ Previously, in the 0.8.x line:
 
 ## Unreleased
 
+- Open a remote dev server in the right-sidebar browser. The native browser renders pages on this
+  machine, so `http://localhost:5173` typed there reaches a server here, not on the remote host — and
+  unlike files and terminals there is no Host service to shadow, because
+  `dsh-client-ui-sidebar-browser` has an empty Host half and navigates with the client's own `loadURL`.
+  Settings → **Remote ports** now publishes a remote loopback port on this machine's loopback through the
+  existing SSH transport (`ssh -N -L 127.0.0.1:<local>:127.0.0.1:<remote>`), so the unmodified browser
+  loads the remote page. The same port number is preferred, which is what keeps a dev server's own
+  absolute links working; when that number is taken locally an ephemeral port is used and the card warns,
+  while an explicitly requested busy port is reported as an error rather than silently moved. The forward
+  is raw TCP, so WebSocket and HMR work, and it rides its own ssh child so adding a port never restarts
+  the agent tunnel the session mirror follows. Desired ports persist on the host record and are restored
+  on reconnect; a failed forward turns only its own row into `error` and leaves the host connected.
+  `remote_port_forward`, `remote_ports_list` and `remote_port_forward_remove` expose the same three
+  actions to an agent — ungated, because a forward copies no credential. Disable with
+  `portForwarding: false`.
 - Search a remote workspace from the native file panel. `POST /files/search` joins the agent's file
   surface (`file.search` capability) and the host-side adapter, so the panel's search box answers from
   the remote tree instead of the empty local anchor. Matching follows the Host's own rules — a query

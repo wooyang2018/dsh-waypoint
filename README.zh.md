@@ -55,6 +55,7 @@
 | 远端文件树和文件预览 | 可用（经 SSH 隧道的 agent API） |
 | 原生文件面板里的远端工作区搜索 | 可用（按条目名或工作区相对路径） |
 | 每个 Session 的远端终端 | 可用（本地 Session 用本地 PTY；远端 Session 用经 SSH 隧道的远端 agent PTY） |
+| 右侧栏浏览器预览远端 dev server | 可用（loopback 端口转发，见下文） |
 | 主机/工作区/Session 的 Agent 工具 | 可用 |
 | 审批提示接入本地 UI | 可用 |
 | Relay/NAT、云沙箱、多租户 | 尚未实现 |
@@ -181,8 +182,23 @@ $DSH_HOME/waypoint/test-visibility.json
 | `remote_session_prompt` | 发送 prompt |
 | `remote_session_snapshot` | 读取一页转录 |
 | `remote_session_cancel` | 取消当前 turn |
+| `remote_port_forward` | 发布一个远端 dev server 端口并返回 URL |
+| `remote_ports_list` | 已发布的端口与 URL |
+| `remote_port_forward_remove` | 停止发布某个端口 |
 
 主机写操作（`remote_host_add`、`remote_host_connect`、`remote_host_provision`、`remote_host_restart`）会走 DSH approval UI：它们可能发起 SSH 连接，直连模式下安装还会把本机模型 key 写入远端服务环境。`remote_host_restart` 依赖安装器创建的 systemd user unit；`nohup` 部署请改用**重新安装**或手动重启。`remote_host_add` 默认不自动连接。
+
+三个 `remote_port_*` 工具**刻意不**走 approval：端口转发不复制任何凭据，也只在本机开一个 `127.0.0.1` 监听。它们存在是为了让刚在远端起了 dev server 的 agent 能直接给出一个可用的链接，而不是一个在本机解析的 `localhost` 地址。
+
+### 预览远端 dev server
+
+右侧栏浏览器在**你的**机器上渲染页面，所以往里输入 `http://localhost:5173` 找的是本机的服务，不是远端。Settings → **远程开发** → **远端端口** 可以把远端 loopback 端口发布到本机 loopback：
+
+1. 在远端把 dev server 起在它的 loopback 上（Vite 默认就是 `localhost:5173`）。
+2. 在**远端端口**里填那个端口，点**添加端口**。
+3. 点**在侧栏打开**。页面会在会话旁的「浏览器」标签里加载。
+
+优先使用同一端口号，dev server 自己生成的绝对链接因此仍然有效。该端口在本机已被占用时会改用临时端口，卡片同时提示"写死原端口号的绝对 URL 会失效"——此时请改用相对路径，或设置 dev server 的 base/origin。HMR 可用：转发的是原始 TCP，包含 WebSocket。显式指定的本地端口被占用会直接报错，而不会悄悄换端口。
 
 ## 环境要求
 
@@ -233,6 +249,9 @@ $DSH_HOME/waypoint/test-visibility.json
     mirrorSessions: true
     mirrorPollMs: 1500
     mirrorMaxEvents: 2000
+
+    # 把远端 dev server 端口发布到本机 loopback，供右侧栏浏览器打开。
+    portForwarding: true
 ```
 
 远端 agent 还支持高级配置：
@@ -256,6 +275,7 @@ $DSH_HOME/waypoint/test-visibility.json
   `workspaceFiles` 服务方法，因此该面板的列目录、预览、搜索与变更监听都由远端 agent 经隧道应答。若某个 DSH 版本改
   了其中任一方法名，这层路由即失效——此时「设置 → 远程开发」会显示文件路由已 bypass，而不是只留一个没有解释的空树。
 - 超过 `mirrorMaxEvents` 的远端 Session 会从可用尾部里第一个完整 turn 开始镜像；更早的历史留在远端 Session。想镜像更早的内容就调大限制，或直接在远端打开该会话查看。
+- 转发的 dev server 端口发布在 `http://127.0.0.1:<端口>/`；侧栏浏览器的 iframe 策略（`X-Frame-Options`、混合内容）仍然生效，所以拒绝被嵌入的站点需要改自己的响应头，或改用**在系统浏览器打开**。本地端口与远端不一致时，写死远端端口号的绝对 URL 会失效。
 - 不支持 Windows 远端，也不支持 relay/NAT 穿透。
 
 ## 故障排查
@@ -276,6 +296,8 @@ $DSH_HOME/waypoint/test-visibility.json
 | 装完了自己的 shell 里找不到 `dsh` | 安装日志打印了要加到 shell 启动文件的那行 `export PATH=…`；安装器不会代你修改这些文件 |
 | 切换 Node.js 版本后远端 DSH 起不来 | nvm/Volta 切版本会连 npm 全局前缀一起搬走，服务里烘焙的 `dsh` 路径随之失效。点 **Reinstall**；`dsh-waypoint-install doctor --target …` 会报 `global_dsh` 与 `login_path_has_dsh` |
 | 远端 agent 端口乱跳 / 主机反复断连 | 有两个 `dsh web` 在写同一个 `agent.json`。每个 `DSH_HOME` 只跑一个；`doctor` 会报 `dsh_web_processes` |
+| 某个端口显示 `error: local port N is already in use` | 本机已有进程占着这个号码。把**本地端口**留空让插件另选，或先停掉那个进程 |
+| 转发出来的页面能开，但静态资源 404 | 本地端口与远端不同，写死远端端口号的绝对 URL 解析不到。改用相对路径或设置 dev server 的 base/origin，或者先在本机腾出那个端口号再重新添加 |
 
 远端日志：
 

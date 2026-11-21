@@ -39,6 +39,8 @@ import { hostIdFor } from './hosts/id.ts'
 import { HostStore } from './hosts/store.ts'
 import {
   idleRuntime,
+  idleForward,
+  listeningForward,
   toHostView,
   type AddHostInput,
   type DiscoveredSshHost,
@@ -46,6 +48,8 @@ import {
   type HostRuntime,
   type HostView,
   type ModelSource,
+  type PortForwardRequest,
+  type PortForwardRuntime,
   type SshDiscoveryResult,
 } from './hosts/types.ts'
 import { RemoteProvisioner, agentVersionDiffers, bundledAgentVersion, isPermanentInstallFailure } from './remote/provisioner.ts'
@@ -58,7 +62,8 @@ import { mergeAliasGroups } from './ssh/alias-groups.ts'
 import { discoverAgent } from './ssh/probe.ts'
 import { restartRemoteAgent } from './remote/restart.ts'
 import { parseSshTarget, validateHostLabel, type ParsedSshTarget } from './ssh/target.ts'
-import { Tunnel } from './ssh/tunnel.ts'
+import { PortForwardTunnel, forwardProblem, planLocalPort, portIsFree, type ForwardSpec } from './ssh/forward.ts'
+import { Tunnel, allocateLocalPort } from './ssh/tunnel.ts'
 import { dshUpdateFor, resolveLocalDshVersion } from './version.ts'
 
 function fingerprintKey(value: string): string {
@@ -148,6 +153,44 @@ export interface RemoteHostsServiceOptions {
   readonly localDshVersion?: string
 }
 
+/**
+ * Turn the desired ports into bindable local ports.
+ *
+ * Split out from `#syncForwards` so the rule is testable without an ssh child,
+ * and so it has exactly one implementation: `planLocalPort` in
+ * `src/ssh/forward.ts` decides a single port, and this decides how a SET of them
+ * coexists (no two forwards may claim the same local port).
+ */
+async function planForwards(wanted: readonly PortForwardRequest[]): Promise<{
+  readonly specs: readonly ForwardSpec[]
+  /** Remote port → bound local port; filled by the caller once ssh is listening. */
+  readonly bound: Map<number, number>
+  /** Remote port → the reason it could not be planned. */
+  readonly failures: Map<number, string>
+}> {
+  const specs: ForwardSpec[] = []
+  const failures = new Map<number, string>()
+  const used = new Set<number>()
+  for (const forward of wanted) {
+    const requested = forward.localPort ?? undefined
+    try {
+      // A port already claimed by an earlier forward in this set is not "free",
+      // even though the bind probe would say it is: nothing is listening yet.
+      const candidate = await planLocalPort(
+        forward.remotePort,
+        requested,
+        port => (used.has(port) ? Promise.resolve(false) : portIsFree(port)),
+        allocateLocalPort,
+      )
+      used.add(candidate)
+      specs.push({ localPort: candidate, remotePort: forward.remotePort })
+    } catch (error) {
+      failures.set(forward.remotePort, error instanceof Error ? error.message : String(error))
+    }
+  }
+  return { specs, bound: new Map<number, number>(), failures }
+}
+
 /** One host registry service. */
 export class RemoteHostsService {
   readonly ctx: Context
@@ -172,6 +215,14 @@ export class RemoteHostsService {
   readonly #records = new Map<string, HostRecord>()
   readonly #runtime = new Map<string, HostRuntime>()
   readonly #tunnels = new Map<string, Tunnel>()
+  /**
+   * One forward-carrying ssh child per host.
+   *
+   * Deliberately apart from {@link #tunnels}: the agent tunnel carries the event
+   * streams the mirror follows, so re-spawning it to add a dev-server port would
+   * blip every mirrored session. A forward child can be restarted freely.
+   */
+  readonly #forwards = new Map<string, PortForwardTunnel>()
   readonly #clients = new Map<string, RemoteAgentClient>()
   readonly #connectPromises = new Map<string, Promise<HostView>>()
   readonly #healthTimers = new Map<string, NodeJS.Timeout>()
@@ -843,6 +894,172 @@ export class RemoteHostsService {
   }
 
   /**
+   * Publish one remote loopback port on local loopback.
+   *
+   * This is what makes a remote dev server reachable from the right-sidebar
+   * browser: the page itself is rendered on this machine, so a URL there
+   * resolves here. The same port number is preferred (a dev server's own
+   * absolute URLs keep working), an ephemeral port is the fallback, and the
+   * bound port is written back to the record so a reconnect returns to it.
+   *
+   * @returns every forward's new runtime state, listening or failed.
+   */
+  async addForward(id: string, request: { readonly remotePort: number; readonly localPort?: number | null }): Promise<readonly PortForwardRuntime[]> {
+    this.#assertAlive()
+    if (!this.config.portForwarding) {
+      throw new LocalError('port/invalid', 'port forwarding is disabled by configuration', {
+        ui: { key: 'error.portInvalid' },
+      })
+    }
+    const record = this.#requireRecord(id)
+    const problem = forwardProblem(request.remotePort, request.localPort)
+    if (problem !== undefined) throw new LocalError('port/invalid', problem, { ui: { key: 'error.portInvalid' } })
+    if (this.#connected(id) === undefined) {
+      throw new LocalError('host/not-connected', `host ${id} is not connected; connect it first`)
+    }
+    const existing = record.forwards ?? []
+    if (existing.some(forward => forward.remotePort === request.remotePort)) {
+      throw new LocalError('port/invalid', `remote port ${String(request.remotePort)} is already forwarded`, {
+        ui: { key: 'error.portInvalid' },
+      })
+    }
+    const forwards: readonly PortForwardRequest[] = [
+      ...existing,
+      {
+        remotePort: request.remotePort,
+        ...request.localPort === undefined || request.localPort === null ? {} : { localPort: request.localPort },
+      },
+    ]
+    await this.#saveRecord(id, { forwards })
+    await this.#syncForwards(id)
+    return this.#runtimeFor(id).forwards
+  }
+
+  /**
+   * Stop publishing one remote port.
+   *
+   * The record is the desired set, so removal deletes the entry and re-syncs;
+   * the caller sees the remaining rows rather than guessing what is still up.
+   */
+  async removeForward(id: string, remotePort: number): Promise<readonly PortForwardRuntime[]> {
+    this.#assertAlive()
+    const record = this.#requireRecord(id)
+    const existing = record.forwards ?? []
+    if (!existing.some(forward => forward.remotePort === remotePort)) {
+      throw new LocalError('port/invalid', `remote port ${String(remotePort)} is not forwarded`, {
+        ui: { key: 'error.portInvalid' },
+      })
+    }
+    await this.#saveRecord(id, { forwards: existing.filter(forward => forward.remotePort !== remotePort) })
+    await this.#syncForwards(id)
+    return this.#runtimeFor(id).forwards
+  }
+
+  /** Current forward state for one host. */
+  forwards(id: string): readonly PortForwardRuntime[] {
+    this.#requireRecord(id)
+    return this.#runtimeFor(id).forwards
+  }
+
+  /**
+   * Bring the forward child in line with the record's desired set.
+   *
+   * The whole set rides one ssh child, so any change restarts it: adding a `-L`
+   * to a running ssh is not a thing. Every entry is re-planned on each sync,
+   * which is also what makes a reconnect return to a usable port instead of
+   * failing on a port the previous child still held.
+   */
+  async #syncForwards(id: string): Promise<void> {
+    const record = this.#records.get(id)
+    const wanted: readonly PortForwardRequest[] = record?.forwards ?? []
+    await this.#stopForwards(id)
+    if (record === undefined || wanted.length === 0) {
+      this.#setRuntime(id, { ...this.#runtimeFor(id), forwards: [] })
+      return
+    }
+    if (!this.config.portForwarding || this.#connected(id) === undefined) {
+      this.#setRuntime(id, {
+        ...this.#runtimeFor(id),
+        forwards: wanted.map(forward => idleForward(forward.remotePort)),
+      })
+      return
+    }
+    const target = parseSshTarget(record.sshTarget)
+    const plan = await planForwards(wanted)
+    if (plan.specs.length > 0) {
+      try {
+        const tunnel = await PortForwardTunnel.start({
+          sshBinary: this.config.sshBinary,
+          target,
+          forwards: plan.specs,
+          connectTimeoutMs: this.config.connectTimeoutMs,
+          strictHostKeyChecking: this.config.strictHostKeyChecking,
+          onExit: info => this.#onForwardExit(id, info),
+        })
+        this.#forwards.set(id, tunnel)
+        for (const [index, spec] of plan.specs.entries()) {
+          plan.bound.set(spec.remotePort, tunnel.localPorts[index] ?? spec.localPort)
+        }
+        // Remember the bound port so the next connect returns to it instead of
+        // wandering to a new ephemeral one on every restart.
+        let changed = false
+        const next = wanted.map(forward => {
+          const localPort = plan.bound.get(forward.remotePort)
+          if (localPort === undefined || forward.localPort === localPort) return forward
+          changed = true
+          return { remotePort: forward.remotePort, localPort }
+        })
+        if (changed) await this.#saveRecord(id, { forwards: next })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        for (const spec of plan.specs) plan.bound.delete(spec.remotePort)
+        for (const spec of plan.specs) plan.failures.set(spec.remotePort, message)
+      }
+    }
+    this.#setRuntime(id, {
+      ...this.#runtimeFor(id),
+      forwards: wanted.map(forward => {
+        const localPort = plan.bound.get(forward.remotePort)
+        const failure = plan.failures.get(forward.remotePort)
+        if (localPort !== undefined && failure === undefined) return listeningForward(forward.remotePort, localPort)
+        return idleForward(forward.remotePort, failure ?? null)
+      }),
+    })
+  }
+
+  /** Stop the forward child for one host, keeping its desired set. */
+  async #stopForwards(id: string): Promise<void> {
+    const tunnel = this.#forwards.get(id)
+    this.#forwards.delete(id)
+    await tunnel?.stop()
+  }
+
+  /**
+   * A forward child exited on its own.
+   *
+   * The agent tunnel is unaffected, so the host stays connected: only the port
+   * rows turn into errors. A forward failing must never look like a lost host.
+   */
+  #onForwardExit(id: string, info: { code: number | null; signal: NodeJS.Signals | null; stderr: string }): void {
+    this.#forwards.delete(id)
+    if (this.#disposed) return
+    const detail = info.stderr.trim()
+    this.ctx.logger.warn(
+      'dsh-waypoint: port forwards for %s exited (code %s, signal %s)%s',
+      id,
+      String(info.code),
+      String(info.signal),
+      detail === '' ? '' : `: ${detail.split('\n')[0]}`,
+    )
+    const current = this.#runtimeFor(id)
+    const reason = detail === '' ? 'port forward process exited' : detail.split('\n')[0] ?? 'port forward process exited'
+    this.#setRuntime(id, {
+      ...current,
+      forwards: current.forwards.map(forward => idleForward(forward.remotePort, reason)),
+    })
+  }
+
+  /**
    * Read the model catalog the connected remote host can route to.
    *
    * Cached briefly so opening the Settings page does not re-query every host on
@@ -942,6 +1159,9 @@ export class RemoteHostsService {
     for (const id of [...this.#healthTimers.keys()]) this.#clearHealth(id)
     for (const id of [...this.#reconnectTimers.keys()]) this.#clearReconnect(id)
     await Promise.all([...this.#tunnels.keys()].map(id => this.#stopTransport(id)))
+    // A forward whose host was already dropped from #tunnels would otherwise
+    // keep a local port bound after shutdown.
+    await Promise.all([...this.#forwards.keys()].map(id => this.#stopForwards(id)))
     await this.#proxy?.stop()
     this.#proxy = undefined
     this.#proxyAddress = undefined
@@ -1100,6 +1320,13 @@ export class RemoteHostsService {
       // A connected host is in step with this build; a later local update must
       // be able to reconcile it again.
       this.#agentReconciled.delete(id)
+      // Dev-server ports survive a reconnect, so they are re-opened here rather
+      // than waiting for an explicit action. A forward that cannot bind must not
+      // fail the connection it rides on, so the call is fire-and-forget with its
+      // own failure recorded per row.
+      void this.#syncForwards(id).catch(error => {
+        this.ctx.logger.warn('dsh-waypoint: could not restore port forwards for %s: %s', id, String(error))
+      })
       return this.view(id)
     } catch (error) {
       await tunnel?.stop()
@@ -1346,6 +1573,9 @@ export class RemoteHostsService {
     this.#clients.delete(id)
     this.#tunnels.delete(id)
     this.#clearHealth(id)
+    // The agent tunnel is the forward child's sibling, not its parent, but a
+    // host with no agent connection must not keep publishing local ports.
+    void this.#stopForwards(id)
     const detail = info.stderr === '' ? '' : `: ${info.stderr.split('\n')[0]}`
     this.#setRuntime(id, {
       ...this.#runtimeFor(id),
@@ -1360,6 +1590,12 @@ export class RemoteHostsService {
       },
       agentOutdated: false,
       detail: 'reconnecting',
+      forwards: this.#runtimeFor(id).forwards.map(forward => ({
+        ...forward,
+        localPort: null,
+        phase: 'idle' as const,
+        error: null,
+      })),
     })
     this.#scheduleReconnect(id)
   }
@@ -1458,6 +1694,14 @@ export class RemoteHostsService {
     const tunnel = this.#tunnels.get(id)
     this.#tunnels.delete(id)
     this.#clients.delete(id)
+    // The forward child rides the same ssh account, so it dies with the host
+    // connection: leaving it behind would keep a local port bound for a host
+    // the user just disconnected.
+    await this.#stopForwards(id)
+    this.#setRuntime(id, {
+      ...this.#runtimeFor(id),
+      forwards: this.#runtimeFor(id).forwards.map(forward => idleForward(forward.remotePort)),
+    })
     await tunnel?.stop()
   }
 
