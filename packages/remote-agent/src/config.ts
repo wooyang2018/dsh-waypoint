@@ -26,6 +26,11 @@ export interface Config {
   readonly maxSnapshotEvents?: number
   /** SSE heartbeat interval. */
   readonly heartbeatMs?: number
+  /**
+   * Git executable the read-only Git bridge runs, resolved in this host's
+   * execution world. A bare name is looked up on the agent's PATH.
+   */
+  readonly gitCommand?: string
 }
 
 /** Schema validated by the Cordis Loader. */
@@ -36,6 +41,7 @@ export const Config: z<Config> = z.object({
   defaultSnapshotEvents: z.number().min(1).max(10_000).default(500),
   maxSnapshotEvents: z.number().min(1).max(10_000).default(2_000),
   heartbeatMs: z.number().min(1_000).max(300_000).default(15_000),
+  gitCommand: z.string().default('git'),
 })
 
 /** Config with every default materialized. */
@@ -46,6 +52,7 @@ export interface ResolvedConfig {
   readonly defaultSnapshotEvents: number
   readonly maxSnapshotEvents: number
   readonly heartbeatMs: number
+  readonly gitCommand: string
 }
 
 /** DSH home: explicit `$DSH_HOME`, otherwise `~/.dsh`. */
@@ -80,5 +87,12 @@ export function resolveConfig(config: Config = {}, env: NodeJS.ProcessEnv = proc
     defaultSnapshotEvents,
     maxSnapshotEvents,
     heartbeatMs: config.heartbeatMs ?? 15_000,
+    gitCommand: normalizeGitCommand(config.gitCommand),
   }
+}
+
+/** Trim the configured Git executable, falling back to the PATH name. */
+function normalizeGitCommand(value: string | undefined): string {
+  const trimmed = (value ?? '').trim()
+  return trimmed === '' ? 'git' : trimmed
 }

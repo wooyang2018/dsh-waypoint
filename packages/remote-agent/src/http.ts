@@ -34,10 +34,15 @@ import {
   type RemoteTerminalCreateRequest,
   type RemoteTerminalInput,
   type RemoteFileSearchRequest,
+  type RemoteGitRequest,
+  type RemoteChangesSummaryRequest,
+  type RemoteChangesDiffRequest,
 } from '@dsh-waypoint/protocol'
 import { parseBearer, tokensEqual } from './auth.ts'
 import { listDirectories, listFile, readBytes, readText, statFile, watchFile } from './files.ts'
 import { searchFiles } from './search.ts'
+import { runGit } from './git.ts'
+import { diffFor, summaryFor } from './workspace-changes.ts'
 import type { RemoteAgentService } from './service.ts'
 import { AGENT_VERSION } from './version.ts'
 
@@ -154,6 +159,19 @@ export async function handleAgentRequest(
           return
         case 'file-bytes':
           sendJson(res, await readBytes(asPath(body), optionalInt(body, 'offset'), optionalInt(body, 'length')))
+          return
+        case 'git-exec':
+          sendJson(res, await runGit(
+            { gitCommand: service.config.gitCommand },
+            asGitRequest(body),
+            watchCancellation(req, res),
+          ))
+          return
+        case 'changes-summary':
+          sendJson(res, await summaryFor(ctx, asChangesSummaryRequest(body)))
+          return
+        case 'changes-diff':
+          sendJson(res, await diffFor(ctx, asChangesDiffRequest(body), watchCancellation(req, res)))
           return
         case 'file-search': {
           const search = asSearchRequest(body)
@@ -657,6 +675,72 @@ function watchCancellation(req: IncomingMessage, res: ServerResponse): AbortSign
   req.on('close', close)
   res.on('close', close)
   return controller.signal
+}
+
+/** Require a non-array object body, which every write route has. */
+function objectBody(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
+  }
+  return value as Record<string, unknown>
+}
+
+/** Require a non-empty string field. */
+function requiredString(body: Record<string, unknown>, key: string): string {
+  const value = body[key]
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: `${key} must be a non-empty string` })
+  }
+  return value
+}
+
+/** Require a non-negative integer field. */
+function requiredIndex(body: Record<string, unknown>, key: string): number {
+  const value = body[key]
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: `${key} must be a non-negative integer` })
+  }
+  return value
+}
+
+/**
+ * Read one Git bridge request.
+ *
+ * Only the shape is validated here; whether the subcommand is permitted is the
+ * bridge's own decision, so a refusal names the subcommand instead of reading
+ * as a malformed body.
+ */
+function asGitRequest(value: unknown): RemoteGitRequest {
+  const body = objectBody(value)
+  const cwd = requiredString(body, 'cwd')
+  const rawArgs = body.args
+  if (!Array.isArray(rawArgs) || rawArgs.length === 0 || !rawArgs.every(entry => typeof entry === 'string')) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'args must be a non-empty array of strings' })
+  }
+  let env: Record<string, string> | undefined
+  if (body.env !== undefined && body.env !== null) {
+    env = {}
+    for (const [key, entry] of Object.entries(objectBody(body.env))) {
+      if (typeof entry !== 'string') {
+        throw new RemoteProtocolError({ code: 'request/invalid', message: `env.${key} must be a string` })
+      }
+      env[key] = entry
+    }
+  }
+  const timeoutMs = optionalInt(body, 'timeoutMs')
+  return { cwd, args: rawArgs as string[], ...env === undefined ? {} : { env }, ...timeoutMs === undefined ? {} : { timeoutMs } }
+}
+
+/** Read one change summary request. */
+function asChangesSummaryRequest(value: unknown): RemoteChangesSummaryRequest {
+  const body = objectBody(value)
+  return { sessionId: requiredString(body, 'sessionId'), turn: requiredIndex(body, 'turn') }
+}
+
+/** Read one file comparison request. */
+function asChangesDiffRequest(value: unknown): RemoteChangesDiffRequest {
+  const body = objectBody(value)
+  return { sessionId: requiredString(body, 'sessionId'), turn: requiredIndex(body, 'turn'), index: requiredIndex(body, 'index') }
 }
 
 function optionalInt(value: unknown, key: string): number | undefined {
