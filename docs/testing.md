@@ -39,6 +39,54 @@ and recreates the local workspace from the remote log.
 No UI control and no agent tool is involved. The manifest is only present in test profiles; a normal
 profile has no manifest and mirrors remote workspaces normally.
 
+## The desktop app overwrites a remote agent you are testing
+
+Testing a **new remote agent build** against a real SSH host is defeated by the desktop app unless
+you account for this first.
+
+The desktop's `dsh-waypoint` plugin pushes **its own** bundled agent to every host it connects to, on
+connection, unconditionally. The bundle it pushes is whatever tarball that profile has installed —
+not what you just put on the remote. So the sequence
+
+1. build a new `dsh-waypoint-agent` tarball,
+2. install it on the remote profile,
+3. restart the remote DSH,
+4. call the new route — it works,
+
+silently reverts between step 3 and step 4 as soon as the desktop connects to that host: the agent
+`lib/index.js` grows back from your build's size to the previously shipped one, and the new route
+answers `route/not-found` again.
+
+Two fingerprints identify it, both worth checking before blaming your code:
+
+- **`/tmp/dsh-waypoint-agent-<epochMs>-<pid>.tgz` files accumulate on the remote.** The numeric
+  suffix is the *local* installer's PID, so a run of them with one repeated value means one local
+  process has pushed repeatedly. A fresh file appears with every connection.
+- **`agent.json`'s `agentVersion` returns to the old value** while `dshVersion` stays correct, and the
+  file size of `node_modules/dsh-waypoint-agent/lib/index.js` is the old build's.
+
+The agent also cannot distinguish the phases: the push is a plain tarball install, so nothing on the
+remote records "this was a test build".
+
+### What to do instead
+
+Upgrade the **local** profile to the build under test, so the desktop pushes the agent you meant to
+test. That is the only arrangement where the pushed and tested agents agree.
+
+```powershell
+pnpm build && node scripts/release-plugin.mjs          # prints the dev tarball path
+dsh plugin --profile <profile> add <that path>
+```
+
+`dsh plugin add` refuses a plugin whose `engines.dsh` / `dsh.compatibility.dsh` range excludes the
+CLI's own version, and tells you the exact `allow-version … --accept-risk` command. **Read that
+range before granting it.** A development build against an out-of-range CLI is a real crash and
+data-loss risk, not a formality — the exemption is per plugin *and* per DSH version, so it does not
+carry over to the next build.
+
+Do not test agent behaviour on a host whose desktop profile still ships an older plugin: every
+verification you run will be of the old code.
+
 ## Mirror regression checks
 
 After `pnpm -r build`, run the focused checks from the repository root:
