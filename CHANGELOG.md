@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+A mirrored workspace now answers the two native review surfaces, with no UI change.
+
+- **Forge panel — Local changes.** The panel runs every Git query through `ctx.subprocess` and reads
+  file contents through `ctx.fs`; both now route a mirrored workspace to its remote checkout, so the
+  branch/fork-point view, the changed-file list and per-file diffs describe the remote repository
+  instead of the empty local anchor. `remote/sandbox.ts` returns argv unchanged for those commands
+  because a locally confined argv names a wrapper the remote host does not have.
+- **Changed-files card.** `workspaceChanges.summary` is synchronous and addressed by the local event
+  sequence, while the record lives in the remote process; the mirror now fetches the summary just
+  before it appends the announcing event, so the card has its data the moment it renders. `diff`
+  round-trips on demand.
+- The remote agent gains two capabilities, `git.exec` and `workspace.changes`. `git.exec` is a
+  read-only Git bridge with a subcommand allowlist, **not** a general remote exec: a non-`git`
+  `argv[0]` is refused locally, and the agent refuses anything outside its allowlist. An agent that
+  predates this change reports `error.agentOutdated` and Settings offers **Reinstall**.
+- Summaries are not persisted. Cross-restart behaviour matches the local experience exactly, except
+  that a local restart while the remote DSH still runs keeps its change cards — a case the local
+  workspace cannot offer.
+
 ## 1.0.1
 
 Re-publish of 1.0.0 with a tarball that actually exists.

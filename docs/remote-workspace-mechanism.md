@@ -439,6 +439,100 @@ Three consequences the reader should know:
 The panel is read-only in this release: it offers no upload, edit, rename or delete, because writing
 into the anchor would create a second authority for bytes the remote already owns.
 
+### 6.2a Review data: the Forge panel and the change card
+
+Two native surfaces show what changed, and they are unrelated by design:
+
+| Surface | Owner | Question it answers |
+|---|---|---|
+| **Local changes** in the Forge tab | `@deepseek-ai/dsh-experimental-client-ui-forge` | What does this branch differ from its fork point by? |
+| **Changed files** card on a turn | `dsh-client-ui-deliverables` over `dsh-workspace-changes` | What did *this turn* change? |
+
+Both degrade to nothing on a mirrored workspace, and both are fixed at the **data layer**
+without touching either UI. Four interception points carry it:
+
+#### The Forge panel reads Git through `ctx.subprocess`
+
+`gitIn()` funnels every query into `resolveExecutable` + `spawn`, and reads file contents
+through `ctx.fs`. Replacing those two services is therefore enough for the panel's own logic —
+branch inspection, fork-point resolution, diffs, the changed-file list — to run unchanged against a
+remote checkout.
+
+- `remote/subprocess.ts` routes a spec whose `cwd` belongs to a mirrored workspace to the agent's
+  Git bridge. It is deliberately **not** a general remote exec: a non-`git` `argv[0]` is refused
+  synchronously, and the agent narrows the subcommand further to a read-only allowlist. Both refusals
+  exist so the panel can read a repository without this becoming a second shell.
+- `remote/fs.ts` serves `resolve`, `processPath`, `stat`, `lstat`, `readText`, `readBytes`,
+  `readByteRange` and `listDir` for targets it minted itself (a `wp-remote:` key). Writes are left
+  alone: a mirrored Session's file tools run on the remote host, so routing a local write would open a
+  second, competing authority for the same bytes.
+- `remote/sandbox.ts` returns argv unchanged for a mirrored workspace. `confine` wraps argv in a
+  *local* enforcement program — a Windows job-object launcher, macOS `sandbox-exec`, bubblewrap —
+  which does not exist on the remote host and would describe the wrong filesystem anyway. The result
+  reports `enforcement: 'partial'` rather than claiming `'full'`, because nothing about the remote
+  checkout was verified.
+
+#### The change card reads through `ctx.workspaceChanges`
+
+`workspaceChanges.summary(sessionId, seq)` is **synchronous**, and `seq` is the **local** sequence of
+the announcing `workspace/changes` event. The record, however, lives in the remote process. So:
+
+1. The mirror records `localSeq → turn` while it still has the mapping (`changesTurns`), so a later
+   read can be addressed at all.
+2. Immediately **before** appending the announcing event, the mirror awaits
+   `prefetchChangesSummary`, which fetches the summary and caches it. Fetching first is what makes the
+   synchronous read total: once a client can see the event, its summary is already present.
+3. `remote/workspace-changes.ts` answers `summary` from that cache and `diff` with a round trip.
+
+A miss returns `undefined` — never a throw — because that is the stock "this Host does not serve that
+summary" answer, which the Host turns into a 404 and the card renders as no card.
+
+#### Cross-restart behaviour is the same as native
+
+`dsh-workspace-changes` keeps summaries in the providing process's memory (`recorder.ts`'s
+`records`, `index.ts`'s `byId`). A local Session's history therefore loses its change cards when the
+Host restarts, and `Deliverables.tsx` renders no card for a summary it no longer serves. The remote
+behaviour matches, with one case that is strictly *better*:
+
+| Situation | Local | Mirrored |
+|---|---|---|
+| Turn in the current process | ✅ | ✅ |
+| Local restart, historical turn | ❌ | ❌ |
+| Remote DSH restart, historical turn | — | ❌ |
+| **Local restart while the remote DSH still runs** | — | ✅ |
+
+Summaries are deliberately not persisted. `diff` depends on the recorder's snapshot directory, which a
+remote restart cannot restore, so persisting the summary alone would produce "the file list is there
+but every comparison is blank" — worse than the honest all-or-nothing state.
+
+#### Replacing a provided service: what is and is not allowed
+
+`workspaceChanges` is registered with `ctx.provide`, and Cordis guards the *registration slot*:
+
+```js
+// cordis/lib/index.js — reflect.set
+if (impl.ctx.fiber !== this.ctx.fiber) throw new Error(`cannot set property "${name}" in multiple fibers`)
+// reflect.provide
+if (this.store[key]) throw new Error(`service "${name}" has been registered at <…>`)
+```
+
+Both reject a plugin that is not the providing fiber. Neither guards the *object*: `ctx.get` returns
+the provided value itself for a plain object with no tracker (`getTraceable` returns it unchanged), so
+an own-property assignment is visible to every consumer. Every adapter in `src/remote/` therefore
+assigns properties and restores them through `remote/install.ts`, which captures the property
+descriptor **before** assigning — a plain `delete` would remove an implementation that happened to be
+an own property instead of restoring it.
+
+Two consequences follow, and both are real:
+
+- **A provider that remounts produces a new object**, so a patch applied to the old one goes inert
+  silently. This is why `summary()` answers from a cache the mirror fills rather than relying on the
+  patch being the only path.
+- **`test/cordis-service-contract.test.ts` pins the behaviour.** It asserts that `ctx.get` hands back
+  the same object, that `ctx.set` and a second `ctx.provide` are rejected, and that a dependent
+  plugin context reaches the patched method. A Cordis upgrade that wrapped provided values would fail
+  that test instead of quietly un-routing every panel.
+
 ### 6.3 Terminals
 
 Terminals are harder than files: `ClientTerminals` receives `ctx.remote.terminal` when the client is

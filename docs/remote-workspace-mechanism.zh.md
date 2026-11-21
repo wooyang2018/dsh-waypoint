@@ -388,6 +388,85 @@ return await Reflect.apply(prepared.method, prepared.receiver, prepared.args)
 本版本的面板是只读的：不提供上传、编辑、重命名或删除，因为往锚点写入会让远端已经拥有的字节出现第二个
 权威副本。
 
+### 6.2a 变更数据：Forge 面板与变更卡片
+
+有两处原生界面展示「改了什么」，它们在设计上互不相关：
+
+| 界面 | 归属 | 回答的问题 |
+|---|---|---|
+| Forge 页签的 **本地变更** | `@deepseek-ai/dsh-experimental-client-ui-forge` | 这个分支相对 fork point 改了什么？ |
+| 轮次尾部的 **变更文件** 卡片 | `dsh-client-ui-deliverables`（数据来自 `dsh-workspace-changes`） | **这一轮**改了什么？ |
+
+在镜像工作区上两者都会退化为空，而两者都在**数据层**修好，不碰任何 UI。共四个拦截点：
+
+#### Forge 面板通过 `ctx.subprocess` 读 Git
+
+`gitIn()` 把所有查询收敛到 `resolveExecutable` + `spawn`，文件内容则走 `ctx.fs`。因此替换这两个服务，
+面板自身的逻辑——分支探测、fork point 解析、diff、变更文件列表——就能原样跑在远端检出上。
+
+- `remote/subprocess.ts` 把 `cwd` 属于镜像工作区的 spec 转给 agent 的 Git 桥。它**刻意不是**通用远端
+  exec：`argv[0]` 不是 `git` 会同步拒绝，agent 再把子命令收窄到只读白名单。两道拒绝的存在，是为了
+  让面板能读一个仓库，而不至于让这里变成第二个 shell。
+- `remote/fs.ts` 为自己铸造的 target（`wp-remote:` 键）提供 `resolve`、`processPath`、`stat`、
+  `lstat`、`readText`、`readBytes`、`readByteRange` 和 `listDir`。**写操作不接管**：镜像 Session 的
+  文件工具在远端执行，本地再路由一次写入，等于给同一批字节开了第二个互相竞争的权威。
+- `remote/sandbox.ts` 对镜像工作区原样返回 argv。`confine` 会把 argv 包进一个**本地**执行程序——
+  Windows 的 job object 启动器、macOS 的 `sandbox-exec`、bubblewrap——远端根本没有，而且它保护的也是
+  错的文件系统。返回值报 `enforcement: 'partial'` 而不是 `'full'`，因为远端检出的文件效果一点没被验证过。
+
+#### 变更卡片通过 `ctx.workspaceChanges` 读
+
+`workspaceChanges.summary(sessionId, seq)` 是**同步**的，且 `seq` 是宣告该变更的 `workspace/changes`
+事件的**本地**序号。而记录本身活在远端进程里。于是：
+
+1. mirror 在映射还新鲜时记下 `本地 seq → turn`（`changesTurns`），否则后续读取连寻址都做不到。
+2. 在 append 宣告事件**之前**，mirror 先 `await prefetchChangesSummary` 取回摘要并缓存。先取再发，
+   才使同步读取是全的：客户端一旦能看见事件，摘要必然已经在。
+3. `remote/workspace-changes.ts` 用这份缓存回答 `summary`，用一次往返回答 `diff`。
+
+未命中返回 `undefined`，**绝不抛错**，因为那正是原生「本 Host 不再提供该摘要」的答案：Host 把它变成
+404，卡片就不渲染。
+
+#### 跨重启行为与原生一致
+
+`dsh-workspace-changes` 把摘要放在提供进程的内存里（`recorder.ts` 的 `records`、`index.ts` 的
+`byId`）。所以本地 Session 的历史在 Host 重启后同样丢失变更卡片，`Deliverables.tsx` 对拿不到的摘要
+直接不渲染。远端行为一致，且有一项严格**更好**：
+
+| 情形 | 本地 | 镜像 |
+|---|---|---|
+| 当前进程内的轮次 | ✅ | ✅ |
+| 本地重启后看历史轮次 | ❌ | ❌ |
+| 远端 DSH 重启后看历史轮次 | — | ❌ |
+| **本地重启、远端 DSH 仍在运行** | — | ✅ |
+
+摘要**刻意不持久化**。`diff` 依赖 recorder 的快照目录，远端重启后无法还原，只持久化摘要就会造成
+「文件列表在、每个对比都空白」——比诚实的一荣俱荣、一损俱损更糟。
+
+#### 替换一个被 provide 的服务：能与不能
+
+`workspaceChanges` 由 `ctx.provide` 注册，Cordis 守卫的是**注册槽位**：
+
+```js
+// cordis/lib/index.js — reflect.set
+if (impl.ctx.fiber !== this.ctx.fiber) throw new Error(`cannot set property "${name}" in multiple fibers`)
+// reflect.provide
+if (this.store[key]) throw new Error(`service "${name}" has been registered at <…>`)
+```
+
+两者都会拒绝「不是提供方 fiber」的插件。但**对象本身不受守卫**：对没有 tracker 的普通对象，
+`ctx.get` 直接返回那个 provided 值本体（`getTraceable` 原样返回），所以一次自有属性赋值对所有
+消费方可见。`src/remote/` 的每个适配器因此都只做属性赋值，并通过 `remote/install.ts` 还原；后者在
+赋值**之前**抓取属性描述符——直接用 `delete` 会把「本来就是自有属性」的实现删掉，而不是还原它。
+
+由此有两个真实后果：
+
+- **提供方重挂载会产生新对象**，补丁作用在旧对象上便静默失效。这正是 `summary()` 从 mirror 填充的
+  缓存取值、而不是依赖「补丁是唯一路径」的原因。
+- **`test/cordis-service-contract.test.ts` 钉住了这个行为**：断言 `ctx.get` 返回同一对象、
+  `ctx.set` 与第二次 `ctx.provide` 会被拒绝、以及依赖方 plugin context 能触达被替换的方法。若某次
+  Cordis 升级把 provided 值包进代理，该测试会失败，而不是让所有面板悄悄失效。
+
 ### 6.3 终端
 
 终端比文件更麻烦：`ClientTerminals` 在客户端构造时就拿到了 `ctx.remote.terminal`，没有实例级替换点。
