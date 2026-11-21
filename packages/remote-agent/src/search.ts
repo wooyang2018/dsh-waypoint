@@ -167,7 +167,7 @@ async function readIgnoreFile(directory: string): Promise<((relative: string, is
 }
 
 /** Normalize a request, refusing input the caller cannot have meant. */
-function normalize(request: RemoteFileSearchRequest): {
+function normalize(request: Omit<RemoteFileSearchRequest, 'path'>): {
   query: string
   matchPath: boolean
   excluded: readonly string[]
@@ -233,7 +233,7 @@ interface Level {
  */
 export async function searchFiles(
   root: string,
-  request: RemoteFileSearchRequest,
+  request: Omit<RemoteFileSearchRequest, 'path'>,
   signal?: AbortSignal,
   limits: Partial<SearchLimits> = {},
 ): Promise<RemoteFileSearchResult> {

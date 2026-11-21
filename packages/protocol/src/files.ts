@@ -83,6 +83,15 @@ export type RemoteFileWatchFrame = {
  * depth; one with `/` names an exact workspace-relative path.
  */
 export interface RemoteFileSearchRequest {
+  /**
+   * Absolute directory on the remote host to search under.
+   *
+   * The Host adapter resolves the mirrored workspace to this path, so the agent
+   * never has to guess a root from a Session identity it does not hold. It is
+   * required rather than defaulted: an omitted root would silently search
+   * something the caller did not name.
+   */
+  readonly path: string
   /** Non-empty query, already trimmed by the caller. */
   readonly query: string
   /** Workspace-relative paths or bare names to leave out. */

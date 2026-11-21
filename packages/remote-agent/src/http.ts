@@ -155,9 +155,11 @@ export async function handleAgentRequest(
         case 'file-bytes':
           sendJson(res, await readBytes(asPath(body), optionalInt(body, 'offset'), optionalInt(body, 'length')))
           return
-        case 'file-search':
-          sendJson(res, await searchFiles(asPath(body), asSearchRequest(body), watchCancellation(req, res)))
+        case 'file-search': {
+          const search = asSearchRequest(body)
+          sendJson(res, await searchFiles(search.path, search, watchCancellation(req, res)))
           return
+        }
         case 'terminals':
           sendJson(res, service.terminals.create(asTerminalCreate(body)))
           return
@@ -613,6 +615,9 @@ function asSearchRequest(value: unknown): RemoteFileSearchRequest {
     throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
   }
   const body = value as Record<string, unknown>
+  if (typeof body.path !== 'string' || body.path.trim() === '') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'path must be a non-empty string' })
+  }
   if (typeof body.query !== 'string' || body.query.trim() === '') {
     throw new RemoteProtocolError({ code: 'request/invalid', message: 'query must be a non-empty string' })
   }
@@ -629,6 +634,7 @@ function asSearchRequest(value: unknown): RemoteFileSearchRequest {
     }
   }
   return {
+    path: body.path as string,
     query: body.query,
     ...excludedPaths === undefined ? {} : { excludedPaths },
     ...typeof body.includeHidden === 'boolean' ? { includeHidden: body.includeHidden } : {},

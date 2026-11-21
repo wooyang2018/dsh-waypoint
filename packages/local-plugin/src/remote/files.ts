@@ -123,6 +123,10 @@ export function installRemoteWorkspaceFiles(
   // answer from the local anchor, so without this a mirrored workspace always
   // reports "no results". Its result paths are workspace-relative, which is the
   // same namespace `list` uses, so nothing needs mapping on the way out.
+  //
+  // The agent receives an absolute root rather than a Session identity: it holds
+  // no mirror state, and a request carrying only a query would let it search
+  // whatever directory it happened to default to.
   service.search = async (scope, request, signal) => {
     const target = targetOf(mirrors, scope.workspaceRoot, '')
     if (target === undefined) {
@@ -132,7 +136,10 @@ export function installRemoteWorkspaceFiles(
       if (originalSearch !== undefined) return originalSearch(scope, request, signal)
       throw new LocalError('request/invalid', 'workspace search is unavailable in this DSH build')
     }
-    return agentFor(hosts, target.hostId, 'file.search').fileSearch(request, signal)
+    return agentFor(hosts, target.hostId, 'file.search').fileSearch(
+      { ...request, path: target.remotePath },
+      signal,
+    )
   }
 
   const installed: Record<string, unknown> = {
