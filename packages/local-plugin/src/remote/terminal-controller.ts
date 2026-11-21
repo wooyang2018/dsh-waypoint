@@ -1,10 +1,18 @@
 /**
  * Route gateway terminal calls by Session.
  *
- * The fork replaces the stock terminal-controller row, but its host half is the
- * stock implementation. Gateway clients call the stock Remote methods directly,
- * so a mirrored Session would otherwise get a local shell. Patch the service for
- * mirrored Sessions and keep the stock implementation for local Sessions.
+ * The stock terminal-controller row provides the service; this module patches it
+ * per method. The Host's Typert Gateway resolves a Remote method per call, so an
+ * assignment onto the service instance reaches every caller — the same mechanism
+ * `remote/files.ts` relies on for the file tree.
+ *
+ * Patching rather than replacing matters: a bundled fork could not resolve the
+ * stock package's own dependencies from a profile, and while it failed to load
+ * the Host was left with no terminal service at all because this bundle also
+ * disabled the stock row.
+ *
+ * Local Sessions keep the stock implementation; mirrored Sessions are redirected
+ * to `RemoteTerminals`, which drives the remote PTY over the tunnel.
  *
  * @module dsh-waypoint/remote/terminal-controller
  */

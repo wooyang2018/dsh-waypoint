@@ -66,10 +66,13 @@ test.describe('plugin install and upgrade', () => {
       const installed = JSON.parse(readFileSync(join(host.home, 'profiles/web/node_modules/dsh-waypoint/package.json'), 'utf8')) as Manifest
       expect(installed.engines?.dsh).toBe('>=0.2.2-rc.2 <0.3.0-0')
 
-      const forkClient = join(host.home,
-        'profiles/web/node_modules/dsh-waypoint/node_modules/dsh-waypoint-terminal-controller/lib/client.js')
-      expect(existsSync(forkClient)).toBe(true)
-      expect(readFileSync(forkClient, 'utf8')).toContain('watch(')
+      // No profile row is replaced and no fork is bundled: terminals are routed
+      // by patching the service the stock terminal-controller provides. A
+      // bundled fork would also have to carry the stock package's own
+      // dependencies, which does not resolve from a profile.
+      const bundledFork = join(host.home,
+        'profiles/web/node_modules/dsh-waypoint/node_modules/dsh-waypoint-terminal-controller')
+      expect(existsSync(bundledFork)).toBe(false)
 
       const log = readFileSync(host.logPath, 'utf8')
       expect(log).not.toContain('disabling profile plugin')

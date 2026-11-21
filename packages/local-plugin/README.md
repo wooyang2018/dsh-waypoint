@@ -54,7 +54,7 @@ After the npm package is published, use **Plugins → Add plugin** and enter:
 dsh-waypoint
 ```
 
-The package bundles the remote agent asset and the terminal-controller fork. Restart DSH after the
+The package bundles the remote agent asset. Restart DSH after the
 plugin page asks for it.
 
 If npmjs.com resolves an older `latest` tag for a newly published release, install the exact current
@@ -74,8 +74,7 @@ cd ../..
 ./scripts/install-local.sh --profile web
 ```
 
-The installer creates one tarball containing the terminal-controller fork; restart DSH after it
-finishes.
+The installer creates one tarball; restart DSH after it finishes.
 
 ## Use
 

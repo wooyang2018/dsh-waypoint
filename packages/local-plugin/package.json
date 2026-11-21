@@ -74,8 +74,7 @@
     "@deepseek-ai/dsh-workspace-changes": "0.2.2-rc.3",
     "@dsh-waypoint/installer": "workspace:*",
     "@dsh-waypoint/protocol": "workspace:*",
-    "dsh-waypoint-agent": "workspace:*",
-    "dsh-waypoint-terminal-controller": "workspace:*"
+    "dsh-waypoint-agent": "workspace:*"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.5 <4.2.0",
@@ -111,9 +110,6 @@
       "optional": true
     },
     "@deepseek-ai/dsh-api-session-controller": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-api-terminal-controller": {
       "optional": true
     },
     "@deepseek-ai/dsh-api-workspace-files": {

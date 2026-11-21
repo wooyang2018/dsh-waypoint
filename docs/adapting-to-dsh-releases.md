@@ -28,28 +28,16 @@ Check `@deepseek-ai/cordis` separately: it is not versioned with DSH, and
 `scripts/select_dsh_version.mjs` hard-codes it to `4.1.0`. If the new DSH line moved Cordis, that
 constant and the `>=4.0.5 <4.2.0` peer range need updating together.
 
-## 2. Prove the terminal-controller fork still transforms
+## 2. Confirm the terminal Remote face still has twelve methods
 
-This is the most fragile coupling in the repository. `packages/terminal-controller/scripts/build.mjs`
-rewrites the stock `@deepseek-ai/dsh-api-terminal-controller` client artifact with a regex, because
-that artifact is a self-registering module-loader blob rather than an ES module. It asserts four things
-and throws if any is missing:
+The plugin routes terminals by patching the service the stock `terminal-controller` provides, so the
+coupling is the **method list**, not the artifact shape. `PATCHED_TERMINAL_METHODS` in
+`src/remote/terminal-controller.ts` is checked against the Host's own typert face by
+`test/remote-terminal-controller.test.ts`; a release that adds a method fails that test rather than
+silently serving the new method from the local PTY for a mirrored Session.
 
-- the `id:\`@deepseek-ai/dsh-api-terminal-controller\`` marker;
-- `function apply(ctx){ new ClientTerminals(ctx, ctx.remote.terminal) }`;
-- the `watch(`, `boundTerminal(`, and `isRepresented(` faces.
-
-A release that minifies differently, renames the constructor, or drops one of those faces breaks the
-fork even though the HTTP API is unchanged.
-
-```sh
-npm pack @deepseek-ai/dsh-api-terminal-controller@<new-version> --pack-destination /tmp/rc-check
-tar -xzf /tmp/rc-check/*.tgz -C /tmp/rc-check
-# then check the four assertions against /tmp/rc-check/package/lib/client.js
-```
-
-If the artifact changed, re-derive the transform rather than loosening the assertions: a silently
-wrong fork routes terminals to the wrong PTY.
+If it fails, add the method to the patch (deciding whether it can be answered remotely) rather than
+removing it from the comparison.
 
 ## 3. Try the new target without moving the baseline
 

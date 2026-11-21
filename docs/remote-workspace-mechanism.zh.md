@@ -50,7 +50,6 @@
 | `packages/remote-agent` | 装在远端 `web` profile 里的 DSH 插件，注册 loopback HTTP/SSE 路由 | `packages/remote-agent/src/index.ts` 的 `apply` |
 | `packages/protocol` | 路由表、信封校验、SSE 解析、typed client | `src/client.ts` 的 `RemoteAgentClient` |
 | `packages/installer` | 生成并执行远端 bootstrap 脚本（scp + `bash -s`） | `src/provision.ts` 的 `provisionRemoteAgent` |
-| `packages/terminal-controller` | profile fork：按 Session 决定终端走本地还是隧道 | `src/client/routing.js` 的 `applyRouted` |
 
 本地插件的 `apply` 把所有部件按依赖顺序挂上：先建 `RemoteHostsService`（主机）与 `RemoteMirrorService`
 （镜像），再 `mirrors.start()` → `service.start()` → `mirrors.sync()`，然后才注册 `/api` 路由、文件适配器、
@@ -390,20 +389,21 @@ return await Reflect.apply(prepared.method, prepared.receiver, prepared.args)
 
 ### 6.3 终端
 
-终端比文件更麻烦：`ClientTerminals` 在客户端构造时就拿到了 `ctx.remote.terminal`，没有实例级替换点。
-仓库的解法是一个**构建期 fork**：`packages/terminal-controller/scripts/build.mjs` 读取被 pin 的 stock
-客户端产物，只替换模块 id 和 `apply` 函数，把 `routeTerminal` 那段拼进去，并校验产物里仍存在
-`watch(`、`boundTerminal(`、`isRepresented(` 这些 0.2.2 形态的标记——形状变了就报错要求重新推导，而不是
-静默产出错的东西（`scripts/build.mjs` 的 stock 产物校验段）。
+终端跟文件走的是同一套机制：stock `terminal-controller` 行提供 `terminalController` 服务，
+`installRemoteTerminalController`（`src/remote/terminal-controller.ts`）在**它上面按方法赋值**。Host 的
+Typert Gateway 每次调用都重新解析 Remote 方法，所以这个赋值能到达浏览器、Agent 和工具，不需要任何
+客户端代理。
 
-替换后的 provider 用一个「这个 Session 是不是镜像」的判断分流（`src/client/routing.js` 的
-`routeTerminal`）：是镜像就调 `/api/dsh-waypoint-terminal`，不是就退回原实现。Host 侧再由
-`installRemoteTerminalController` 把 gateway 的
-十二个方法全部按 Session 重定向（九个走远端 PTY，三个按下表处理）到
-`RemoteTerminals`（`src/remote/terminal-controller.ts` 的 `installRemoteTerminalController`），后者通过隧道
-的 `/terminals/*` 操作远端 PTY（`src/remote/terminal.ts` 的 `RemoteTerminals`）。远端 PTY 用 Python 标准库
-`pty` 实现（`packages/remote-agent/src/terminal.ts` 的 `PTY_HELPER`），避免依赖原生 node-pty 编译。这带来
-一个前提：远端需要有 `python3`；缺它时安装与会话都正常，只有 **New terminal** 失败。
+这一节以前描述的是一个**构建期 fork**：用正则改写 stock 客户端产物，并禁用 stock 行。它被删掉了，
+原因是 fork 要 import `@deepseek-ai/dsh-api-terminal-controller`，而 Host 只对**profile 依赖闭包内**的
+包解析这个名字，所以在真实安装里 fork 加载失败——又因为同一个 patch 禁用了 stock 行，Host 最后
+**一个终端服务都没有**。改成 patch 服务之后，既不需要 fork，也不需要那个正则，stock 行保持启用。
+
+`installRemoteTerminalController` 把 gateway 的十二个方法全部按 Session 重定向（九个走远端 PTY，三个
+按下表处理），`RemoteTerminals`（`src/remote/terminal.ts`）通过隧道的 `/terminals/*` 操作远端 PTY。
+远端 PTY 用 Python 标准库 `pty` 实现（`packages/remote-agent/src/terminal.ts` 的 `PTY_HELPER`），避免
+依赖原生 node-pty 编译。这带来一个前提：远端需要有 `python3`；缺它时安装与会话都正常，只有
+**New terminal** 失败。
 
 `retain` 特意返回一个「一直开着」的流：rc.2 的 `TerminalWindowHold` 把结束的 hold 流当成终端不可用。
 
@@ -479,7 +479,7 @@ Host 的 `TerminalController` 暴露十二个方法，其中九个能映射到�
 | 本地 prompt → 远端 | `#sendPrompt`、`RemoteMirrorAgent` |
 | 远端事件 → 本地 Session | `#appendEvent`、`toSeedEvent`、`isMirrorNoise` |
 | 新增远端能力 | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
-| 文件/终端路由 | `src/remote/files.ts`、`src/remote/terminal-controller.ts`、`packages/terminal-controller/scripts/build.mjs` |
+| 文件/终端路由 | `src/remote/files.ts`、`src/remote/terminal-controller.ts` |
 | Settings 页行为 | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
 
 ## 11. 验证状态

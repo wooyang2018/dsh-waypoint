@@ -71,7 +71,7 @@
 dsh-waypoint
 ```
 
-DSH 会从 npm 安装 bundle。这个包已经包含远端 agent 资源和 terminal-controller fork，不需要再安装其他包。按插件页提示重启 DSH，然后 **Settings → Remote development** 会出现。
+DSH 会从 npm 安装 bundle。这个包已经包含远端 agent 资源，不需要再安装其他包。按插件页提示重启 DSH，然后 **Settings → Remote development** 会出现。
 
 如果 npmjs.com 对刚发布版本的 `latest` 解析仍旧滞后，可以改为安装当前的精确版本：
 
@@ -92,7 +92,7 @@ pnpm -r build
 ./scripts/install-local.sh
 ```
 
-脚本会构建 workspace，生成一个包含 terminal-controller fork 的单插件 tarball，并安装到 `desktop` profile。安装到 DSH Web profile：
+脚本会构建 workspace，生成一个单插件 tarball，并安装到 `desktop` profile。安装到 DSH Web profile：
 
 ```sh
 ./scripts/install-local.sh --profile web
@@ -270,7 +270,7 @@ $DSH_HOME/waypoint/test-visibility.json
 | `DeepSeek Messages request failed (404)` | Proxy upstream 必须是 `https://api.deepseek.com/anthropic`；重新安装插件并重连 |
 | 本地出现审批，但远端工具仍失败 | 本地决定已经发出；检查远端工具结果 |
 | 本地终端打开本地 shell | 本地 Session 的预期行为；远端 Session 使用 `Remote · <dir>` 终端 |
-| 远端终端打开本地 zsh | terminal-controller fork 未生效；重新运行 `./scripts/install-local.sh` |
+| 远端终端打开本地 zsh | 另一个 patch 禁用了 stock terminal-controller 行，导致没有任何服务提供终端；请去掉那条 disable |
 | 远端重启后端口变化 | 隧道会断开并自动重连，重连时重新发现；也可点 **重启远端 DSH** 或 **重装远端 agent** 手动触发 |
 | 安装报 npm 全局前缀相关错误 | npm 无法写入该账号的 `<prefix>/lib/node_modules` 或 `<prefix>/bin`，或 `npm prefix -g` 输出为空。把 `remoteGlobalPrefix` 指向一个你自己拥有的目录（如 `~/npm-global`）后重试 |
 | 装完了自己的 shell 里找不到 `dsh` | 安装日志打印了要加到 shell 启动文件的那行 `export PATH=…`；安装器不会代你修改这些文件 |
@@ -335,7 +335,6 @@ dsh-remote-local-plugin`），避免同时出现两个设置分区；再按 `doc
 | [`@dsh-waypoint/protocol`](packages/protocol) | Wire 类型、surface metadata、cursor、SSE、typed client |
 | [`dsh-waypoint`](packages/local-plugin) | 自动安装、隧道、proxy、**原生 Session 镜像**、工具、Settings |
 | [`dsh-waypoint-agent`](packages/remote-agent) | 远端 DSH 插件：workspace、session、prompt、SSE |
-| [`dsh-waypoint-terminal-controller`](packages/terminal-controller) | 按 Session 路由本地/远端终端的 profile fork |
 | [`@dsh-waypoint/installer`](packages/installer) | 插件使用的 bootstrap 库/CLI |
 | [`@dsh-waypoint/testkit`](packages/testkit) | Fake host 和 wire 契约测试 |
 

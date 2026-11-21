@@ -17,16 +17,16 @@
  * followed by a download check, because the registry's metadata is written
  * before the tarball is readable and "npm publish exited 0" is not evidence.
  *
- * Order matters: the plugin's manifest depends on the terminal controller, so
- * the dependency goes first. Each package is skipped when its exact version is
- * already on the registry, which makes a partially failed run re-runnable.
+ * Order matters: the plugin manifest depends on the bundled agent package, so
+ * that goes first. Each package is skipped when its exact version is already on
+ * the registry, which makes a partially failed run re-runnable.
  *
  * Usage: node scripts/publish-local.mjs [--dry-run] [--publish-only] [--otp <code>]
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { packTarball } from './npm-pack.mjs'
+
 import { npmInvocation, pnpmInvocation } from './package-manager.mjs'
 import { readManifest, repoRoot } from './paths.mjs'
 
@@ -200,11 +200,9 @@ async function tarballIsDownloadable(spec) {
 
 const pluginDir = join(repoRoot, 'packages', 'local-plugin')
 const agentDir = join(repoRoot, 'packages', 'remote-agent')
-const terminalDir = join(repoRoot, 'packages', 'terminal-controller')
 
 const plugin = readManifest(pluginDir)
 const agent = readManifest(agentDir)
-const terminal = readManifest(terminalDir)
 
 // The one-time password lives 30 seconds. A build plus a pack takes longer than
 // that, so the code would be stale by the time `npm publish` used it. Building
@@ -229,7 +227,7 @@ if (!publishOnly) {
 
   step('packing')
   // Stale tarballs from an earlier version would be picked up by the globs below.
-  for (const directory of [pluginDir, join(pluginDir, 'assets'), terminalDir]) {
+  for (const directory of [pluginDir, join(pluginDir, 'assets')]) {
     if (!existsSync(directory)) continue
     for (const name of readdirSync(directory)) {
       if (name.endsWith('.tgz')) rmSync(join(directory, name), { force: true })
@@ -243,7 +241,6 @@ if (!publishOnly) {
     cwd: repoRoot,
     stdio: ['ignore', 'pipe', 'inherit'],
   })
-  packTarball({ cwd: terminalDir, destination: terminalDir })
 }
 
 // Resolve the tarballs either way: with `--publish-only` they are the ones the
@@ -255,12 +252,8 @@ if (!existsSync(pluginTarball)) {
 const agentTarballs = readdirSync(join(pluginDir, 'assets')).filter(name => name.endsWith('.tgz'))
 if (agentTarballs.length !== 1) throw new Error(`expected one agent tarball, found ${agentTarballs.length}`)
 const agentTarball = join(pluginDir, 'assets', agentTarballs[0] ?? '')
-// `release-plugin.mjs` only copies the terminal controller into the plugin's
-// node_modules, so a standalone copy is packed here.
-const terminalTarball = packTarball({ cwd: terminalDir, destination: terminalDir })
 
 const plan = [
-  { name: terminal.name, version: terminal.version, tarball: terminalTarball, why: 'bundled dependency' },
   { name: agent.name, version: agent.version, tarball: agentTarball, why: 'provisioned onto every remote host' },
   { name: plugin.name, version: plugin.version, tarball: pluginTarball, why: 'the installable bundle' },
 ]

@@ -1,10 +1,9 @@
 /**
  * Build the installable local-plugin tarball.
  *
- * The public package is a single DSH bundle: the terminal-controller fork is
- * copied into its bundled `node_modules` and declared as a bundled dependency.
- * This keeps the DSH plugin-page install to one package name while allowing
- * the terminal fork to remain a separately maintainable workspace package.
+ * The public package is a single DSH bundle carrying the host half, the browser
+ * half and the bundled remote agent. No profile row is replaced: terminals are
+ * routed by patching the service the stock terminal-controller provides.
  *
  * By default the build gets a unique prerelease version (see
  * `scripts/dev-version.mjs` for why a constant version silently ships stale
@@ -18,9 +17,7 @@ import { packTarball } from './npm-pack.mjs'
 import { readManifest, repoRoot } from './paths.mjs'
 
 const pluginDir = join(repoRoot, 'packages', 'local-plugin')
-const terminalDir = join(repoRoot, 'packages', 'terminal-controller')
 const manifest = readManifest(pluginDir)
-const terminalManifest = readManifest(terminalDir)
 
 const release = process.argv.includes('--release')
 const version = release ? manifest.version : developmentVersion(manifest.version)
@@ -52,9 +49,6 @@ function pruneDevelopmentBuilds(keep) {
 for (const required of [
   join(pluginDir, 'lib', 'index.js'),
   join(pluginDir, 'assets'),
-  join(terminalDir, 'lib', 'index.js'),
-  join(terminalDir, 'lib', 'client.js'),
-  join(terminalDir, 'lib', 'typert.host.js'),
 ]) {
   if (!existsSync(required)) throw new Error(`release-plugin: missing build output ${required}; run pnpm -r build first`)
 }
@@ -66,20 +60,11 @@ try {
   }
   cpSync(join(repoRoot, 'LICENSE'), join(staging, 'LICENSE'))
 
-  const terminalTarget = join(staging, 'node_modules', 'dsh-waypoint-terminal-controller')
-  for (const entry of ['lib', 'cordis.patch.yml', 'README.md', 'package.json']) {
-    cpSync(join(terminalDir, entry), join(terminalTarget, entry), { recursive: true })
-  }
-
   const published = {
     ...manifest,
     version,
     files: ['lib', 'assets', 'cordis.patch.yml', 'icon-180.png', 'screenshots', 'screenshots.json', 'README.md', 'LICENSE'],
-    dependencies: {
-      ...manifest.dependencies,
-      'dsh-waypoint-terminal-controller': terminalManifest.version,
-    },
-    bundledDependencies: ['dsh-waypoint-terminal-controller'],
+    dependencies: manifest.dependencies,
     scripts: {},
     devDependencies: undefined,
   }

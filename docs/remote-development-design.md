@@ -1,7 +1,7 @@
 > **Historical note:** this document describes an early two-repository plan. The proposed
 > `dsh-remote-client` patch/fork repository was built as a prototype and has been removed; it was
 > never part of the runtime or user installation. The shipped implementation is the single
-> `dsh-waypoint` repository: `local-plugin` + `terminal-controller` + `remote-agent` + `installer`.
+> `dsh-waypoint` repository: `local-plugin` + `remote-agent` + `installer`.
 > References to `dsh-remote-client` below are retained only as design history.
 
 > **Implementation note:** this is an early design note. The implemented plugin now mirrors remote

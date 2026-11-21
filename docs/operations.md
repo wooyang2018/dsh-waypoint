@@ -21,9 +21,9 @@ For a DSH Web profile:
 # restart the DSH Web process after the script finishes
 ```
 
-The script installs dependencies, builds all packages, packs the remote agent into the local plugin,
-packs the terminal-controller fork, and adds both to the chosen profile. The desktop app may stay
-running during installation; restart it afterwards to load the new bundles.
+The script installs dependencies, builds all packages, packs the remote agent into the local plugin, and
+adds the result to the chosen profile. The desktop app may stay running during installation; restart it
+afterwards to load the new bundles.
 
 ## 2. Add a host
 
@@ -150,9 +150,9 @@ The **Workspace files** and **New terminal** panels are Session-scoped:
 - local Session: stock local workspace files and local PTY;
 - remote mirror Session: agent-backed remote file listing/preview and an agent PTY in the remote workspace, both over the existing SSH tunnel. Older agents must be reinstalled; file/terminal actions fail with a Reinstall instruction rather than opening extra SSH connections.
 
-The install script also installs the `dsh-waypoint-terminal-controller` profile fork. It disables the
-stock terminal-controller row and inserts the fork so `ClientTerminals` is constructed with the
-Session-routing provider. This is profile-local; `app.asar` is untouched.
+The install script adds no profile row and replaces none: the stock `terminal-controller` row keeps
+providing the terminal service, and the plugin patches that service per Session. This is profile-local;
+`app.asar` is untouched.
 
 The Settings page is for host/workspace management only; the remote conversation is not a drawer or
 iframe.

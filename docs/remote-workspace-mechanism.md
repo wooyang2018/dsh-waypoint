@@ -47,7 +47,6 @@ and any gap it cannot bridge stops the mirror from following (see §5.5).
 | `packages/remote-agent` | DSH plugin installed into the remote `web` profile; registers loopback HTTP/SSE routes | `apply` in `packages/remote-agent/src/index.ts` |
 | `packages/protocol` | Route table, envelope validation, SSE parsing, typed client | `RemoteAgentClient` in `src/client.ts` |
 | `packages/installer` | Renders and runs the remote bootstrap script (scp + `bash -s`) | `provisionRemoteAgent` in `src/provision.ts` |
-| `packages/terminal-controller` | Profile fork: decides per session whether the terminal is local or tunneled | `applyRouted` in `src/client/routing.js` |
 
 The local plugin's `apply` mounts everything in dependency order: it builds `RemoteHostsService` (hosts)
 and `RemoteMirrorService` (mirror), then `mirrors.start()` → `service.start()` → `mirrors.sync()`, and
@@ -441,23 +440,24 @@ into the anchor would create a second authority for bytes the remote already own
 
 ### 6.3 Terminals
 
-Terminals are harder than files: `ClientTerminals` receives `ctx.remote.terminal` when the client is
-constructed, and there is no per-instance replacement point. The repository's answer is a **build-time
-fork**: `packages/terminal-controller/scripts/build.mjs` reads the pinned stock client artifact,
-replaces only the module id and the `apply` function, splices the `routeTerminal` block in, and verifies
-that the artifact still contains the `watch(`, `boundTerminal(`, and `isRepresented(` markers of the
-0.2.2 shape — if the shape changed it errors and asks for a re-derivation instead of silently emitting
-something wrong (the stock-artifact check in `scripts/build.mjs`).
+Terminals use the same mechanism as files: the stock `terminal-controller` row provides the
+`terminalController` service, and `installRemoteTerminalController` (`src/remote/terminal-controller.ts`)
+assigns onto that service per method. The Host's Typert Gateway resolves a Remote method per call, so
+the assignment reaches the browser, the Agent and the tools without any client-side proxy.
 
-The replaced provider splits on an "is this session mirrored" check (`routeTerminal` in
-`src/client/routing.js`): mirrored sessions call `/api/dsh-waypoint-terminal`, everything else falls back
-to the original implementation. On the host side `installRemoteTerminalController` redirects all twelve
-of the gateway's terminal methods per session (nine onto `RemoteTerminals`, three as described below),
-and `RemoteTerminals` (`src/remote/terminal.ts`) drives the remote PTY over the tunnel's `/terminals/*`.
-The remote PTY is implemented with Python's standard-library `pty` (`PTY_HELPER` in
-`packages/remote-agent/src/terminal.ts`) so it does not depend on a native node-pty build. That carries a
-precondition: the remote host needs `python3`. Without it, installing and sessions still work and only
-**New terminal** fails.
+This section used to describe a **build-time fork** that rewrote the stock client artifact with a
+regex and disabled the stock row. It was removed: the fork imported `@deepseek-ai/dsh-api-terminal-controller`,
+which the Host resolves only for packages inside the profile's dependency closure, so on a real
+installation the fork failed to load — and because the same patch disabled the stock row, the Host was
+left with **no terminal service at all**. Patching the service needs neither the fork nor the regex,
+and keeps the stock row in place.
+
+`installRemoteTerminalController` redirects all twelve of the gateway's terminal methods per session
+(nine onto `RemoteTerminals`, three as described below), and `RemoteTerminals` (`src/remote/terminal.ts`)
+drives the remote PTY over the tunnel's `/terminals/*`. The remote PTY is implemented with Python's
+standard-library `pty` (`PTY_HELPER` in `packages/remote-agent/src/terminal.ts`) so it does not depend
+on a native node-pty build. That carries a precondition: the remote host needs `python3`. Without it,
+installing and sessions still work and only **New terminal** fails.
 
 `retain` deliberately returns a stream that stays open: rc.2's `TerminalWindowHold` treats a finished hold
 stream as "terminal unavailable".
@@ -543,7 +543,7 @@ the provisioning flow directly (the remote process has to restart with the new e
 | Local prompt → remote | `#sendPrompt`, `RemoteMirrorAgent` |
 | Remote events → local session | `#appendEvent`, `toSeedEvent`, `isMirrorNoise` |
 | Adding a remote capability | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
-| File/terminal routing | `src/remote/files.ts`, `src/remote/terminal-controller.ts`, `packages/terminal-controller/scripts/build.mjs` |
+| File/terminal routing | `src/remote/files.ts`, `src/remote/terminal-controller.ts` |
 | Settings page behaviour | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
 
 ## 11. Verification status

@@ -21,7 +21,6 @@ import { installRemoteWorkspaceChanges, prefetchChangesSummary, RemoteChangesCac
 import { checkPatchContract, describePatchContract } from './remote/patch-contract.ts'
 import { installRemoteTerminalController } from './remote/terminal-controller.ts'
 import { RemoteTerminals } from './remote/terminal.ts'
-import { registerTerminalApi } from './host-api/terminal.ts'
 import { RemoteHostsService } from './service.ts'
 import { installRemoteToolGuards, registerRemoteTools } from './tools.ts'
 
@@ -71,7 +70,6 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
   await mirrors.start()
   await service.start()
   await mirrors.sync()
-  ctx.effect(() => registerTerminalApi(ctx, terminals), 'dsh-waypoint: remote terminal route')
   ctx.inject(['workspaceFiles'], child => {
     child.effect(() => {
       const files = child.get('workspaceFiles') as unknown as object | undefined
