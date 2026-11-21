@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Provisioning no longer fails on a host whose `pnpm` is a corepack shim.** A Node.js distribution
+  puts `bin/pnpm` in place as a symlink into corepack, and `npm install --global --prefix <prefix>
+  pnpm@X` refuses to replace it (`EEXIST`), which surfaced as `install/pnpm-missing` and told the
+  operator to delete the link. Deleting it takes corepack away from every other project in the
+  account, so the installer now prepares the pinned version through `corepack prepare --activate`
+  and leaves the link untouched. A real pnpm already in the prefix is still preferred, and a host
+  with neither still installs one; the failure message now names both recoveries instead of only the
+  destructive one.
+- **The terminal patch covers every method the Host exposes.** `openForAgent`, `readScreen` and
+  `inspectActivity` were left to the stock implementation, so an Agent working in a mirrored
+  workspace would open a terminal on the *local* machine, and read its screen from the local
+  emulator. `openForAgent` now allocates through the remote agent, `inspectActivity` answers
+  `unknown` (which the contract allows), and the two screen readers refuse with
+  `terminal/unavailable` rather than returning an empty page an Agent would read as "no output".
+  A test compares the installer's method list against the Host's own Remote face, so a DSH release
+  that adds a terminal method fails in CI instead of silently serving it locally.
+
 ## 1.0.1
 
 Re-publish of 1.0.0 with a tarball that actually exists.

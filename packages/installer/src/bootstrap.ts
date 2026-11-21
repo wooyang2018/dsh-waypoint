@@ -227,6 +227,71 @@ DSH_NODE_BIN_DIR="$(dirname "$(command -v node)")"
 export DSH_PREFIX DSH_BIN DSH_NODE_BIN_DIR`
 }
 
+/**
+ * Shell prelude that decides how this host will run pnpm.
+ *
+ * The install needs a pnpm only to provision `dsh`; it does not own the pnpm a
+ * person types in their own shell. Three states are distinguished, in order:
+ *
+ * 1. `<prefix>/bin/pnpm` resolves to a pnpm this prefix owns — either the npm
+ *    shim into `<prefix>/lib/node_modules/pnpm`, or a hand-placed binary. Use it.
+ *    Note that npm itself installs pnpm as a **symlink** into its own store, so
+ *    "is a symlink" alone cannot mean corepack.
+ * 2. `<prefix>/bin/pnpm` is a symlink that resolves *outside* the prefix, which
+ *    on a Node.js distribution means corepack. Writing a real binary over that
+ *    link fails with `EEXIST`, and deleting it would silently take corepack away
+ *    from every other project in the account. So prepare the pinned version
+ *    through corepack instead and leave the link alone.
+ * 3. Nothing usable is there — install pnpm into the prefix exactly as before.
+ *
+ * Sets `DSH_PNPM` to a command prefix (`"<prefix>/bin/pnpm"`, `"corepack pnpm"`)
+ * that the rest of the script appends arguments to.
+ *
+ * @param pnpmVersion - exact pnpm version the remote runtime expects.
+ * @returns the shell prelude; `DSH_PNPM` is always set when it exits 0.
+ */
+export function pnpmResolutionPrelude(pnpmVersion: string): string {
+  return `# Decide how to reach pnpm without disturbing a corepack install.
+DSH_PNPM=""
+DSH_PNPM_VERSION="${pnpmVersion}"
+if [ -f "$DSH_PREFIX/bin/pnpm" ]; then
+  # npm installs pnpm as a symlink into <prefix>/lib/node_modules/pnpm, so a
+  # link alone proves nothing; what matters is whether it resolves inside the
+  # prefix. A corepack shim resolves into the Node.js installation instead.
+  DSH_PNPM_TARGET="$(readlink -f "$DSH_PREFIX/bin/pnpm" 2>/dev/null || printf '%s' "$DSH_PREFIX/bin/pnpm")"
+  case "$DSH_PNPM_TARGET" in
+    "$DSH_PREFIX"/*) DSH_PNPM="$DSH_PREFIX/bin/pnpm" ;;
+  esac
+fi
+if [ -z "$DSH_PNPM" ] && [ -L "$DSH_PREFIX/bin/pnpm" ] && command -v corepack >/dev/null 2>&1; then
+  # A corepack shim owns this name. Prepare the version in corepack's own store
+  # so the link keeps working for every other project in this account.
+  if corepack prepare "pnpm@${pnpmVersion}" --activate >/dev/null 2>&1; then
+    DSH_PNPM="corepack pnpm"
+    echo "dsh-waypoint: using corepack for pnpm@${pnpmVersion} (a corepack shim owns $DSH_PREFIX/bin/pnpm)"
+  fi
+fi
+if [ -z "$DSH_PNPM" ]; then
+  echo "dsh-waypoint: installing pnpm@${pnpmVersion} globally into $DSH_PREFIX"
+  if ! npm install --global --prefix "$DSH_PREFIX" --no-audit --no-fund "pnpm@${pnpmVersion}"; then
+    echo "dsh-waypoint: npm could not install pnpm into $DSH_PREFIX" >&2
+    echo "dsh-waypoint: point remoteGlobalPrefix at a directory you own (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
+    # The common cause on hosts that ship corepack: <prefix>/bin/pnpm is a symlink
+    # into corepack, and npm refuses to replace it ("EEXIST: file already exists")
+    # without --force. dsh is never attempted, so this must not report itself as a
+    # dsh failure. Two paths are named because removing the shim costs the account
+    # its corepack setup, and that is not a decision this installer should force.
+    echo "dsh-waypoint: if <prefix>/bin/pnpm or pnpx are corepack shims, either use them:" >&2
+    echo "dsh-waypoint:   corepack prepare \\"pnpm@${pnpmVersion}\\" --activate" >&2
+    echo "dsh-waypoint: or remove them and retry:" >&2
+    echo "dsh-waypoint:   rm -f \\"$DSH_PREFIX/bin/pnpm\\" \\"$DSH_PREFIX/bin/pnpx\\"" >&2
+    exit 25
+  fi
+  DSH_PNPM="$DSH_PREFIX/bin/pnpm"
+fi
+export DSH_PNPM DSH_PNPM_VERSION`
+}
+
 /** Render the complete bootstrap script. */
 /**
  * Refuse a configured value that could break out of the script that carries it.
@@ -275,7 +340,6 @@ DSH_HOME=${shellPath(options.dshHome)}
 PROFILE=${shellLiteral(options.profile)}
 PORT=${shellLiteral(String(options.port))}
 DSH_VERSION=${shellLiteral(options.dshVersion)}
-PNPM_VERSION=${shellLiteral(options.pnpmVersion)}
 DSH_UPGRADE=${options.upgrade === true ? '1' : '0'}
 AGENT_TARBALL=${shellLiteral(options.agentTarball)}
 GLOBAL_PREFIX=${options.globalPrefix === undefined || options.globalPrefix.trim() === '' ? "''" : shellLiteral(options.globalPrefix.trim())}
@@ -400,18 +464,7 @@ if [ "$DSH_UPGRADE" -eq 1 ]; then
   rm -f "$STATE_FILE"
 fi
 
-echo "dsh-waypoint: installing pnpm@$PNPM_VERSION globally into $DSH_PREFIX"
-if ! npm install --global --prefix "$DSH_PREFIX" --no-audit --no-fund "pnpm@$PNPM_VERSION"; then
-  echo "dsh-waypoint: npm could not install pnpm into $DSH_PREFIX" >&2
-  echo "dsh-waypoint: point remoteGlobalPrefix at a directory you own (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
-  # The common cause on hosts that ship corepack: <prefix>/bin/pnpm is a symlink
-  # into corepack, and npm refuses to replace it ("EEXIST: file already exists")
-  # without --force. dsh is never attempted, so this must not report itself as a
-  # dsh failure.
-  echo "dsh-waypoint: if <prefix>/bin/pnpm or pnpx already exist (corepack shims), remove them and retry:" >&2
-  echo "dsh-waypoint:   rm -f \"$DSH_PREFIX/bin/pnpm\" \"$DSH_PREFIX/bin/pnpx\"" >&2
-  exit 25
-fi
+${pnpmResolutionPrelude(options.pnpmVersion)}
 
 echo "dsh-waypoint: installing @deepseek-ai/dsh@$DSH_VERSION globally into $DSH_PREFIX"
 if ! npm install --global --prefix "$DSH_PREFIX" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"; then
@@ -487,6 +540,14 @@ if [ "$LEGACY_CHANGED" -eq 1 ]; then
 fi
 
 echo "dsh-waypoint: adding plugin to profile $PROFILE"
+# A pnpm that answered during resolution must still answer here, because the
+# plugin add drives it through PATH. Checking once turns "the install hangs or
+# fails later" into a named cause with a named version.
+if ! $DSH_PNPM --version >/dev/null 2>&1; then
+  echo "dsh-waypoint: pnpm ($DSH_PNPM) is not usable; refusing to run dsh plugin add" >&2
+  echo "dsh-waypoint: install pnpm@$DSH_PNPM_VERSION or point remoteGlobalPrefix at a directory you own" >&2
+  exit 25
+fi
 # The upload path carries this run's timestamp, so the dependency spec differs
 # on every provisioning and "dsh plugin add" cannot treat it as already met.
 #

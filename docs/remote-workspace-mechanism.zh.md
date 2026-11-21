@@ -399,13 +399,33 @@ return await Reflect.apply(prepared.method, prepared.receiver, prepared.args)
 替换后的 provider 用一个「这个 Session 是不是镜像」的判断分流（`src/client/routing.js` 的
 `routeTerminal`）：是镜像就调 `/api/dsh-waypoint-terminal`，不是就退回原实现。Host 侧再由
 `installRemoteTerminalController` 把 gateway 的
-`environment/shells/list/create/attach/rename/close/watch/retain` 按 Session 重定向到
+十二个方法全部按 Session 重定向（九个走远端 PTY，三个按下表处理）到
 `RemoteTerminals`（`src/remote/terminal-controller.ts` 的 `installRemoteTerminalController`），后者通过隧道
 的 `/terminals/*` 操作远端 PTY（`src/remote/terminal.ts` 的 `RemoteTerminals`）。远端 PTY 用 Python 标准库
 `pty` 实现（`packages/remote-agent/src/terminal.ts` 的 `PTY_HELPER`），避免依赖原生 node-pty 编译。这带来
 一个前提：远端需要有 `python3`；缺它时安装与会话都正常，只有 **New terminal** 失败。
 
 `retain` 特意返回一个「一直开着」的流：rc.2 的 `TerminalWindowHold` 把结束的 hold 流当成终端不可用。
+
+#### 远端答不了的三个方法
+
+Host 的 `TerminalController` 暴露十二个方法，其中九个能映射到远端 PTY 的能力
+（`environment`、`shells`、`list`、`create`、`watch`、`retain`、`attach`、`rename`、`close`）。
+剩下三个没有远端等价物，处理方式是**把缺口说出来**，而不是返回一个看起来合理、实则错误的答案：
+
+| 方法 | 镜像会话下的行为 | 原因 |
+|---|---|---|
+| `openForAgent` | 通过远端 agent 分配 PTY，并返回架在其上的 `AgentTerminal` | 在镜像工作区里干活的 Agent 不能拿到本机的 shell |
+| `readScreen` | 以 `terminal/unavailable` 拒绝 | 屏幕由 Host 本地 `@xterm/headless` 缓冲渲染，缓冲只吃 Host 自己拥有的输出；远端 PTY 的帧从不进入其中，所以原实现会返回**空页**——Agent 会把它读成「命令什么都没输出」 |
+| `inspectActivity` | 返回 `unknown` | 隧道上没有等价的前台进程探测；`unknown` 本来就在契约里，且让保留策略偏保守，而假的 `idle` 会去回收一个仍在干活的 shell |
+
+`openForAgent` 返回的 `AgentTerminal` 只接有远端含义的成员——`id`、`info`、`write`、`close`——并对
+`read`、`mark`、`signal` 做与 `readScreen` 同样的拒绝。它的 `pid` 是 `-1`，因为本地并不存在可报告的进程。
+
+`src/remote/terminal-controller.ts` 里的 `PATCHED_TERMINAL_METHODS` 是声明清单，
+`test/remote-terminal-controller.test.ts` 会把它与 Host 自己的 Remote face
+（`@deepseek-ai/dsh-api-terminal-controller/typert`）比对。某个 DSH 版本新增了终端方法时，该测试会失败，
+而不是悄悄让新方法在镜像会话里落到本机 PTY。
 
 ## 7. 模型凭据：两条路径，按主机选择
 

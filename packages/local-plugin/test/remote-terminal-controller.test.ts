@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { installRemoteTerminalController } from '../src/remote/terminal-controller.ts'
+import { installRemoteTerminalController, PATCHED_TERMINAL_METHODS } from '../src/remote/terminal-controller.ts'
 
 function fakeController() {
   const calls: string[] = []
@@ -26,6 +26,9 @@ function fakeController() {
     attach() { calls.push('local:attach'); return (async function* () { yield { type: 'state', sequence: 0, info, writable: true } })() },
     rename() { calls.push('local:rename') },
     close() { calls.push('local:close'); return Promise.resolve() },
+    openForAgent() { calls.push('local:openForAgent'); return Promise.resolve({ id: 'local-agent' }) },
+    readScreen() { calls.push('local:readScreen'); return Promise.resolve({ text: 'local screen', totalLines: 1, lineBegin: 0, lineEnd: 1, truncated: false }) },
+    inspectActivity() { calls.push('local:inspectActivity'); return Promise.resolve('idle' as const) },
   }
   return { controller, calls, info }
 }
@@ -133,5 +136,90 @@ describe('gateway terminal routing', () => {
     assert.deepEqual(localFrames, [[]])
     assert.deepEqual(remoteCalls, ['remote:list:mirror'])
     restore()
+  })
+
+  it('routes the Agent terminal methods and reports the screen gap honestly', async () => {
+    const { controller, calls: localCalls } = fakeController()
+    const { terminals, calls: remoteCalls, inputs } = fakeTerminals()
+    const ctx = { logger: { warn: () => {} } }
+    const restore = installRemoteTerminalController(ctx as never, controller as never, terminals as never)
+    const signal = new AbortController().signal
+    const mirror = { id: 'mirror' }
+    const local = { id: 'local' }
+
+    // Opening for an Agent allocates through the remote agent.
+    const handle = await controller.openForAgent(mirror, {
+      title: '  build  ', cols: 100, rows: 30, policy: 'danger-full-access' as never, preferredShells: [],
+    } as never, signal)
+    assert.equal(String(handle.id), 't1')
+    assert.ok(remoteCalls.includes('remote:create:mirror:undefined'), 'the remote PTY is allocated for the mirror')
+
+    // Input and close have remote meaning and are wired through.
+    await handle.write('ls\n')
+    assert.deepEqual(inputs.at(-1), { type: 'write', sequence: 1, data: 'ls\n' })
+    await handle.close()
+    assert.ok(remoteCalls.includes('remote:close:t1'))
+
+    // The screen lives on the host that owns the PTY, so reading it must refuse
+    // rather than return a blank page an Agent would read as "no output".
+    assert.throws(() => handle.read({ offset: 0, count: 10, maxBytes: 1024 } as never), /remote workspace is not available/u)
+    assert.throws(() => handle.mark(), /remote workspace is not available/u)
+    await assert.rejects(handle.signal('SIGINT' as never), /remote workspace is not available/u)
+    await assert.rejects(controller.readScreen(mirror, 't1' as never, { offset: 0, count: 10, maxBytes: 1024 } as never), /remote workspace is not available/u)
+
+    // `unknown` keeps retention conservative; claiming `idle` would let the Host
+    // reclaim a shell that is still doing work on the remote machine.
+    assert.equal(await controller.inspectActivity(mirror, 't1' as never), 'unknown')
+
+    // Local Sessions keep every one of these behaviours.
+    await controller.openForAgent(local, { title: 'x', cols: 80, rows: 24 } as never, signal)
+    assert.deepEqual(await controller.inspectActivity(local, 't1' as never), 'idle')
+    await controller.readScreen(local, 't1' as never, { offset: 0, count: 1, maxBytes: 64 } as never)
+    assert.deepEqual(localCalls.filter(call => /openForAgent|readScreen|inspectActivity/u.test(call)), [
+      'local:openForAgent',
+      'local:inspectActivity',
+      'local:readScreen',
+    ])
+
+    restore()
+  })
+})
+
+describe('terminal patch coverage', () => {
+  it('replaces every method the Host exposes on the terminal Remote face', async () => {
+    // The list comes from the Host's own generated face, so a DSH release that
+    // adds a terminal method fails here instead of silently serving that method
+    // from the local PTY for a mirrored Session.
+    const face = await import('@deepseek-ai/dsh-api-terminal-controller/typert').then(
+      module => (module as { TYPERT?: { model?: { services?: { members?: { name?: string }[] }[] } } }).TYPERT,
+      () => undefined,
+    )
+    const members = face?.model?.services?.[0]?.members?.map(member => member.name).filter(
+      (name): name is string => typeof name === 'string',
+    )
+    assert.ok(members !== undefined && members.length > 0, 'the Host must expose a terminal service model')
+
+    const missing = members.filter(name => !(PATCHED_TERMINAL_METHODS as readonly string[]).includes(name))
+    assert.deepEqual(missing, [], 'every Host terminal method must be patched')
+  })
+
+  it('restores every patched method, so unloading cannot leave a stale route', async () => {
+    // The declared list is only meaningful if it matches the assignments; a name
+    // added to the list but never patched would satisfy coverage while leaving
+    // that method on the local implementation.
+    const { controller } = fakeController()
+    const { terminals } = fakeTerminals()
+    const restore = installRemoteTerminalController({ logger: { warn: () => {} } } as never, controller as never, terminals as never)
+    const patched = PATCHED_TERMINAL_METHODS.filter(
+      name => typeof (controller as unknown as Record<string, unknown>)[name] === 'function',
+    )
+    assert.equal(patched.length, PATCHED_TERMINAL_METHODS.length, 'each declared method exists on the controller')
+
+    const afterInstall = new Map(PATCHED_TERMINAL_METHODS.map(name => [name, (controller as unknown as Record<string, unknown>)[name]]))
+    restore()
+    const unpatched = PATCHED_TERMINAL_METHODS.filter(
+      name => (controller as unknown as Record<string, unknown>)[name] === afterInstall.get(name),
+    )
+    assert.deepEqual(unpatched, [], 'every patched method must be restored')
   })
 })

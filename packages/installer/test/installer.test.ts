@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { fromOptions, renderBootstrapScript, renderSystemdUnit, shellPath } from '../src/bootstrap.ts'
+import { fromOptions, pnpmResolutionPrelude, renderBootstrapScript, renderSystemdUnit, shellPath } from '../src/bootstrap.ts'
 import { HELP, parseArgs, resolveScpBinary, UsageError } from '../src/options.ts'
 import { parseTarget, scpArgs, sshArgs, type ScpOptions, type SshOptions } from '../src/ssh.ts'
 
@@ -129,6 +129,62 @@ describe('scp binary pairing', () => {
   })
 })
 
+describe('pnpm resolution', () => {
+  /** Render just the pnpm prelude the bootstrap splices into the script. */
+  const prelude = (): string => pnpmResolutionPrelude('11.21.0')
+
+  it('accepts a pnpm that resolves inside the prefix, including npm\'s own shim', () => {
+    // npm installs pnpm as a symlink into <prefix>/lib/node_modules/pnpm, so
+    // "is a symlink" cannot mean corepack. What separates the two is where the
+    // link resolves: inside the prefix, or into the Node.js installation.
+    const block = prelude()
+    assert.match(block, /DSH_PNPM_TARGET="\$\(readlink -f "\$DSH_PREFIX\/bin\/pnpm" 2>\/dev\/null/)
+    assert.match(block, /case "\$DSH_PNPM_TARGET" in\n\s+"\$DSH_PREFIX"\/\*\) DSH_PNPM="\$DSH_PREFIX\/bin\/pnpm" ;;/)
+  })
+
+  it('uses corepack when the shim resolves outside the prefix', () => {
+    // A Node.js distribution points bin/pnpm into corepack. Overwriting it fails
+    // with EEXIST, and deleting it would take corepack away from every other
+    // project in the account, so the link is left alone and the version is
+    // prepared in corepack's own store.
+    const block = prelude()
+    assert.match(block, /\[ -L "\$DSH_PREFIX\/bin\/pnpm" \] && command -v corepack/)
+    assert.match(block, /corepack prepare "pnpm@11\.21\.0" --activate/)
+    assert.match(block, /DSH_PNPM="corepack pnpm"/)
+    // The corepack branch must be tried before the install branch.
+    assert.ok(
+      block.indexOf('corepack prepare') < block.indexOf('npm install --global'),
+      'the corepack branch has to run before the npm install fallback',
+    )
+  })
+
+  it('still installs pnpm when neither a binary nor corepack is present', () => {
+    const block = prelude()
+    assert.match(block, /npm install --global --prefix "\$DSH_PREFIX" --no-audit --no-fund "pnpm@11\.21\.0"/)
+    assert.match(block, /exit 25/)
+    // Both recoveries are named: removing a shim costs the account its corepack
+    // setup, so the operator gets the non-destructive option too. The quotes are
+    // escaped in the rendered script (`\"`) because they sit inside an `echo`.
+    assert.match(block, /corepack prepare/)
+    assert.match(block, /rm -f \\"\$DSH_PREFIX\/bin\/pnpm\\"/)
+  })
+  it('replaces the old unconditional install with the resolver', () => {
+    const script = renderBootstrapScript({
+      profile: 'web', port: 0, dshHome: '/srv/dsh',
+      dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', start: 'nohup',
+      agentTarball: '/tmp/a.tgz',
+    })
+    assert.match(script, /Decide how to reach pnpm without disturbing a corepack install/)
+    assert.match(script, /export DSH_PNPM DSH_PNPM_VERSION/)
+    // The plugin add needs the resolved pnpm to answer, and the failure must name
+    // the version rather than only the prefix.
+    assert.match(script, /if ! \$DSH_PNPM --version/)
+    assert.match(script, /install pnpm@\$DSH_PNPM_VERSION/)
+    // The version is carried by the prelude now; no bare variable is left behind.
+    assert.doesNotMatch(script, /^PNPM_VERSION=/mu)
+  })
+})
+
 describe('bootstrap rendering', () => {
   const options = parseArgs(['plan', '--target', 'example-host', '--port', '8080'])
 
@@ -150,8 +206,7 @@ describe('bootstrap rendering', () => {
     assert.match(unit, /ExecStart="\$DSH_BIN" web --host 127\.0\.0\.1 --port \$PORT --no-open/)
   })
 
-  it('renders proxy env only when configured', () => {
-    const script = renderBootstrapScript({
+  it('renders proxy env only when configured', () => {    const script = renderBootstrapScript({
       profile: 'web', port: 0, dshHome: '/srv/dsh',
       dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', start: 'nohup',
       agentTarball: '/tmp/a.tgz', modelBaseUrl: 'http://127.0.0.1:47821', modelApiKey: 'placeholder',
@@ -195,10 +250,11 @@ describe('bootstrap rendering', () => {
     assert.match(script, /rm -f "\$STATE_FILE"/)
   })
 
-  it('installs dsh and pnpm globally, unconditionally', () => {
-    // Every provisioning run pins both into the npm global prefix. There is no
-    // "already present" branch: a second location is exactly the divergence
-    // this change removes.
+  it('installs dsh unconditionally and resolves pnpm once', () => {
+    // dsh is always installed into the npm global prefix: a second location is
+    // exactly the divergence this change removes. pnpm is resolved first
+    // (see the "pnpm resolution" suite) because a corepack shim occupies the
+    // same bin name, but every path still ends with one prefix owning both.
     for (const script of [
       renderBootstrapScript({
         profile: 'web', port: 0, dshHome: '/srv/dsh',
@@ -207,19 +263,12 @@ describe('bootstrap rendering', () => {
       }),
       fromOptions(parseArgs(baseArgs), '/tmp/agent.tgz'),
     ]) {
-      assert.match(script, /npm install --global --prefix "\$DSH_PREFIX".*"pnpm@\$PNPM_VERSION"/)
       assert.match(script, /npm install --global --prefix "\$DSH_PREFIX".*"@deepseek-ai\/dsh@\$DSH_VERSION"/)
       assert.match(script, /installing @deepseek-ai\/dsh@\$DSH_VERSION globally into \$DSH_PREFIX/)
-      // npm's own exit code (243 for EACCES) means nothing to an operator, so
-      // each install reports a documented cause instead.
-      assert.match(script, /if ! npm install --global --prefix "\$DSH_PREFIX"[^\n]*"pnpm@\$PNPM_VERSION"; then/)
       assert.match(script, /if ! npm install --global --prefix "\$DSH_PREFIX"[^\n]*"@deepseek-ai\/dsh@\$DSH_VERSION"; then/)
       assert.match(script, /point remoteGlobalPrefix at a directory you own/)
-      // No per-install-dir npm tree, and no conditional skip around pnpm.
+      // No per-install-dir npm tree, and no second prefix.
       assert.doesNotMatch(script, /npm install --prefix "\$INSTALL_DIR"/)
-      assert.doesNotMatch(script, /command -v pnpm/)
-      // The prefix has exactly one source: the option, or npm. A fallback
-      // location would put dsh somewhere the operator is not told about.
       assert.doesNotMatch(script, /DSH_PREFIX=.*\.local/)
       assert.doesNotMatch(script, /DSH_PREFIX=.*INSTALL_DIR/)
     }
@@ -262,22 +311,23 @@ describe('bootstrap rendering', () => {
     assert.match(script, /waypoint-agent\/agent\.json/)
   })
 
-  it('separates a pnpm install failure from a dsh install failure', () => {
+  it('separates a pnpm failure from a dsh install failure', () => {
     const script = fromOptions(parseArgs(baseArgs), '/tmp/agent.tgz')
-    // dsh is installed after pnpm, so a failed pnpm install leaves dsh never
-    // attempted. Reporting that as "dsh-missing" sent an operator looking at
+    // dsh is installed after pnpm is resolved, so a failed resolution leaves dsh
+    // never attempted. Reporting that as "dsh-missing" sent an operator looking at
     // the wrong prefix, the wrong Node version and the wrong log line.
-    assert.match(script, /installing pnpm@\$PNPM_VERSION globally into \$DSH_PREFIX/)
     const pnpmBlock = script.slice(
-      script.indexOf('installing pnpm@$PNPM_VERSION globally'),
+      script.indexOf('# Decide how to reach pnpm'),
       script.indexOf('installing @deepseek-ai/dsh@$DSH_VERSION globally'),
     )
-    assert.ok(pnpmBlock.length > 0, 'expected the pnpm install block to precede the dsh one')
+    assert.ok(pnpmBlock.length > 0, 'expected the pnpm resolution block to precede the dsh install')
     assert.match(pnpmBlock, /exit 25/)
     assert.doesNotMatch(pnpmBlock, /exit 24/)
-    // The corepack conflict is the common cause for that EEXIST; name the fix.
+    // The corepack conflict is the common cause for that EEXIST; name both fixes,
+    // because removing a shim costs the account its corepack setup.
     assert.match(pnpmBlock, /corepack shims/)
-    assert.match(pnpmBlock, /rm -f "\$DSH_PREFIX\/bin\/pnpm" "\$DSH_PREFIX\/bin\/pnpx"/)
+    assert.match(pnpmBlock, /rm -f \\"\$DSH_PREFIX\/bin\/pnpm\\" \\"\$DSH_PREFIX\/bin\/pnpx\\"/)
+    assert.match(pnpmBlock, /corepack prepare \\"pnpm@11\.21\.0\\" --activate/)
   })
 
   it('checks Node.js instead of installing it', () => {

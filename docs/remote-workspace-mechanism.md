@@ -451,10 +451,9 @@ something wrong (the stock-artifact check in `scripts/build.mjs`).
 
 The replaced provider splits on an "is this session mirrored" check (`routeTerminal` in
 `src/client/routing.js`): mirrored sessions call `/api/dsh-waypoint-terminal`, everything else falls back
-to the original implementation. On the host side `installRemoteTerminalController` redirects the
-gateway's `environment/shells/list/create/attach/rename/close/watch/retain` per session to
-`RemoteTerminals` (`installRemoteTerminalController` in `src/remote/terminal-controller.ts`), which
-drives the remote PTY over the tunnel's `/terminals/*` (`RemoteTerminals` in `src/remote/terminal.ts`).
+to the original implementation. On the host side `installRemoteTerminalController` redirects all twelve
+of the gateway's terminal methods per session (nine onto `RemoteTerminals`, three as described below),
+and `RemoteTerminals` (`src/remote/terminal.ts`) drives the remote PTY over the tunnel's `/terminals/*`.
 The remote PTY is implemented with Python's standard-library `pty` (`PTY_HELPER` in
 `packages/remote-agent/src/terminal.ts`) so it does not depend on a native node-pty build. That carries a
 precondition: the remote host needs `python3`. Without it, installing and sessions still work and only
@@ -462,6 +461,28 @@ precondition: the remote host needs `python3`. Without it, installing and sessio
 
 `retain` deliberately returns a stream that stays open: rc.2's `TerminalWindowHold` treats a finished hold
 stream as "terminal unavailable".
+
+#### Three methods the remote cannot answer
+
+The Host's `TerminalController` exposes twelve methods; nine map onto something the remote PTY can do
+(`environment`, `shells`, `list`, `create`, `watch`, `retain`, `attach`, `rename`, `close`). The
+remaining three have no remote equivalent, and each is handled by naming the gap rather than
+returning a plausible-looking wrong answer:
+
+| Method | Mirrored behaviour | Why |
+|---|---|---|
+| `openForAgent` | Allocates the PTY through the remote agent and returns an `AgentTerminal` over it | An Agent that works in a mirrored workspace must not get a shell on the local machine |
+| `readScreen` | Refuses with `terminal/unavailable` | The screen is rendered from a local `@xterm/headless` buffer fed by output the Host owns; a remote PTY's frames never enter it, so the stock implementation would return an **empty page** — which an Agent reads as "the command printed nothing" |
+| `inspectActivity` | Returns `unknown` | No equivalent foreground probe over the tunnel; `unknown` is already in the contract and keeps retention conservative, where a false `idle` would reclaim a shell that is still working |
+
+The `AgentTerminal` returned by `openForAgent` wires the members with a remote meaning — `id`, `info`,
+`write`, `close` — and refuses `read`, `mark` and `signal` for the same reason `readScreen` does. Its
+`pid` is `-1` because no local process exists to report.
+
+`PATCHED_TERMINAL_METHODS` in `src/remote/terminal-controller.ts` is the declared list, and
+`test/remote-terminal-controller.test.ts` compares it against the Host's own Remote face
+(`@deepseek-ai/dsh-api-terminal-controller/typert`). A DSH release that adds a terminal method fails
+that test instead of quietly serving the new method from the local PTY.
 
 ## 7. Model credentials: two paths, chosen per host
 
