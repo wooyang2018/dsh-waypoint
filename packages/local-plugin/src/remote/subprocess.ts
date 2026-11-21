@@ -43,6 +43,7 @@ import type { RemoteGitResult } from '@dsh-waypoint/protocol'
 import type { RemoteHostsService } from '../service.ts'
 import type { RemoteMirrorService } from '../mirror/service.ts'
 import { LocalError } from '../errors.ts'
+import { replaceMethods } from './install.ts'
 
 /** Environment entries forwarded to the remote Git process. */
 const FORWARDED_ENV = /^(GIT_|LC_ALL$)/
@@ -85,7 +86,7 @@ export function installRemoteSubprocess(
   const originalResolve = service.resolveExecutable.bind(service)
   const originalSpawn = service.spawn.bind(service)
 
-  service.resolveExecutable = async (command, env, signal) => {
+  const resolveExecutable = async (command: string, env?: Readonly<Record<string, string>>, signal?: AbortSignal) => {
     // The signature carries no working directory, so this call cannot be
     // attributed to a mirrored workspace. Delegate: the returned path only
     // builds an argv, and `spawn` below decides whether that argv travels. The
@@ -93,7 +94,7 @@ export function installRemoteSubprocess(
     return await originalResolve(command, env, signal)
   }
 
-  service.spawn = (spec) => {
+  const spawn = (spec: SubprocessSpawnSpec): SubprocessHandle => {
     const context = mirrors.remoteFileContext(spec.cwd) as RemoteSpecContext | undefined
     if (context === undefined) return originalSpawn(spec)
     if (!hosts.supportsAgent(context.hostId, 'git.exec')) {
@@ -116,20 +117,7 @@ export function installRemoteSubprocess(
     return remoteHandle(hosts, context, spec)
   }
 
-  const installed: Record<string, unknown> = {
-    resolveExecutable: service.resolveExecutable,
-    spawn: service.spawn,
-  }
-  let restored = false
-  return () => {
-    if (restored) return
-    restored = true
-    const target = service as unknown as Record<string, unknown>
-    for (const name of Object.keys(installed)) {
-      if (target[name] !== installed[name]) continue
-      delete target[name]
-    }
-  }
+  return replaceMethods(service as unknown as object, { resolveExecutable, spawn })
 }
 
 /**

@@ -38,6 +38,7 @@ import type {
 import type { RemoteWorkspaceChangesSummary, RemoteWorkspaceFileDiff } from '@dsh-waypoint/protocol'
 import type { RemoteHostsService } from '../service.ts'
 import type { RemoteMirrorService } from '../mirror/service.ts'
+import { replaceMethods } from './install.ts'
 
 /** Cached summaries; one entry per `(localSessionId, turn)`. */
 interface CacheEntry {
@@ -191,7 +192,7 @@ export function installRemoteWorkspaceChanges(
   const originalSummary = service.summary.bind(service)
   const originalDiff = service.diff.bind(service)
 
-  service.summary = (sessionId, seq) => {
+  const summary = (sessionId: string, seq: number): unknown => {
     const target = mirrors.changesEvent(sessionId, seq)
     if (target === undefined) return originalSummary(sessionId, seq)
     const summary = cache.get(sessionId, target.turn)
@@ -201,7 +202,12 @@ export function installRemoteWorkspaceChanges(
     return summary === undefined ? undefined : toHostSummary(summary)
   }
 
-  service.diff = async (sessionId, seq, index, signal) => {
+  const diff = async (
+    sessionId: string,
+    seq: number,
+    index: number,
+    signal: AbortSignal,
+  ): Promise<unknown> => {
     const target = mirrors.changesEvent(sessionId, seq)
     if (target === undefined) return await originalDiff(sessionId, seq, index, signal)
     try {
@@ -217,20 +223,7 @@ export function installRemoteWorkspaceChanges(
     }
   }
 
-  const installed: Record<string, unknown> = {
-    summary: service.summary,
-    diff: service.diff,
-  }
-  let restored = false
-  return () => {
-    if (restored) return
-    restored = true
-    const target = service as unknown as Record<string, unknown>
-    for (const name of Object.keys(installed)) {
-      if (target[name] !== installed[name]) continue
-      delete target[name]
-    }
-  }
+  return replaceMethods(service as unknown as object, { summary, diff })
 }
 
 /** Keep the exported service type referenced for readers of this module. */

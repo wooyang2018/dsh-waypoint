@@ -42,6 +42,7 @@ import {
 import type { AgentCapability, RemoteAgentClient } from '@dsh-waypoint/protocol'
 import type { RemoteHostsService } from '../service.ts'
 import type { RemoteMirrorService } from '../mirror/service.ts'
+import { replaceMethods } from './install.ts'
 
 /** Opcode prefix identifying a target this adapter minted. */
 const REMOTE_TARGET_PREFIX = 'wp-remote:'
@@ -158,13 +159,13 @@ export function installRemoteFileSystem(
     return undefined
   }
 
-  service.resolve = async (path, opts) => {
+  const resolve = async (path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget> => {
     const target = remoteTargetOf(path, opts?.cwd)
     if (target !== undefined) return target
     return await original.resolve(path, opts)
   }
 
-  service.processPath = (target) => {
+  const processPath = (target: FsTarget): string => {
     const decoded = decodeTarget(target)
     // Forge canonicalizes Git's printed top-level through this call, so a
     // remote target must resolve to its remote spelling — returning the local
@@ -173,14 +174,14 @@ export function installRemoteFileSystem(
     return original.processPath(target)
   }
 
-  service.stat = async (target, signal) => {
+  const stat = async (target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined> => {
     const decoded = decodeTarget(target)
     if (decoded === undefined) return await original.stat(target, signal)
     const result = await agentFor(hosts, decoded.hostId, 'file.stat').fileStat(decoded.remotePath, signal)
     return { version: FsVersion(result.version), type: 'file', ...result.bytes === undefined ? {} : { size: result.bytes } }
   }
 
-  service.lstat = async (path, opts, signal) => {
+  const lstat = async (path: string, opts?: { cwd?: string }, signal?: AbortSignal): Promise<FsPathInfo | undefined> => {
     const target = remoteTargetOf(path, opts?.cwd)
     if (target === undefined) return await original.lstat(path, opts, signal)
     const decoded = decodeTarget(target) as DecodedTarget
@@ -192,7 +193,7 @@ export function installRemoteFileSystem(
     }
   }
 
-  service.readText = async (target, signal) => {
+  const readText = async (target: FsTarget, signal?: AbortSignal): Promise<string> => {
     const decoded = decodeTarget(target)
     if (decoded === undefined) return await original.readText(target, signal)
     // The agent's text read is line-paged, so read every page. `eof` is the
@@ -210,7 +211,7 @@ export function installRemoteFileSystem(
     return chunks.join('\n')
   }
 
-  service.readBytes = async (target, signal, maxBytes) => {
+  const readBytes = async (target: FsTarget, signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array> => {
     const decoded = decodeTarget(target)
     if (decoded === undefined) return await original.readBytes(target, signal, maxBytes)
     const info = await agentFor(hosts, decoded.hostId, 'file.stat').fileStat(decoded.remotePath, signal)
@@ -223,14 +224,18 @@ export function installRemoteFileSystem(
     return await readWindow(hosts, decoded, 0, Math.min(maxBytes, AGENT_PAGE_BYTES, info.bytes ?? maxBytes), signal)
   }
 
-  service.readByteRange = async (target, range, signal) => {
+  const readByteRange = async (
+    target: FsTarget,
+    range: { offset: number; length: number },
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> => {
     const decoded = decodeTarget(target)
     if (decoded === undefined) return await original.readByteRange(target, range, signal)
     const length = Math.min(range.length, AGENT_PAGE_BYTES)
     return await readWindow(hosts, decoded, range.offset, length, signal)
   }
 
-  service.listDir = async (target, signal) => {
+  const listDir = async (target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> => {
     const decoded = decodeTarget(target)
     if (decoded === undefined) return await original.listDir(target, signal)
     const listing = await agentFor(hosts, decoded.hostId, 'file.list').fileList(decoded.remotePath, signal)
@@ -242,26 +247,9 @@ export function installRemoteFileSystem(
     }))
   }
 
-  const installed: Record<string, unknown> = {
-    resolve: service.resolve,
-    processPath: service.processPath,
-    stat: service.stat,
-    lstat: service.lstat,
-    readText: service.readText,
-    readBytes: service.readBytes,
-    readByteRange: service.readByteRange,
-    listDir: service.listDir,
-  }
-  let restored = false
-  return () => {
-    if (restored) return
-    restored = true
-    const target = service as unknown as Record<string, unknown>
-    for (const name of Object.keys(installed)) {
-      if (target[name] !== installed[name]) continue
-      delete target[name]
-    }
-  }
+  return replaceMethods(service as unknown as object, {
+    resolve, processPath, stat, lstat, readText, readBytes, readByteRange, listDir,
+  })
 }
 
 /**

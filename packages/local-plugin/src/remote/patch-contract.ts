@@ -42,6 +42,49 @@ export const REQUIRED_WORKSPACE_FILE_METHODS = [
  */
 export const ADDED_WORKSPACE_FILE_METHODS = ['search'] as const
 
+/**
+ * The `subprocess` methods the Forge panel's Git routing replaces.
+ *
+ * The panel runs every Git query through `resolveExecutable` + `spawn`; both must
+ * exist for `installRemoteSubprocess` to interpose at all.
+ */
+export const REQUIRED_SUBPROCESS_METHODS = ['resolveExecutable', 'spawn'] as const
+
+/**
+ * The `sandbox` method the confinement bypass replaces.
+ *
+ * `confine` is skipped for mirrored workspaces because a locally confined argv
+ * names a wrapper the remote host does not have.
+ */
+export const REQUIRED_SANDBOX_METHODS = ['confine'] as const
+
+/**
+ * The `fs` methods the Forge panel's read path replaces.
+ *
+ * `resolve`/`processPath` map a checkout path into the remote world, and the
+ * rest serve content. Write methods are deliberately absent: a mirrored
+ * Session's file tools run on the remote host, so routing a local write would
+ * open a second, competing path to the same file.
+ */
+export const REQUIRED_FS_METHODS = [
+  'resolve',
+  'processPath',
+  'stat',
+  'lstat',
+  'readText',
+  'readBytes',
+  'readByteRange',
+  'listDir',
+] as const
+
+/**
+ * The `workspaceChanges` methods the change card's routing replaces.
+ *
+ * `summary` is synchronous by contract, which is why the mirror prefetches into
+ * a cache before appending the announcing event.
+ */
+export const REQUIRED_WORKSPACE_CHANGES_METHODS = ['summary', 'diff'] as const
+
 /** One expected method the service did not offer. */
 export interface MissingPatchMethod {
   readonly method: string

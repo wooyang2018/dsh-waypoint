@@ -31,6 +31,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConfinedArgv, SandboxExecutionPolicy, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import type { RemoteMirrorService } from '../mirror/service.ts'
+import { replaceMethods } from './install.ts'
 
 /** The slice of `ctx.sandbox` this installer replaces. */
 interface SandboxLike {
@@ -51,7 +52,7 @@ export function installRemoteConfine(ctx: Context, mirrors: RemoteMirrorService)
 
   const originalConfine = service.confine.bind(service)
 
-  service.confine = async (argv, policy, signal) => {
+  const confine = async (argv: readonly string[], policy: SandboxPolicy, signal?: AbortSignal) => {
     const root = workspaceRootOf(policy)
     if (root !== undefined && mirrors.remoteFileContext(root) !== undefined) {
       // The remote agent runs this command in its own world, under its own
@@ -70,15 +71,7 @@ export function installRemoteConfine(ctx: Context, mirrors: RemoteMirrorService)
     return await originalConfine(argv, policy, signal)
   }
 
-  const installed = service.confine
-  let restored = false
-  return () => {
-    if (restored) return
-    restored = true
-    const target = service as unknown as Record<string, unknown>
-    if (target.confine !== installed) return
-    delete target.confine
-  }
+  return replaceMethods(service as unknown as object, { confine })
 }
 
 /**
