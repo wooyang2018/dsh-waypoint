@@ -38,7 +38,13 @@ interface WorkspaceChangesLike {
 
 /** The slice of a Session log this module needs. */
 interface SessionLike {
-  events?: readonly { seq: number; type: string; data?: unknown }[]
+  /**
+   * Highest sequence the log has reached. DSH exposes the log through
+   * `snapshotEvents(from, end)` rather than a materialized `events` array, so
+   * this is how the caller learns the range to ask for.
+   */
+  readonly seq?: number
+  snapshotEvents?(from: number, end: number): readonly { seq: number; type: string; data?: unknown }[]
 }
 
 /**
@@ -70,14 +76,21 @@ function sessionOf(ctx: Context, sessionId: string): SessionLike {
 /**
  * Find the sequence of the newest `workspace/changes` event for one turn.
  *
- * Scans backwards so the "latest announcement replaces earlier ones" rule is
- * the loop's shape rather than a comparison a reader has to trust.
+ * The log is read through `snapshotEvents(from, end)`, which is the Session's
+ * public accessor; there is no materialized `events` array on a live Session, so
+ * reading one finds nothing and every turn would look unrecorded.
+ *
+ * The search walks backwards from the newest event so the recorder's own "the
+ * latest announcement for one turn replaces earlier ones" rule is the loop's
+ * shape rather than a comparison a reader has to trust.
  * @param session - the remote Session's log.
  * @param turn - the summarized turn.
  * @returns the announcing sequence, or undefined when the turn recorded none.
  */
 function seqOfTurn(session: SessionLike, turn: number): number | undefined {
-  const events = session.events ?? []
+  const end = session.seq
+  if (end === undefined || typeof session.snapshotEvents !== 'function') return undefined
+  const events = session.snapshotEvents(0, end)
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
     if (event === undefined || event.type !== 'workspace/changes') continue
