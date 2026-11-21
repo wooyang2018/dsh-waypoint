@@ -60,6 +60,8 @@ export const UI_TEXT_KEYS = [
   'error.agentOutdated',
   'error.agentError',
   'error.directoryUnreadable',
+  'error.portInvalid',
+  'error.portForwardFailed',
   'error.workspaceRemoved',
   'error.agentVersionMismatch',
   'error.agentStartTimeout',
@@ -105,6 +107,8 @@ export function uiForErrorCode(code: string): UiText {
     case 'agent/unavailable': return { key: 'error.agentUnavailable' }
     case 'agent/error': return { key: 'error.agentError' }
     case 'directory/unreadable': return { key: 'error.directoryUnreadable' }
+    case 'port/invalid': return { key: 'error.portInvalid' }
+    case 'port/forward-failed': return { key: 'error.portForwardFailed' }
     default: return { key: 'error.internal' }
   }
 }

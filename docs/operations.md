@@ -139,6 +139,37 @@ Session-routing provider. This is profile-local; `app.asar` is untouched.
 The Settings page is for host/workspace management only; the remote conversation is not a drawer or
 iframe.
 
+## Preview a remote dev server
+
+The right-sidebar browser renders pages on this machine, so a remote dev server needs one loopback hop
+before it is reachable. Settings → **Remote development** → **Remote ports** owns that:
+
+1. On the remote host, start the server bound to its loopback — `npm run dev` with Vite's default is
+   already `localhost:5173`.
+2. In **Remote ports**, enter that port and press **Add port**. Leave **Local port** empty to prefer the
+   same number.
+3. Press **Open in sidebar** on the new row. The row also shows the exact URL, which can be copied.
+
+What the row's state means:
+
+| State | Meaning |
+|---|---|
+| `Published` with a green dot | The `ssh -L` child is listening; the remote service may still be starting |
+| `Not started` | The host is disconnected. Reconnecting restores the forward from the host record |
+| `Failed` with a message | That row only. A busy local port, a privileged port, or ssh refusing the `-L`; the host itself stays connected |
+
+Two limits are worth knowing before debugging:
+
+- When the two port numbers differ, the card warns: pages whose absolute URLs name the remote port will
+  not resolve. Fix the dev server's `base`/`origin`, or free the original number locally and add the
+  forward again.
+- The stock browser's iframe policy still applies. A host sending `X-Frame-Options: DENY` will not render
+  inside the sidebar; use **Open in system browser** for those.
+
+For an agent, the same three actions are `remote_port_forward`, `remote_ports_list` and
+`remote_port_forward_remove`. They are not approval-gated: a forward copies no credential. Set
+`portForwarding: false` in the plugin config to disable the feature entirely.
+
 ## Test/CI workspace visibility
 
 Test workspaces use `$DSH_HOME/waypoint/test-visibility.json` (hidden paths/ids), never a Settings

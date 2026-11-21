@@ -59,6 +59,7 @@ pinned with `remoteDshVersion`.
 | Remote file tree and file previews | Available (agent-backed over the SSH tunnel) |
 | Remote workspace search from the native file panel | Available (name or workspace-relative path) |
 | Remote terminal per Session | Available (local Sessions keep local PTY; remote Sessions use the remote agent PTY over the SSH tunnel) |
+| Remote dev servers in the right-sidebar browser | Available (loopback port forwards; see below) |
 | Agent tools for host/workspace/session operations | Available |
 | Approval prompts bridged into the local UI | Available |
 | Relay/NAT traversal, cloud sandbox, multi-tenant | Not yet |
@@ -220,11 +221,34 @@ host uses its own.
 | `remote_session_prompt` | Send a prompt |
 | `remote_session_snapshot` | Read a transcript page |
 | `remote_session_cancel` | Cancel the active turn |
+| `remote_port_forward` | Publish a remote dev-server port and return its URL |
+| `remote_ports_list` | Published ports and their URLs |
+| `remote_port_forward_remove` | Stop publishing one port |
 
 `remote_host_add`, `remote_host_connect`, `remote_host_provision`, and `remote_host_restart` ask for
 approval before they run: they may open an SSH connection, and in direct-key mode provisioning copies
 the local model key into the remote service environment. `remote_host_restart` requires the
 installer-owned systemd user unit; a `nohup` deployment uses **Reinstall** or a manual restart instead.
+
+The three `remote_port_*` tools are deliberately **not** gated: a forward copies no credential, and it
+opens nothing beyond a `127.0.0.1` listener on this machine. They exist so an agent that starts a dev
+server can hand back a link that works, instead of a `localhost` address that resolves here.
+
+### Previewing a remote dev server
+
+The right-sidebar browser renders pages on **your** machine, so `http://localhost:5173` typed into it
+looks for a server here, not on the remote host. Settings → **Remote development** → **Remote ports**
+publishes a remote loopback port on this machine's loopback:
+
+1. Start the dev server on the remote host, bound to its loopback (Vite's default `localhost:5173`).
+2. Enter that port in **Remote ports** and press **Add port**.
+3. Press **Open in sidebar**. The page loads in the Browser tab beside the conversation.
+
+The same port number is preferred, so a dev server's own absolute links keep working. When that number
+is already taken here, an ephemeral port is used instead and the card warns that absolute URLs naming the
+original port will break — serve relative paths or set the dev server's base/origin. HMR works because
+the forward carries raw TCP, WebSocket included. An explicitly chosen local port that is busy is reported
+as an error rather than silently moved.
 
 ## Requirements
 
@@ -308,6 +332,9 @@ remote model requests use it as well, not just the installer.
     mirrorSessions: true
     mirrorPollMs: 1500
     mirrorMaxEvents: 2000
+
+    # Publish remote dev-server ports on local loopback for the sidebar browser.
+    portForwarding: true
 ```
 
 The remote agent config remains available for advanced deployments:
@@ -341,6 +368,10 @@ The remote agent config remains available for advanced deployments:
 - A remote session longer than `mirrorMaxEvents` is mirrored from the first complete turn in the
   available tail; older history stays in the remote session. Increase the limit to mirror further
   back, or open the session on the remote host to read the rest.
+- A forwarded dev-server port is published at `http://127.0.0.1:<port>/`; the sidebar browser's
+  iframe policy (`X-Frame-Options`, mixed content) still applies, so a host that refuses to be
+  embedded needs its own header change or the **Open in system browser** action. When the local port
+  differs from the remote one, pages whose absolute URLs name the remote port will not resolve.
 - Windows remotes and relay/NAT traversal are not supported.
 
 ## Troubleshooting
@@ -361,6 +392,8 @@ The remote agent config remains available for advanced deployments:
 | `dsh` not found in your own shell after installing | The install log printed the `export PATH=…` line to add to your shell startup. The installer does not edit those files itself |
 | Remote DSH stopped starting after you switched Node.js versions | An nvm/Volta switch moves the npm global prefix with it, so the service's baked-in `dsh` path no longer exists. Click **Reinstall**; `dsh-waypoint-install doctor --target …` reports `global_dsh` and `login_path_has_dsh` |
 | Remote agent port jumps around or the host keeps disconnecting | Two `dsh web` processes are writing the same `agent.json`. Run one per `DSH_HOME`; `doctor` reports `dsh_web_processes` |
+| A published port says `error: local port N is already in use` | Something else on this machine holds that number. Clear the **Local port** field to let the plugin pick another one, or stop the other process |
+| The forwarded page loads but its assets 404 | The local port differs from the remote one, so absolute URLs naming the remote port do not resolve. Serve relative paths or set the dev server's base/origin, or free the remote number locally and add it again |
 
 Remote logs: `journalctl --user -u dsh-waypoint-agent -f` or `$DSH_HOME/waypoint-agent/web.log`.
 

@@ -61,9 +61,45 @@ export interface HostRecord {
    * older builds behaving exactly as they did.
    */
   readonly modelSource?: ModelSource | null
+  /**
+   * Remote loopback ports the user asked to publish on local loopback.
+   *
+   * This is the DESIRED set and it is durable, because a dev server is still at
+   * the same port after a DSH restart. `localPort` records the port actually
+   * bound, so a restart reuses it instead of landing somewhere new; `null` means
+   * "use the same number as the remote, or an ephemeral one when it is busy".
+   *
+   * Absent means none, which keeps records written by older builds loading
+   * unchanged and keeps the on-disk schema at version 1.
+   */
+  readonly forwards?: readonly PortForwardRequest[]
   readonly autoConnect: boolean
   readonly createdAt: string
   readonly updatedAt: string
+}
+
+/** One requested forward, as stored on the host record. */
+export interface PortForwardRequest {
+  readonly remotePort: number
+  /** Local loopback port to bind; `null`/absent prefers the remote number. */
+  readonly localPort?: number | null
+}
+
+/** Actual state of one requested forward. */
+export interface PortForwardRuntime {
+  readonly remotePort: number
+  /** Bound local port, or null while it is not listening. */
+  readonly localPort: number | null
+  /**
+   * `http://127.0.0.1:<localPort>/`, or null while nothing is bound.
+   *
+   * Resolved here rather than in the client so the loopback spelling lives in
+   * one place: a forward binds IPv4 only, and `localhost` resolves to `::1`
+   * first on Windows, where it would be refused.
+   */
+  readonly url: string | null
+  readonly phase: 'idle' | 'listening' | 'error'
+  readonly error: string | null
 }
 
 /** Remote DSH runtime version older than the local one. */
@@ -103,6 +139,8 @@ export interface HostRuntime {
   readonly dshUpdate: DshUpdate | null
   /** Set while an automatic reconnect is scheduled. */
   readonly retry: HostRetry | null
+  /** Bound loopback forwards, one per requested remote port. */
+  readonly forwards: readonly PortForwardRuntime[]
 }
 
 /** Browser/tool-safe host projection. */
@@ -145,6 +183,8 @@ export interface HostView {
   readonly dshUpdate: DshUpdate | null
   /** Set while an automatic reconnect is scheduled. */
   readonly retry: HostRetry | null
+  /** Bound loopback forwards, one per requested remote port. */
+  readonly forwards: readonly PortForwardRuntime[]
 }
 
 /** Input accepted by `host/add`. */
@@ -223,6 +263,7 @@ export function idleRuntime(): HostRuntime {
     modelDirect: false,
     dshUpdate: null,
     retry: null,
+    forwards: [],
   }
 }
 
@@ -254,5 +295,37 @@ export function toHostView(record: HostRecord, runtime: HostRuntime, defaultSour
     modelDirect: runtime.modelDirect,
     dshUpdate: runtime.dshUpdate,
     retry: runtime.retry,
+    forwards: runtime.forwards,
+  }
+}
+
+/**
+ * The URL a forwarded port is opened at.
+ *
+ * `127.0.0.1`, never `localhost`: the forward binds IPv4 loopback, and
+ * `localhost` resolves to `::1` first on Windows, where it would be refused.
+ */
+export function forwardUrl(localPort: number): string {
+  return `http://127.0.0.1:${String(localPort)}/`
+}
+
+/** One runtime row for a listening forward. */
+export function listeningForward(remotePort: number, localPort: number): PortForwardRuntime {
+  return { remotePort, localPort, url: forwardUrl(localPort), phase: 'listening', error: null }
+}
+
+/**
+ * One runtime row for a forward that is not bound.
+ *
+ * @param error - the reason it is not listening, or null while it is merely
+ *   waiting for a connection.
+ */
+export function idleForward(remotePort: number, error: string | null = null): PortForwardRuntime {
+  return {
+    remotePort,
+    localPort: null,
+    url: null,
+    phase: error === null ? 'idle' : 'error',
+    error,
   }
 }

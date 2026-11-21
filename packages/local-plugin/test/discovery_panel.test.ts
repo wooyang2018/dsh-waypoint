@@ -325,8 +325,9 @@ describe('SSH config discovery in the Settings panel', () => {
     const headings = renderer.root
       .findAllByType('h3')
       .map(node => node.children.map(child => String(child)).join(''))
-    // The hosts you keep come first; the scanned list is setup, not routine.
-    assert.deepEqual(headings, ['settings.hosts', 'settings.discovered.title'])
+    // The hosts you keep come first, then the ports they publish; the scanned
+    // list is setup, not routine, so it stays last.
+    assert.deepEqual(headings, ['settings.hosts', 'ports.title', 'settings.discovered.title'])
   })
 
   it('draws the row icons as SVG rather than font glyphs', async () => {

@@ -289,10 +289,32 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
   const [discovery, setDiscovery] = useState<SshDiscoveryResult | null>(null)
   const [discoveryError, setDiscoveryError] = useState<string | null>(null)
   const scanning = useRef(false)
+  /**
+   * Ports card state.
+   *
+   * `portsHost` is which connected host the card acts on: publishing a port is
+   * a per-host decision, and a single "add" box shared between hosts would
+   * publish on whichever host happened to be first in the list.
+   */
+  const [portsHost, setPortsHost] = useState<string | null>(null)
+  const [portDrafts, setPortDrafts] = useState<Record<string, { remote: string; local: string }>>({})
+  const [portsError, setPortsError] = useState<string | null>(null)
 
   useInjectedStyle(panelCss)
 
   const hosts = useMemo(() => state?.hosts ?? [], [state])
+  const connectedHosts = useMemo(() => hosts.filter(host => host.phase === 'connected'), [hosts])
+  /**
+   * The host the Ports card acts on.
+   *
+   * Falls back to the first connected host so a single-host profile needs no
+   * selection, and hides the card's body entirely when nothing is connected:
+   * publishing a port on a disconnected host cannot work.
+   */
+  const activePortsHost = useMemo(
+    () => connectedHosts.find(host => host.id === portsHost) ?? connectedHosts[0],
+    [connectedHosts, portsHost],
+  )
 
   useEffect(() => {
     if (!hosts.some(host => host.retry !== null)) return
@@ -668,6 +690,64 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
     return actions
   }
 
+  /**
+   * Publish one remote loopback port on local loopback.
+   *
+   * The panel does not decide the local port: leaving it blank asks the host to
+   * prefer the remote number and fall back to an ephemeral one, which is what
+   * keeps a dev server's own absolute links working.
+   */
+  async function addPort(host: HostView): Promise<void> {
+    const draft = portDrafts[host.id] ?? { remote: '', local: '' }
+    const remotePort = Number(draft.remote.trim())
+    if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65_535) {
+      setPortsError(t('error.portInvalid'))
+      return
+    }
+    const localText = draft.local.trim()
+    const localPort = localText === '' ? undefined : Number(localText)
+    if (localPort !== undefined && (!Number.isInteger(localPort) || localPort < 1 || localPort > 65_535)) {
+      setPortsError(t('error.portInvalid'))
+      return
+    }
+    setPortsError(null)
+    setBusy(`port-add:${host.id}`)
+    try {
+      await api.addPort(host.id, remotePort, localPort)
+      setPortDrafts(previous => ({ ...previous, [host.id]: { remote: '', local: '' } }))
+      await refresh()
+    } catch (failure) {
+      // A busy local port and a bad number are the two ordinary answers here, so
+      // the reason has to reach the card rather than disappear into the console.
+      setPortsError(localizedError(t, failure, t('error.portForwardFailed')))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function removePort(host: HostView, remotePort: number): Promise<void> {
+    setPortsError(null)
+    setBusy(`port-remove:${host.id}`)
+    try {
+      await api.removePort(host.id, remotePort)
+      await refresh()
+    } catch (failure) {
+      setPortsError(localizedError(t, failure, t('error.portForwardFailed')))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /** Copy the loadable URL without leaving the Settings page. */
+  async function copyUrl(url: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(url)
+    } catch {
+      // A browser that refuses clipboard access is not a reason to hide the
+      // address: the field shows it, so the user can select it.
+    }
+  }
+
   return (
     <div className="dshwp-root">
       <header className="dshwp-header">
@@ -1019,6 +1099,25 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
         </div>
       </section>
 
+      {/* Ports sit here, not after the discovery list: publishing a dev-server
+          port is routine, while scanning `~/.ssh/config` is setup. */}
+      <PortsCard
+        hosts={connectedHosts}
+        activeHost={activePortsHost}
+        onSelectHost={setPortsHost}
+        drafts={portDrafts}
+        onDraft={(hostId, draft) => {
+          setPortDrafts(previous => ({ ...previous, [hostId]: draft }))
+        }}
+        busy={busy}
+        error={portsError}
+        onAdd={host => { void addPort(host) }}
+        onRemove={(host, remotePort) => { void removePort(host, remotePort) }}
+        onOpen={url => { api.openForwardedUrl(url) }}
+        onCopy={url => { void copyUrl(url) }}
+        t={t}
+      />
+
       <section className="dshwp-card">
         <div className="dshwp-section-title">
           <h3>{t('settings.discovered.title')}</h3>
@@ -1078,6 +1177,167 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
       </section>
 
     </div>
+  )
+}
+
+/** Props for {@link PortsCard}. */
+interface PortsCardProps {
+  readonly hosts: readonly HostView[]
+  readonly activeHost: HostView | undefined
+  readonly onSelectHost: (hostId: string) => void
+  readonly drafts: Record<string, { remote: string; local: string }>
+  readonly onDraft: (hostId: string, draft: { remote: string; local: string }) => void
+  readonly busy: string | null
+  readonly error: string | null
+  readonly onAdd: (host: HostView) => void
+  readonly onRemove: (host: HostView, remotePort: number) => void
+  readonly onOpen: (url: string) => void
+  readonly onCopy: (url: string) => void
+  readonly t: Translate
+}
+
+/**
+ * Published remote ports: one row per requested port, plus the add form.
+ *
+ * Extracted from the panel because it reads from a different axis than the host
+ * rows do — the host list is per host, this is per port of one host — and because
+ * keeping it inline pushed the Settings render past the point where the host
+ * card's own structure was readable.
+ */
+function PortsCard(props: PortsCardProps): JSX.Element {
+  const { hosts, activeHost, onSelectHost, drafts, onDraft, busy, error, onAdd, onRemove, onOpen, onCopy, t } = props
+  const draft = (hostId: string): { remote: string; local: string } => drafts[hostId] ?? { remote: '', local: '' }
+  return (
+    <section className="dshwp-card">
+      <div className="dshwp-section-title">
+        <h3>{t('ports.title')}</h3>
+      </div>
+      <p className="dshwp-hint">{t('ports.hint')}</p>
+      {error !== null && <p className="dshwp-banner dshwp-banner-error" role="alert">{error}</p>}
+      {activeHost === undefined
+        ? <p className="dshwp-empty">{t('ports.needHost')}</p>
+        : (
+          <>
+            {hosts.length > 1 && (
+              <div className="dshwp-port-hosts" role="tablist">
+                {hosts.map(host => (
+                  <button
+                    key={host.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeHost.id === host.id}
+                    className={activeHost.id === host.id
+                      ? 'dshwp-button dshwp-button-small dshwp-button-primary'
+                      : 'dshwp-button dshwp-button-small'}
+                    onClick={() => { onSelectHost(host.id) }}
+                  >
+                    {host.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {(activeHost.forwards ?? []).length === 0
+              ? <p className="dshwp-empty">{t('ports.empty')}</p>
+              : (
+                <ul className="dshwp-ports">
+                  {(activeHost.forwards ?? []).map(forward => (
+                    <li key={forward.remotePort} className="dshwp-port-row">
+                      <span
+                        className={`dshwp-dot dshwp-dot-${forward.phase === 'listening' ? 'connected' : forward.phase === 'error' ? 'error' : 'idle'}`}
+                        aria-hidden="true"
+                      />
+                      <div className="dshwp-port-main">
+                        <code className="dshwp-port-map">
+                          {fill(t, 'ports.remoteLabel', { port: String(forward.remotePort) })}
+                          {' → '}
+                          {forward.localPort === null ? '—' : `127.0.0.1:${String(forward.localPort)}`}
+                        </code>
+                        {forward.url !== null && <code className="dshwp-port-url">{forward.url}</code>}
+                        {forward.error !== null && <span className="dshwp-port-error">{forward.error}</span>}
+                        {/* Only worth a sentence when the two numbers differ: a page
+                            whose absolute links name the remote port cannot resolve
+                            them through this forward. */}
+                        {forward.url !== null
+                          && forward.localPort !== null
+                          && forward.localPort !== forward.remotePort
+                          && (
+                            <span className="dshwp-port-warn">
+                              {fill(t, 'ports.mismatch', {
+                                local: String(forward.localPort),
+                                remote: String(forward.remotePort),
+                              })}
+                            </span>
+                          )}
+                      </div>
+                      <div className="dshwp-port-actions">
+                        {forward.url !== null && (
+                          <>
+                            <button
+                              type="button"
+                              className="dshwp-button dshwp-button-small dshwp-button-primary"
+                              onClick={() => { onOpen(forward.url as string) }}
+                            >
+                              {t('ports.open')}
+                            </button>
+                            <button
+                              type="button"
+                              className="dshwp-button dshwp-button-small"
+                              onClick={() => { onCopy(forward.url as string) }}
+                            >
+                              {t('ports.copy')}
+                            </button>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          className="dshwp-button dshwp-button-small"
+                          disabled={busy !== null}
+                          onClick={() => { onRemove(activeHost, forward.remotePort) }}
+                        >
+                          {t('ports.remove')}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            <div className="dshwp-workspace-add">
+              <input
+                value={draft(activeHost.id).remote}
+                onChange={event => {
+                  onDraft(activeHost.id, { remote: event.target.value, local: draft(activeHost.id).local })
+                }}
+                placeholder={t('ports.remotePlaceholder')}
+                inputMode="numeric"
+                spellCheck={false}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    onAdd(activeHost)
+                  }
+                }}
+              />
+              <input
+                value={draft(activeHost.id).local}
+                onChange={event => {
+                  onDraft(activeHost.id, { remote: draft(activeHost.id).remote, local: event.target.value })
+                }}
+                placeholder={t('ports.localPlaceholder')}
+                inputMode="numeric"
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                className="dshwp-button dshwp-button-small dshwp-button-primary"
+                disabled={busy !== null}
+                onClick={() => { onAdd(activeHost) }}
+              >
+                {busy === `port-add:${activeHost.id}` ? t('ports.adding') : t('ports.add')}
+              </button>
+            </div>
+          </>
+        )}
+    </section>
   )
 }
 

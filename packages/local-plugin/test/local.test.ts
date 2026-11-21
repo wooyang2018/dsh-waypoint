@@ -202,4 +202,39 @@ describe('host store', () => {
     assert.equal(raw.version, 1)
     assert.equal(raw.hosts[0].id, record.id)
   })
+
+  it('keeps requested port forwards across a reload', async () => {
+    const dir = await tempDir()
+    const store = new HostStore(join(dir, 'hosts.json'))
+    await store.add({
+      ...record,
+      forwards: [{ remotePort: 5_173 }, { remotePort: 8_080, localPort: 9_080 }],
+    })
+    const loaded = await store.load()
+    assert.deepEqual(loaded.hosts[0]?.forwards, [{ remotePort: 5_173 }, { remotePort: 8_080, localPort: 9_080 }])
+  })
+
+  it('loads a record written before port forwards existed', async () => {
+    // The field is optional precisely so the on-disk schema stays at version 1:
+    // an older registry must keep working without a migration step.
+    assert.equal(isHostRecord(record), true)
+    assert.equal('forwards' in record, false)
+  })
+
+  it('rejects malformed or duplicate forward entries', () => {
+    const withForwards = (forwards: unknown) => isHostRecord({ ...record, forwards })
+    assert.equal(withForwards([]), true)
+    assert.equal(withForwards([{ remotePort: 5_173 }]), true)
+    assert.equal(withForwards([{ remotePort: 5_173, localPort: 5_173 }]), true)
+    assert.equal(withForwards([{ remotePort: 5_173, localPort: null }]), true)
+    // A malformed entry fails the whole record: a forward that quietly changed
+    // its port would publish a different service than the one requested.
+    assert.equal(withForwards([{ remotePort: 0 }]), false)
+    assert.equal(withForwards([{ remotePort: 5_173, localPort: 80 }]), false)
+    assert.equal(withForwards([{ remotePort: 5_173 }, { remotePort: 5_173 }]), false)
+    assert.equal(withForwards([{ remotePort: 5_173, localPort: 5_173 }, { remotePort: 5_174, localPort: 5_173 }]), false)
+    assert.equal(withForwards('5173'), false)
+    assert.equal(withForwards([{ remotePort: '5173' }]), false)
+    assert.equal(withForwards(Array.from({ length: 33 }, (_, index) => ({ remotePort: 10_000 + index }))), false)
+  })
 })

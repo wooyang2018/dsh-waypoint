@@ -19,3 +19,9 @@ playwright-report/
 # Scratch files used while composing a commit message
 .git-commit-msg.txt
 .wp-*
+
+# Local dependency store used when the machine-wide pnpm store is not writable
+.pnpm-store/
+
+# Ad-hoc end-to-end scaffolding: fixtures, screenshots and captured output
+.e2e/

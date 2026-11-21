@@ -62,6 +62,8 @@ export interface Config {
   readonly modelCredentialRef?: string
   /** Mirror remote sessions into the local conversation UI. */
   readonly mirrorSessions?: boolean
+  /** Publish remote loopback ports on local loopback for the sidebar browser. */
+  readonly portForwarding?: boolean
   /** Poll interval for mirrored remote event logs. */
   readonly mirrorPollMs?: number
   /** Maximum remote events replayed when a mirror is created. */
@@ -98,6 +100,7 @@ export const Config: z<Config> = z.object({
   credentialProxyRemotePort: z.number().min(1).max(65_535).default(47_821),
   modelCredentialRef: z.string().default('DEEPSEEK_API_KEY'),
   mirrorSessions: z.boolean().default(true),
+  portForwarding: z.boolean().default(true),
   mirrorPollMs: z.number().min(500).max(30_000).default(1_500),
   mirrorMaxEvents: z.number().min(100).max(10_000).default(2_000),
 })
@@ -139,6 +142,8 @@ export interface ResolvedConfig {
   readonly credentialProxyRemotePort: number
   readonly modelCredentialRef: string
   readonly mirrorSessions: boolean
+  /** Publish remote loopback ports on local loopback for the sidebar browser. */
+  readonly portForwarding: boolean
   readonly mirrorPollMs: number
   readonly mirrorMaxEvents: number
 }
@@ -232,6 +237,7 @@ export function resolveConfig(config: Config = {}, env: NodeJS.ProcessEnv = proc
     credentialProxyRemotePort: config.credentialProxyRemotePort ?? 47_821,
     modelCredentialRef: config.modelCredentialRef ?? 'DEEPSEEK_API_KEY',
     mirrorSessions: config.mirrorSessions ?? true,
+    portForwarding: config.portForwarding ?? true,
     mirrorPollMs: config.mirrorPollMs ?? 1_500,
     mirrorMaxEvents: config.mirrorMaxEvents ?? 2_000,
   }
