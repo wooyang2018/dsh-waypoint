@@ -176,16 +176,6 @@ export const zh = {
   'dialog.readFailed': '读取目录失败',
   'dialog.nativePickerFailed': '无法打开系统目录选择器',
   'dialog.useFolder': '使用此目录',
-  'tab.title': '远端文件',
-  'tab.description': '浏览当前远程会话工作区里的文件（经 SSH 隧道读取，不落本地磁盘）。',
-  'tab.notRemote': '这个会话不是远程工作区会话。左侧列表里的「主机 · 工作区」会话才可以浏览远端文件。',
-  'tab.notRoutable': '这个远程工作区已在本地移除或失联，无法读取文件。请重新添加工作区后重试。',
-  'tab.loading': '正在读取远端目录…',
-  'tab.empty': '这个目录是空的。',
-  'tab.binary': '这是二进制文件，未预览。',
-  'tab.back': '返回目录',
-  'tab.readFailed': '读取远端目录失败',
-  'tab.truncated': '目录过大，仅显示前 2000 项。',
 } as const
 
 export type CopyKey = keyof typeof zh
@@ -356,16 +346,6 @@ export const en: Record<CopyKey, string> = {
   'dialog.readFailed': 'Could not read the folder',
   'dialog.nativePickerFailed': 'Could not open the system folder picker',
   'dialog.useFolder': 'Use folder',
-  'tab.title': 'Remote files',
-  'tab.description': 'Browse files in this remote session\'s workspace, read over the SSH tunnel with no local copy.',
-  'tab.notRemote': 'This session is not a remote workspace session. Only "host · workspace" sessions can browse remote files.',
-  'tab.notRoutable': 'This remote workspace was removed locally or is unreachable. Re-add the workspace and retry.',
-  'tab.loading': 'Reading the remote directory…',
-  'tab.empty': 'This directory is empty.',
-  'tab.binary': 'Binary file; not previewed.',
-  'tab.back': 'Back to directory',
-  'tab.readFailed': 'Could not read the remote directory',
-  'tab.truncated': 'Directory too large; showing the first 2,000 entries.',
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {

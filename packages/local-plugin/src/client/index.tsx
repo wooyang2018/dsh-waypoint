@@ -15,9 +15,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import { createHostsApi } from './api.ts'
 import { RemoteDevelopmentPanel } from './RemoteDevelopmentPanel.tsx'
-import { registerRemoteTreeTab } from './remote-tree-tab.tsx'
 import { installNativeWorkspaceRouting } from './routing.ts'
-import { installRemoteFiles } from './remote-files.ts'
 import { installModelCatalogMerge } from './model-catalog-merge.ts'
 import { NS, en, zh, type LocaleFace } from './locale.ts'
 import { installWorkspaceAddMenu } from './workspace-add.ts'
@@ -25,13 +23,6 @@ import { installWorkspaceDeleteCopy } from './workspace-delete-copy.ts'
 
 /** The Settings shell's slot registry and the authenticated connection. */
 export const inject = ['slots', 'uiWorkspace', 'uiSession', 'locale']
-
-/**
- * The remote file browser, exported so the client bundle test can render it
- * directly. The tab itself is reached through `registerRemoteTreeTab`; nothing
- * in the plugin imports this name.
- */
-export { RemoteTreeTab } from './remote-tree-tab.tsx'
 
 /** Register the Remote development settings page. */
 export function apply(ctx: Context): void {
@@ -103,17 +94,10 @@ export function apply(ctx: Context): void {
   installNativeWorkspaceRouting(ctx, api, t)
   installWorkspaceAddMenu(ctx, api, t)
   ctx.effect(() => installWorkspaceDeleteCopy(api), 'dsh-waypoint: mirrored workspace delete copy')
-  ctx.inject(['remote.workspaceFiles'], child => {
-    installRemoteFiles(child, api)
-  })
-  // Offer a remote file browser inside `dsh-better-sidebar` when that plugin is
-  // present. Its own files tab reads the Session cwd, which for a mirrored
-  // Session is the empty local anchor, so it cannot show a remote workspace;
-  // this tab asks the host API instead. The injection is conditional so a
-  // profile without that plugin keeps working unchanged.
-  ctx.inject(['betterSidebar'], child => {
-    child.effect(() => registerRemoteTreeTab(child, api, t), 'dsh-waypoint: remote files tab')
-  })
+  // No client-side workspace-files proxy: the Host's Typert Gateway resolves a
+  // Remote method with `Reflect.get(receiver, method)` on every call, so the
+  // host-side adapter in `remote/files.ts` is already what the sidebar tree and
+  // the document preview reach. See that module's header for the mechanism.
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'remote-development',
