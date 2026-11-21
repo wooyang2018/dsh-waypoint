@@ -32,8 +32,31 @@ harvested publish tokens. `npm audit` and Socket.dev do not inspect configuratio
 Edit `packages/local-plugin/package.json`, then update the pinned version quoted in `README.md`,
 `README.zh.md` and `packages/local-plugin/README.md`.
 
-`packages/remote-agent` only needs a bump when its own code changed; the plugin bundles it at
-whatever version it declares.
+`packages/remote-agent` needs a bump when its own code changed — which for a capability release means
+it does, because the plugin and the agent negotiate capabilities. When it moves, also update
+`AGENT_VERSION` in `packages/remote-agent/src/version.ts`: `package-agent.mjs` refuses to stamp a
+bundle whose constant disagrees with its manifest, so `pnpm build` fails until they match. That check
+is doing its job — an agent that misreports its own version makes `agentOutdated` useless.
+
+The CHANGELOG section heading must be exactly `## <version>`. `scripts/release-notes.mjs` matches
+`^##\s+\[?<version>\]?\s*$`, so a dated heading like `## 1.1.0 — 2026-11-21` does not match, and the
+Release workflow fails at "Extract release notes" *after* npm has already accepted an immutable
+publish.
+
+## Preflight
+
+```sh
+pnpm release:preflight
+```
+
+`pnpm release:publish` runs this itself and refuses to continue when it fails, so the standalone form
+exists for checking early — before the tag, or while a version is still unpublished.
+
+Every check corresponds to a mistake that has actually happened: an `AGENT_VERSION` that drifted from
+its manifest, a CHANGELOG heading the notes extractor cannot match, a version already on the registry,
+a tag already used, a dirty tree that a tag could not reproduce, and READMEs that do not quote the
+version. Fixing them locally costs a minute; discovering them after `npm publish` costs a version,
+because a published version cannot be replaced.
 
 ## Publish
 
@@ -56,13 +79,22 @@ Step 5 exists because of a real incident: `dsh-waypoint@1.0.0` was recorded on t
 tarball answered 404. `npm publish` exited 0, the metadata looked complete, and nobody could install
 the package.
 
-Step 5 waits up to **ten minutes**, because the registry writes metadata before the tarball is
-servable and says so — "your package is being processed and may take a few minutes". Measured on the
-1.0.1 publish, the tarball appeared about six minutes after `npm publish` returned. A shorter window
-reports a good release as broken, which is the same false alarm as 1.0.0 in the opposite direction.
+Step 5 waits up to **ten minutes** on **two separate stages**, because the registry publishes them at
+different times:
+
+1. the version appears in the packument — until then `npm view <spec> dist.tarball` exits non-zero,
+   not with an empty string;
+2. the tarball becomes servable at the URL from step 1.
+
+Retrying only the download is a bug that shipped once: a version that had not propagated yet answered
+no URL at all, the check treated that as a hard failure, and a healthy release was reported
+`NOT DOWNLOADABLE` seconds after `npm publish` exited 0 — the 1.0.0 false alarm in reverse. Measured on
+the 1.0.1 and 1.1.0 publishes, the tarball became servable about six minutes after `npm publish`
+returned. A shorter window reports a good release as broken.
 
 `pnpm release:publish:dry` shows what would be published without publishing. `--publish-only` skips
-build and pack and publishes the tarballs a previous run already produced.
+build, pack **and preflight** and publishes the tarballs a previous run already produced — that is what
+makes a half-finished run safe to re-run.
 
 ## Cut the GitHub release
 
@@ -78,6 +110,40 @@ the versioned plugin tarball, the remote agent tarball, and a **version-free `ds
 plugin-market entry links `releases/latest/download/dsh-waypoint.tgz`, and that URL resolves `latest`
 at request time but takes the file name literally — a versioned name there would 404 on the next
 release, silently.
+
+## How long a release takes, and where it goes
+
+Measured on 1.1.0, from a clean tree to a live GitHub release: **about 20 minutes of wall clock**, of
+which roughly two were actual work.
+
+| Stage | Time | Notes |
+|---|---|---|
+| `pnpm release:publish` build + pack | ~1 min | mostly `pnpm -r build` |
+| npm accepting both publishes | seconds | the upload is fast |
+| **registry propagation** | **~6–8 min** | the dominant cost, and unavoidable |
+| tag push → Release workflow | ~1 min | build, typecheck, test, upload |
+| preflight + local E2E | ~2 min | the part that prevents the rest |
+
+The propagation wait is the price of the download check, and that check exists because 1.0.0 shipped a
+version whose tarball 404'd. Do not "speed it up" by shortening the window — that reintroduces the
+false alarm. Start the publish, then do the GitHub steps only after verification passes; the tag must
+describe something already installable.
+
+What actually cost time on 1.1.0 was not the registry. Three avoidable round trips:
+
+1. **`pnpm build` failed** because `AGENT_VERSION` still said `1.0.0`. Caught in seconds — the cheap
+   case, because the build refuses to proceed.
+2. **The Release workflow failed at "Extract release notes"** because the CHANGELOG heading carried a
+   date. Build, typecheck and test had all passed, so this surfaced only after the tag was pushed and
+   npm had already published. The fix cost a tag deletion and a re-push.
+3. **`publish-local.mjs` reported a healthy release as broken** because it retried the download but not
+   the metadata lookup, then printed a message telling the operator to bump the version — advice that
+   would have burned an immutable version number for no reason. Recognising it as a false alarm
+   required reading the script rather than following its message.
+
+All three are now preflight checks or fixed code. The lesson worth keeping: **every failure discovered
+after `npm publish` is disproportionately expensive**, because the version cannot be recovered. Push
+the cheap checks as far left as they will go.
 
 ## Verify
 

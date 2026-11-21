@@ -23,7 +23,7 @@
  *
  * Usage: node scripts/publish-local.mjs [--dry-run] [--publish-only] [--otp <code>]
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -164,38 +164,64 @@ function isPublished(spec) {
  * that never arrives is the 1.0.0 failure. Retried because a fresh publish is
  * not immediately downloadable.
  *
+ * **Both stages are retried.** A version that has not propagated yet does not
+ * answer `dist.tarball` at all — `npm view` exits non-zero — so resolving the URL
+ * is part of what has to wait. Retrying only the download made this check report
+ * `NOT DOWNLOADABLE` within seconds of a successful publish, on a version that
+ * became downloadable a few minutes later: the 1.0.0 false alarm in reverse, and
+ * it fired on the 1.1.0 release.
+ *
  * @param {string} spec `name@version`
+ * @param {number} [timeoutSeconds] total budget; defaults to ten minutes.
  * @returns {Promise<boolean>}
  */
-async function tarballIsDownloadable(spec) {
-  let url
-  try {
-    url = npmQuery(['view', spec, 'dist.tarball']).trim()
-  } catch {
-    return false
-  }
-  if (url === '') return false
+async function tarballIsDownloadable(spec, timeoutSeconds = 600) {
   // The registry says "your package is being processed and may take a few
   // minutes". Measured on the 1.0.1 publish, the tarball appeared about six
   // minutes after `npm publish` exited 0 — a two-minute window reported a
   // perfectly good release as broken, which is the same false alarm in the
   // opposite direction from the 1.0.0 incident. Ten minutes with a progress
   // line is long enough to be right and short enough to notice a real failure.
-  for (let attempt = 1; attempt <= 40; attempt += 1) {
+  const startedAt = Date.now()
+  let urlSeen = false
+  for (let attempt = 1; ; attempt += 1) {
+    let url = ''
     try {
-      const response = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(30_000) })
-      if (response.ok) {
-        const bytes = (await response.arrayBuffer()).byteLength
-        if (bytes > 0) return true
-      }
+      url = npmQuery(['view', spec, 'dist.tarball']).trim()
     } catch {
-      // Treat a network error like a miss and retry: the point is the final verdict.
+      // Not propagated yet, or not published. Both are "keep waiting".
+      url = ''
+    }
+    if (url !== '') {
+      if (!urlSeen) {
+        urlSeen = true
+        process.stdout.write(`      metadata visible; waiting for the tarball itself\n`)
+      }
+      try {
+        const response = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(30_000) })
+        if (response.ok) {
+          const bytes = (await response.arrayBuffer()).byteLength
+          if (bytes > 0) return true
+        }
+      } catch {
+        // Treat a network error like a miss and retry: the point is the final verdict.
+      }
+    }
+    const elapsed = Math.round((Date.now() - startedAt) / 1000)
+    if (elapsed >= timeoutSeconds) {
+      process.stdout.write(
+        urlSeen
+          ? `      gave up after ${elapsed}s: metadata present but the tarball never served\n`
+          : `      gave up after ${elapsed}s: the version never appeared in the registry\n`,
+      )
+      return false
     }
     // Silence here looks like a hang; the operator should see it waiting.
-    if (attempt % 5 === 0) process.stdout.write(`      still not available (${attempt * 15}s)\n`)
+    if (attempt % 5 === 0) {
+      process.stdout.write(`      still not available (${elapsed}s)\n`)
+    }
     await new Promise(resolveWait => setTimeout(resolveWait, 15_000))
   }
-  return false
 }
 
 const pluginDir = join(repoRoot, 'packages', 'local-plugin')
@@ -211,6 +237,21 @@ const agent = readManifest(agentDir)
 const publishOnly = process.argv.includes('--publish-only')
 
 step('checking the working tree can produce a release')
+// Run the shared preflight rather than re-listing its checks here. It covers the
+// mistakes that have actually happened: an `AGENT_VERSION` that disagrees with
+// the manifest (build refuses to pack), a CHANGELOG heading the release-notes
+// extractor cannot match (the Release workflow fails *after* npm has already
+// accepted the publish), an already-published version, and an existing tag.
+// `--publish-only` skips it because a half-finished run is deliberately re-runnable.
+if (!publishOnly) {
+  const preflight = spawnSync(process.execPath, [join(repoRoot, 'scripts', 'release-preflight.mjs')], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  })
+  if (preflight.status !== 0) {
+    throw new Error('preflight failed; fix the checks above before publishing')
+  }
+}
 // `--release` keeps the manifest version; a dev stamp would publish a
 // prerelease and never match the tag.
 if (!existsSync(join(pluginDir, 'lib', 'index.js'))) {
