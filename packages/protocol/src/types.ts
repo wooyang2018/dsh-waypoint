@@ -35,6 +35,8 @@ export type AgentCapability =
   | 'file.watch'
   | 'file.search'
   | 'directory.list'
+  | 'git.exec'
+  | 'workspace.changes'
   | 'llm.catalog'
   | 'terminal'
 

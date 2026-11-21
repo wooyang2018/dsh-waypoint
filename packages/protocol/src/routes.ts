@@ -26,6 +26,9 @@ export const AGENT_ROUTES = {
   fileWatch: `${AGENT_API_PREFIX}/files/watch`,
   fileSearch: `${AGENT_API_PREFIX}/files/search`,
   directories: `${AGENT_API_PREFIX}/directories`,
+  gitExec: `${AGENT_API_PREFIX}/git`,
+  changesSummary: `${AGENT_API_PREFIX}/workspace-changes/summary`,
+  changesDiff: `${AGENT_API_PREFIX}/workspace-changes/diff`,
   terminals: `${AGENT_API_PREFIX}/terminals`,
   modelCatalog: `${AGENT_API_PREFIX}/llm/catalog`,
 } as const
@@ -55,6 +58,9 @@ export type AgentRoute =
   | { readonly kind: 'file-watch' }
   | { readonly kind: 'file-search' }
   | { readonly kind: 'directory-list' }
+  | { readonly kind: 'git-exec' }
+  | { readonly kind: 'changes-summary' }
+  | { readonly kind: 'changes-diff' }
   | { readonly kind: 'model-catalog' }
   | { readonly kind: 'terminals' }
   | { readonly kind: 'terminal-attach'; readonly terminalId: string }
@@ -193,6 +199,12 @@ export function matchAgentRoute(pathname: string): AgentRoute | undefined {
       return { kind: 'file-search' }
     case AGENT_ROUTES.directories:
       return { kind: 'directory-list' }
+    case AGENT_ROUTES.gitExec:
+      return { kind: 'git-exec' }
+    case AGENT_ROUTES.changesSummary:
+      return { kind: 'changes-summary' }
+    case AGENT_ROUTES.changesDiff:
+      return { kind: 'changes-diff' }
     case AGENT_ROUTES.modelCatalog:
       return { kind: 'model-catalog' }
     case AGENT_ROUTES.terminals:

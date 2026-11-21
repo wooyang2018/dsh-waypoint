@@ -28,6 +28,9 @@ export const PROTOCOL_ERROR_CODES = [
   'workspace-file/not-regular-file',
   'workspace-file/not-text',
   'directory/unreadable',
+  'git/unavailable',
+  'git/rejected',
+  'changes/unavailable',
   'terminal/unavailable',
   'terminal/error',
   'internal',
@@ -58,6 +61,7 @@ export function httpStatusForCode(code: ProtocolErrorCode): number {
       return 403
     case 'request/invalid':
     case 'session/model-unavailable':
+    case 'git/rejected':
       return 400
     case 'request/too-large':
       return 413
@@ -70,9 +74,11 @@ export function httpStatusForCode(code: ProtocolErrorCode): number {
     case 'directory/unreadable':
       return 404
     case 'session/not-live':
+    case 'changes/unavailable':
     case 'terminal/unavailable':
       return 409
     case 'agent/not-ready':
+    case 'git/unavailable':
       return 503
     case 'terminal/error':
     case 'internal':

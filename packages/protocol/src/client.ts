@@ -70,6 +70,15 @@ import type {
   RemoteTerminalInput,
   RemoteTerminalListResult,
 } from './terminal.ts'
+import type { RemoteGitRequest, RemoteGitResult } from './git.ts'
+import { isRemoteGitResult } from './git.ts'
+import type {
+  RemoteChangesDiffRequest,
+  RemoteChangesSummaryRequest,
+  RemoteWorkspaceChangesSummary,
+  RemoteWorkspaceFileDiff,
+} from './workspace-changes.ts'
+import { isRemoteChangesDiff, isRemoteChangesSummary } from './workspace-changes.ts'
 import {
   isAcceptedResult,
   isRemoteApprovalFrame,
@@ -415,6 +424,36 @@ export class RemoteAgentClient {
    */
   fileSearch(request: RemoteFileSearchRequest, signal?: AbortSignal): Promise<RemoteFileSearchResult> {
     return this.#request(AGENT_ROUTES.fileSearch, isRemoteFileSearchResult, { method: 'POST', body: request, signal })
+  }
+
+  /**
+   * Run one read-only Git command in the remote host's execution world.
+   * @param request - directory, subcommand argv, environment overlay, and bound.
+   * @param signal - cancels the round trip.
+   * @returns collected output, exit code, and the truncation flag.
+   */
+  gitExec(request: RemoteGitRequest, signal?: AbortSignal): Promise<RemoteGitResult> {
+    return this.#request(AGENT_ROUTES.gitExec, isRemoteGitResult, { method: 'POST', body: request, signal })
+  }
+
+  /**
+   * Read the change summary one remote turn announced.
+   * @param request - remote Session and the summarized turn.
+   * @param signal - cancels the round trip.
+   * @returns the summary, including the remote `cwd`.
+   */
+  changesSummary(request: RemoteChangesSummaryRequest, signal?: AbortSignal): Promise<RemoteWorkspaceChangesSummary> {
+    return this.#request(AGENT_ROUTES.changesSummary, isRemoteChangesSummary, { method: 'POST', body: request, signal })
+  }
+
+  /**
+   * Compare one listed file's turn-start and turn-end contents on the remote.
+   * @param request - remote Session, turn, and the file's index in the summary.
+   * @param signal - cancels the round trip.
+   * @returns the comparison.
+   */
+  changesDiff(request: RemoteChangesDiffRequest, signal?: AbortSignal): Promise<RemoteWorkspaceFileDiff> {
+    return this.#request(AGENT_ROUTES.changesDiff, isRemoteChangesDiff, { method: 'POST', body: request, signal })
   }
 
   /** Follow one remote file or directory watch. */

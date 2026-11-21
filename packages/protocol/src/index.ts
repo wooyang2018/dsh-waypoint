@@ -44,6 +44,18 @@ export type {
   RemoteTerminalShell,
 } from './terminal.ts'
 
+export type { RemoteGitRequest, RemoteGitResult } from './git.ts'
+export { isRemoteGitResult } from './git.ts'
+export type {
+  RemoteChangesDiffRequest,
+  RemoteChangesSummaryRequest,
+  RemoteWorkspaceChangedFile,
+  RemoteWorkspaceChangesSummary,
+  RemoteWorkspaceDiffHunk,
+  RemoteWorkspaceFileDiff,
+} from './workspace-changes.ts'
+export { isRemoteChangesDiff, isRemoteChangesSummary } from './workspace-changes.ts'
+
 export type {
   AgentCapability,
   ApiEnvelope,
