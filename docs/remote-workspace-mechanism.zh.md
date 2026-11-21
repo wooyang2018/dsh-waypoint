@@ -50,7 +50,6 @@
 | `packages/remote-agent` | 装在远端 `web` profile 里的 DSH 插件，注册 loopback HTTP/SSE 路由 | `packages/remote-agent/src/index.ts` 的 `apply` |
 | `packages/protocol` | 路由表、信封校验、SSE 解析、typed client | `src/client.ts` 的 `RemoteAgentClient` |
 | `packages/installer` | 生成并执行远端 bootstrap 脚本（scp + `bash -s`） | `src/provision.ts` 的 `provisionRemoteAgent` |
-| `packages/terminal-controller` | profile fork：按 Session 决定终端走本地还是隧道 | `src/client/routing.js` 的 `applyRouted` |
 
 本地插件的 `apply` 把所有部件按依赖顺序挂上：先建 `RemoteHostsService`（主机）与 `RemoteMirrorService`
 （镜像），再 `mirrors.start()` → `service.start()` → `mirrors.sync()`，然后才注册 `/api` 路由、文件适配器、
@@ -469,22 +468,43 @@ if (this.store[key]) throw new Error(`service "${name}" has been registered at <
 
 ### 6.3 终端
 
-终端比文件更麻烦：`ClientTerminals` 在客户端构造时就拿到了 `ctx.remote.terminal`，没有实例级替换点。
-仓库的解法是一个**构建期 fork**：`packages/terminal-controller/scripts/build.mjs` 读取被 pin 的 stock
-客户端产物，只替换模块 id 和 `apply` 函数，把 `routeTerminal` 那段拼进去，并校验产物里仍存在
-`watch(`、`boundTerminal(`、`isRepresented(` 这些 0.2.2 形态的标记——形状变了就报错要求重新推导，而不是
-静默产出错的东西（`scripts/build.mjs` 的 stock 产物校验段）。
+终端跟文件走的是同一套机制：stock `terminal-controller` 行提供 `terminalController` 服务，
+`installRemoteTerminalController`（`src/remote/terminal-controller.ts`）在**它上面按方法赋值**。Host 的
+Typert Gateway 每次调用都重新解析 Remote 方法，所以这个赋值能到达浏览器、Agent 和工具，不需要任何
+客户端代理。
 
-替换后的 provider 用一个「这个 Session 是不是镜像」的判断分流（`src/client/routing.js` 的
-`routeTerminal`）：是镜像就调 `/api/dsh-waypoint-terminal`，不是就退回原实现。Host 侧再由
-`installRemoteTerminalController` 把 gateway 的
-`environment/shells/list/create/attach/rename/close/watch/retain` 按 Session 重定向到
-`RemoteTerminals`（`src/remote/terminal-controller.ts` 的 `installRemoteTerminalController`），后者通过隧道
-的 `/terminals/*` 操作远端 PTY（`src/remote/terminal.ts` 的 `RemoteTerminals`）。远端 PTY 用 Python 标准库
-`pty` 实现（`packages/remote-agent/src/terminal.ts` 的 `PTY_HELPER`），避免依赖原生 node-pty 编译。这带来
-一个前提：远端需要有 `python3`；缺它时安装与会话都正常，只有 **New terminal** 失败。
+这一节以前描述的是一个**构建期 fork**：用正则改写 stock 客户端产物，并禁用 stock 行。它被删掉了，
+原因是 fork 要 import `@deepseek-ai/dsh-api-terminal-controller`，而 Host 只对**profile 依赖闭包内**的
+包解析这个名字，所以在真实安装里 fork 加载失败——又因为同一个 patch 禁用了 stock 行，Host 最后
+**一个终端服务都没有**。改成 patch 服务之后，既不需要 fork，也不需要那个正则，stock 行保持启用。
+
+`installRemoteTerminalController` 把 gateway 的十二个方法全部按 Session 重定向（九个走远端 PTY，三个
+按下表处理），`RemoteTerminals`（`src/remote/terminal.ts`）通过隧道的 `/terminals/*` 操作远端 PTY。
+远端 PTY 用 Python 标准库 `pty` 实现（`packages/remote-agent/src/terminal.ts` 的 `PTY_HELPER`），避免
+依赖原生 node-pty 编译。这带来一个前提：远端需要有 `python3`；缺它时安装与会话都正常，只有
+**New terminal** 失败。
 
 `retain` 特意返回一个「一直开着」的流：rc.2 的 `TerminalWindowHold` 把结束的 hold 流当成终端不可用。
+
+#### 远端答不了的三个方法
+
+Host 的 `TerminalController` 暴露十二个方法，其中九个能映射到远端 PTY 的能力
+（`environment`、`shells`、`list`、`create`、`watch`、`retain`、`attach`、`rename`、`close`）。
+剩下三个没有远端等价物，处理方式是**把缺口说出来**，而不是返回一个看起来合理、实则错误的答案：
+
+| 方法 | 镜像会话下的行为 | 原因 |
+|---|---|---|
+| `openForAgent` | 通过远端 agent 分配 PTY，并返回架在其上的 `AgentTerminal` | 在镜像工作区里干活的 Agent 不能拿到本机的 shell |
+| `readScreen` | 以 `terminal/unavailable` 拒绝 | 屏幕由 Host 本地 `@xterm/headless` 缓冲渲染，缓冲只吃 Host 自己拥有的输出；远端 PTY 的帧从不进入其中，所以原实现会返回**空页**——Agent 会把它读成「命令什么都没输出」 |
+| `inspectActivity` | 返回 `unknown` | 隧道上没有等价的前台进程探测；`unknown` 本来就在契约里，且让保留策略偏保守，而假的 `idle` 会去回收一个仍在干活的 shell |
+
+`openForAgent` 返回的 `AgentTerminal` 只接有远端含义的成员——`id`、`info`、`write`、`close`——并对
+`read`、`mark`、`signal` 做与 `readScreen` 同样的拒绝。它的 `pid` 是 `-1`，因为本地并不存在可报告的进程。
+
+`src/remote/terminal-controller.ts` 里的 `PATCHED_TERMINAL_METHODS` 是声明清单，
+`test/remote-terminal-controller.test.ts` 会把它与 Host 自己的 Remote face
+（`@deepseek-ai/dsh-api-terminal-controller/typert`）比对。某个 DSH 版本新增了终端方法时，该测试会失败，
+而不是悄悄让新方法在镜像会话里落到本机 PTY。
 
 ## 6.5 端口：让远端 dev server 可达
 
@@ -622,7 +642,7 @@ fork（§6.3 的重锤），而收益为零。
 | 本地 prompt → 远端 | `#sendPrompt`、`RemoteMirrorAgent` |
 | 远端事件 → 本地 Session | `#appendEvent`、`toSeedEvent`、`isMirrorNoise` |
 | 新增远端能力 | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
-| 文件/终端路由 | `src/remote/files.ts`、`src/remote/terminal-controller.ts`、`packages/terminal-controller/scripts/build.mjs` |
+| 文件/终端路由 | `src/remote/files.ts`、`src/remote/terminal-controller.ts` |
 | 远端 dev server 端口 | `src/ssh/forward.ts`、`src/service.ts` 的 `#syncForwards`、`src/host-api/` 的 `host/ports*` |
 | Settings 页行为 | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
 

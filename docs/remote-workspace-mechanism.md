@@ -47,7 +47,6 @@ and any gap it cannot bridge stops the mirror from following (see §5.5).
 | `packages/remote-agent` | DSH plugin installed into the remote `web` profile; registers loopback HTTP/SSE routes | `apply` in `packages/remote-agent/src/index.ts` |
 | `packages/protocol` | Route table, envelope validation, SSE parsing, typed client | `RemoteAgentClient` in `src/client.ts` |
 | `packages/installer` | Renders and runs the remote bootstrap script (scp + `bash -s`) | `provisionRemoteAgent` in `src/provision.ts` |
-| `packages/terminal-controller` | Profile fork: decides per session whether the terminal is local or tunneled | `applyRouted` in `src/client/routing.js` |
 
 The local plugin's `apply` mounts everything in dependency order: it builds `RemoteHostsService` (hosts)
 and `RemoteMirrorService` (mirror), then `mirrors.start()` → `service.start()` → `mirrors.sync()`, and
@@ -535,27 +534,49 @@ Two consequences follow, and both are real:
 
 ### 6.3 Terminals
 
-Terminals are harder than files: `ClientTerminals` receives `ctx.remote.terminal` when the client is
-constructed, and there is no per-instance replacement point. The repository's answer is a **build-time
-fork**: `packages/terminal-controller/scripts/build.mjs` reads the pinned stock client artifact,
-replaces only the module id and the `apply` function, splices the `routeTerminal` block in, and verifies
-that the artifact still contains the `watch(`, `boundTerminal(`, and `isRepresented(` markers of the
-0.2.2 shape — if the shape changed it errors and asks for a re-derivation instead of silently emitting
-something wrong (the stock-artifact check in `scripts/build.mjs`).
+Terminals use the same mechanism as files: the stock `terminal-controller` row provides the
+`terminalController` service, and `installRemoteTerminalController` (`src/remote/terminal-controller.ts`)
+assigns onto that service per method. The Host's Typert Gateway resolves a Remote method per call, so
+the assignment reaches the browser, the Agent and the tools without any client-side proxy.
 
-The replaced provider splits on an "is this session mirrored" check (`routeTerminal` in
-`src/client/routing.js`): mirrored sessions call `/api/dsh-waypoint-terminal`, everything else falls back
-to the original implementation. On the host side `installRemoteTerminalController` redirects the
-gateway's `environment/shells/list/create/attach/rename/close/watch/retain` per session to
-`RemoteTerminals` (`installRemoteTerminalController` in `src/remote/terminal-controller.ts`), which
-drives the remote PTY over the tunnel's `/terminals/*` (`RemoteTerminals` in `src/remote/terminal.ts`).
-The remote PTY is implemented with Python's standard-library `pty` (`PTY_HELPER` in
-`packages/remote-agent/src/terminal.ts`) so it does not depend on a native node-pty build. That carries a
-precondition: the remote host needs `python3`. Without it, installing and sessions still work and only
-**New terminal** fails.
+This section used to describe a **build-time fork** that rewrote the stock client artifact with a
+regex and disabled the stock row. It was removed: the fork imported `@deepseek-ai/dsh-api-terminal-controller`,
+which the Host resolves only for packages inside the profile's dependency closure, so on a real
+installation the fork failed to load — and because the same patch disabled the stock row, the Host was
+left with **no terminal service at all**. Patching the service needs neither the fork nor the regex,
+and keeps the stock row in place.
+
+`installRemoteTerminalController` redirects all twelve of the gateway's terminal methods per session
+(nine onto `RemoteTerminals`, three as described below), and `RemoteTerminals` (`src/remote/terminal.ts`)
+drives the remote PTY over the tunnel's `/terminals/*`. The remote PTY is implemented with Python's
+standard-library `pty` (`PTY_HELPER` in `packages/remote-agent/src/terminal.ts`) so it does not depend
+on a native node-pty build. That carries a precondition: the remote host needs `python3`. Without it,
+installing and sessions still work and only **New terminal** fails.
 
 `retain` deliberately returns a stream that stays open: rc.2's `TerminalWindowHold` treats a finished hold
 stream as "terminal unavailable".
+
+#### Three methods the remote cannot answer
+
+The Host's `TerminalController` exposes twelve methods; nine map onto something the remote PTY can do
+(`environment`, `shells`, `list`, `create`, `watch`, `retain`, `attach`, `rename`, `close`). The
+remaining three have no remote equivalent, and each is handled by naming the gap rather than
+returning a plausible-looking wrong answer:
+
+| Method | Mirrored behaviour | Why |
+|---|---|---|
+| `openForAgent` | Allocates the PTY through the remote agent and returns an `AgentTerminal` over it | An Agent that works in a mirrored workspace must not get a shell on the local machine |
+| `readScreen` | Refuses with `terminal/unavailable` | The screen is rendered from a local `@xterm/headless` buffer fed by output the Host owns; a remote PTY's frames never enter it, so the stock implementation would return an **empty page** — which an Agent reads as "the command printed nothing" |
+| `inspectActivity` | Returns `unknown` | No equivalent foreground probe over the tunnel; `unknown` is already in the contract and keeps retention conservative, where a false `idle` would reclaim a shell that is still working |
+
+The `AgentTerminal` returned by `openForAgent` wires the members with a remote meaning — `id`, `info`,
+`write`, `close` — and refuses `read`, `mark` and `signal` for the same reason `readScreen` does. Its
+`pid` is `-1` because no local process exists to report.
+
+`PATCHED_TERMINAL_METHODS` in `src/remote/terminal-controller.ts` is the declared list, and
+`test/remote-terminal-controller.test.ts` compares it against the Host's own Remote face
+(`@deepseek-ai/dsh-api-terminal-controller/typert`). A DSH release that adds a terminal method fails
+that test instead of quietly serving the new method from the local PTY.
 
 ## 6.5 Ports: making a remote dev server reachable
 
@@ -711,7 +732,7 @@ the provisioning flow directly (the remote process has to restart with the new e
 | Local prompt → remote | `#sendPrompt`, `RemoteMirrorAgent` |
 | Remote events → local session | `#appendEvent`, `toSeedEvent`, `isMirrorNoise` |
 | Adding a remote capability | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
-| File/terminal routing | `src/remote/files.ts`, `src/remote/terminal-controller.ts`, `packages/terminal-controller/scripts/build.mjs` |
+| File/terminal routing | `src/remote/files.ts`, `src/remote/terminal-controller.ts` |
 | Remote dev-server ports | `src/ssh/forward.ts`, `#syncForwards` in `src/service.ts`, `host/ports*` in `src/host-api/` |
 | Settings page behaviour | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
 

@@ -3,13 +3,12 @@
 # One row owns the host registry, SSH tunnels, plugin-owned remote
 # provisioning, the local model credential proxy, and the authenticated host
 # API. Its browser half registers the Settings page and remote chat drawer.
-# The terminal-controller fork is bundled with this package; this patch disables
-# the stock row and mounts the fork so mirrored Sessions use SSH PTYs.
-- id: terminal-controller
-  disabled: true
+#
+# The stock terminal-controller row is left alone: it provides the
+# `terminalController` service, and this plugin routes that service's methods per
+# Session instead of replacing it. Disabling it here while a bundled fork failed
+# to load left the Host with no terminal service at all.
 - insert:
-    - id: terminal-controller-waypoint
-      name: dsh-waypoint-terminal-controller
     - id: dsh-waypoint
       name: dsh-waypoint
       config:

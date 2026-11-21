@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { chromium, type Browser, type Page } from '@playwright/test'
 import { startFakeHost, type FakeRemoteHost } from '@dsh-waypoint/testkit'
-import { pnpmInvocation } from '../../scripts/package-manager.mjs'
 import { toLaunch } from './dsh-launch.ts'
 
 const ROOT = resolve(import.meta.dirname, '../..')
@@ -197,16 +196,6 @@ export async function startE2EHost(options: E2EHostOptions = {}): Promise<E2EHos
   installPlugin('web', options.pluginSpec ?? PLUGIN_TARBALL, home)
   installPlugin('web', `@deepseek-ai/dsh-workspace@${DSH_VERSION}`, home)
   installPlugin('web', `@deepseek-ai/dsh-api-terminal-controller@${DSH_VERSION}`, home)
-  // `pnpm` on PATH is a `.cmd` shim on Windows, which child_process cannot
-  // spawn; `scripts/package-manager.mjs` already resolves the real entry point
-  // next to the running Node, and the same helper keeps this honest on POSIX.
-  const pnpm = pnpmInvocation()
-  execFileSync(pnpm.command, [...pnpm.prefixArgs, 'add', join(ROOT, 'packages/terminal-controller')], {
-    cwd: join(home, 'profiles', 'web'),
-    env: { ...process.env, DSH_HOME: home },
-    stdio: 'pipe',
-    timeout: 180_000,
-  })
   mkdirSync(join(home, 'waypoint'), { recursive: true })
   writeFileSync(join(home, 'waypoint', 'hosts.json'), JSON.stringify({
     version: 1,

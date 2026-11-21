@@ -76,8 +76,7 @@ Open **Plugins → Add plugin** and enter:
 dsh-waypoint
 ```
 
-The package is published on [npm](https://www.npmjs.com/package/dsh-waypoint); DSH installs the bundle from the registry. The package includes the remote agent asset and the
-terminal-controller fork, so there is nothing else to install. Restart DSH when the plugin page asks
+The package is published on [npm](https://www.npmjs.com/package/dsh-waypoint); DSH installs the bundle from the registry. The package includes the remote agent asset, so there is nothing else to install. Restart DSH when the plugin page asks
 for it; **Settings → Remote development** then appears.
 
 If npmjs.com still resolves an older `latest` tag for a newly published release, install the exact
@@ -100,8 +99,8 @@ pnpm -r build
 ./scripts/install-local.sh
 ```
 
-The script builds the workspace, creates a single plugin tarball containing the terminal-controller
-fork, and installs that tarball into the `desktop` profile. For a DSH Web profile:
+The script builds the workspace, creates a single plugin tarball, and installs that tarball into the
+`desktop` profile. For a DSH Web profile:
 
 ```sh
 ./scripts/install-local.sh --profile web
@@ -386,7 +385,7 @@ The remote agent config remains available for advanced deployments:
 | `DeepSeek Messages request failed (404)` | Proxy upstream must be `https://api.deepseek.com/anthropic`; the fixed proxy joins/preserves the provider prefix. Reinstall the local plugin and reconnect |
 | Approval appears locally but remote tool still fails | The local decision was sent; check the remote tool result |
 | Local terminal opens local shell | Expected for local Sessions; remote Sessions use `Remote · <dir>` terminals |
-| Remote terminal opens local zsh | The terminal-controller fork is not active; run `./scripts/install-local.sh` again |
+| Remote terminal opens local zsh | The stock terminal-controller row is disabled by another patch, so no terminal service is provided; remove that disable |
 | Port changed after remote restart | The tunnel drops and the plugin reconnects, which re-runs discovery; **Restart remote DSH** or **Reinstall remote agent** does it on demand |
 | Install fails while reporting the npm global prefix | npm cannot write `<prefix>/lib/node_modules` or `<prefix>/bin` for this account, or `npm prefix -g` printed nothing. Point `remoteGlobalPrefix` at a directory you own (for example `~/npm-global`) and retry |
 | `dsh` not found in your own shell after installing | The install log printed the `export PATH=…` line to add to your shell startup. The installer does not edit those files itself |
@@ -453,7 +452,6 @@ then follow `docs/operations.md` for moving the host registry and cleaning up th
 | [`@dsh-waypoint/protocol`](packages/protocol) | Wire types, surface metadata, cursor, SSE, typed client |
 | [`dsh-waypoint`](packages/local-plugin) | Provisioning, tunnel, proxy, **native session mirror**, tools, Settings |
 | [`dsh-waypoint-agent`](packages/remote-agent) | Remote host plugin for workspaces, sessions, prompts, SSE |
-| [`dsh-waypoint-terminal-controller`](packages/terminal-controller) | Profile fork routing local vs mirrored terminals |
 | [`@dsh-waypoint/installer`](packages/installer) | Bootstrap library/CLI used by the plugin |
 | [`@dsh-waypoint/testkit`](packages/testkit) | Fake host and wire contract tests |
 

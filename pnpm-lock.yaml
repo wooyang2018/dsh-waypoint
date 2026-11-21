@@ -248,9 +248,6 @@ importers:
       dsh-waypoint-agent:
         specifier: workspace:*
         version: link:../remote-agent
-      dsh-waypoint-terminal-controller:
-        specifier: workspace:*
-        version: link:../terminal-controller
 
   packages/protocol: {}
 
@@ -284,12 +281,6 @@ importers:
       '@dsh-waypoint/protocol':
         specifier: workspace:*
         version: link:../protocol
-
-  packages/terminal-controller:
-    devDependencies:
-      '@deepseek-ai/dsh-api-terminal-controller':
-        specifier: 0.2.2-rc.3
-        version: 0.2.2-rc.3(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-subprocess@0.2.2-rc.3(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-error@0.2.2-rc.3(@deepseek-ai/cordis@4.1.0))(@deepseek-ai/dsh-http-proxy@0.2.2-rc.3(@deepseek-ai/cordis@4.1.0)))
 
   packages/testkit:
     devDependencies:

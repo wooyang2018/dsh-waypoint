@@ -21,9 +21,9 @@ For a DSH Web profile:
 # restart the DSH Web process after the script finishes
 ```
 
-The script installs dependencies, builds all packages, packs the remote agent into the local plugin,
-packs the terminal-controller fork, and adds both to the chosen profile. The desktop app may stay
-running during installation; restart it afterwards to load the new bundles.
+The script installs dependencies, builds all packages, packs the remote agent into the local plugin, and
+adds the result to the chosen profile. The desktop app may stay running during installation; restart it
+afterwards to load the new bundles.
 
 ## 2. Add a host
 
@@ -41,6 +41,24 @@ The plugin:
 
 Both npm installs run on every provisioning, so the remote `dsh` is always the version this run asked
 for. The prefix is never relocated: if npm cannot write it, the install fails with npm's own error.
+
+`pnpm` is the exception, because a Node.js distribution often owns that name already. `corepack`
+ships with Node.js and installs `bin/pnpm` as a **symlink** into its own dispatcher; `npm install
+--global` then refuses to replace the link (`EEXIST`). Two things are unacceptable here — deleting
+the link, which silently takes corepack away from every other project in the account, and reporting
+`install/pnpm-missing` with only "run `rm -f`" as the fix. Provisioning therefore resolves pnpm in
+three steps and only falls back to the failing install when nothing else answers:
+
+1. `<prefix>/bin/pnpm` is a **regular file** — an earlier install put a real pnpm there. Use it.
+2. `<prefix>/bin/pnpm` is a **symlink** and `corepack` is on `PATH` — run
+   `corepack prepare pnpm@<remotePnpmVersion> --activate`, which fills corepack's own cache, and use
+   `corepack pnpm`. The link stays exactly as it was.
+3. Neither — install pnpm into the prefix as before. This is the only case that can fail with
+   `EEXIST`, and its message now names both recoveries.
+
+`corepack prepare` needs to reach a registry. On a host without one the step fails and provisioning
+continues to step 3, so an air-gapped install still has a path — it just has to supply pnpm itself,
+via the prefix or `remoteGlobalPrefix`.
 
 Node.js is resolved through the account's own shell, not the bare SSH command. Version managers
 (nvm, fnm, Volta) prepend their bin directory from a startup file that only logged-in/interactive
@@ -132,9 +150,9 @@ The **Workspace files** and **New terminal** panels are Session-scoped:
 - local Session: stock local workspace files and local PTY;
 - remote mirror Session: agent-backed remote file listing/preview and an agent PTY in the remote workspace, both over the existing SSH tunnel. Older agents must be reinstalled; file/terminal actions fail with a Reinstall instruction rather than opening extra SSH connections.
 
-The install script also installs the `dsh-waypoint-terminal-controller` profile fork. It disables the
-stock terminal-controller row and inserts the fork so `ClientTerminals` is constructed with the
-Session-routing provider. This is profile-local; `app.asar` is untouched.
+The install script adds no profile row and replaces none: the stock `terminal-controller` row keeps
+providing the terminal service, and the plugin patches that service per Session. This is profile-local;
+`app.asar` is untouched.
 
 The Settings page is for host/workspace management only; the remote conversation is not a drawer or
 iframe.

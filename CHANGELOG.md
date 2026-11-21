@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+### Added
+
 A mirrored workspace now answers the two native review surfaces, with no UI change.
 
 - **Forge panel — Local changes.** The panel runs every Git query through `ctx.subprocess` and reads
@@ -20,6 +22,35 @@ A mirrored workspace now answers the two native review surfaces, with no UI chan
 - Summaries are not persisted. Cross-restart behaviour matches the local experience exactly, except
   that a local restart while the remote DSH still runs keeps its change cards — a case the local
   workspace cannot offer.
+
+### Fixed
+
+- **Remote terminals work again.** The bundle disabled the stock `terminal-controller` row and mounted a
+  bundled fork in its place, but the fork imported `@deepseek-ai/dsh-api-terminal-controller`, a name the
+  Host only resolves for packages inside the profile's dependency closure. On a real installation the
+  fork failed to load, and because the stock row was disabled nothing provided the `terminalController`
+  service at all — so every terminal method was absent, not merely routed to the wrong machine. The
+  support rows are gone and the stock row is left enabled: terminals are routed by patching that service
+  per method, which is the same mechanism the file tree already uses. This also removes the build step
+  that rewrote DSH's minified client artifact with a regex — the most fragile coupling in the repository
+  and the one most likely to break on a DSH upgrade.
+- **The terminal patch covers every method the Host exposes.** `openForAgent`, `readScreen` and
+  `inspectActivity` were left to the stock implementation, so an Agent working in a mirrored
+  workspace would open a terminal on the *local* machine, and read its screen from the local
+  emulator. `openForAgent` now allocates through the remote agent, `inspectActivity` answers
+  `unknown` (which the contract allows), and the two screen readers refuse with
+  `terminal/unavailable` rather than returning an empty page an Agent would read as "no output".
+  A test compares the installer's method list against the Host's own Remote face, so a DSH release
+  that adds a terminal method fails in CI instead of silently serving it locally.
+- **Provisioning no longer fails on a host whose `pnpm` is a corepack shim.** A Node.js distribution
+  puts `bin/pnpm` in place as a symlink into corepack, and `npm install --global --prefix <prefix>
+  pnpm@X` refuses to replace it (`EEXIST`), which surfaced as `install/pnpm-missing` and told the
+  operator to delete the link. Deleting it takes corepack away from every other project in the
+  account, so the installer now prepares the pinned version through `corepack prepare --activate`
+  and leaves the link untouched. A pnpm already installed in the prefix is still preferred — npm
+  installs it as a symlink too, so the check is where the link resolves, not whether one exists.
+  A host with neither still installs one; the failure message now names both recoveries instead of
+  only the destructive one.
 
 ## 1.0.1
 
