@@ -653,11 +653,14 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
         run: () => { void run(`upgrade:${host.id}`, async () => { await api.upgrade(host.id) }) },
       })
     }
+    // Restart starts the second group but deliberately carries no divider: it
+    // is a routine, reversible action, and a rule directly above the first
+    // entry read as a stray line at the top of the menu. Only "Remove" below is
+    // separated, because that one is destructive.
     actions.push(
       {
         id: 'restart',
         label: t('settings.restart'),
-        separated: true,
         disabled: busyNow || host.phase === 'installing',
         run: () => { void run(`restart:${host.id}`, async () => { await api.restart(host.id) }) },
       },
