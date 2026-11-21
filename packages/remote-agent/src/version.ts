@@ -7,7 +7,7 @@
 import { createRequire } from 'node:module'
 
 /** Keep in sync with package.json; a unit test enforces it. */
-export const AGENT_VERSION = '1.0.0'
+export const AGENT_VERSION = '1.1.0'
 
 /** Resolve the DSH runtime version without failing plugin startup. */
 export function resolveDshVersion(): string {

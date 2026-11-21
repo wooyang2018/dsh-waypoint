@@ -1,6 +1,6 @@
 {
   "name": "dsh-waypoint",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "DSH remote-development local plugin: host registry, SSH tunnels, remote workspace/session discovery, an authenticated Connection RPC surface, agent tools, and a Settings page.",
   "keywords": [
     "dsh",

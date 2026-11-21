@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 — 2026-11-21
 
 ### Added
 
@@ -22,6 +22,35 @@ A mirrored workspace now answers the two native review surfaces, with no UI chan
 - Summaries are not persisted. Cross-restart behaviour matches the local experience exactly, except
   that a local restart while the remote DSH still runs keeps its change cards — a case the local
   workspace cannot offer.
+- Open a remote dev server in the right-sidebar browser. The native browser renders pages on this
+  machine, so `http://localhost:5173` typed there reaches a server here, not on the remote host — and
+  unlike files and terminals there is no Host service to shadow, because
+  `dsh-client-ui-sidebar-browser` has an empty Host half and navigates with the client's own `loadURL`.
+  Settings → **Remote ports** now publishes a remote loopback port on this machine's loopback through the
+  existing SSH transport (`ssh -N -L 127.0.0.1:<local>:127.0.0.1:<remote>`), so the unmodified browser
+  loads the remote page. The same port number is preferred, which is what keeps a dev server's own
+  absolute links working; when that number is taken locally an ephemeral port is used and the card warns,
+  while an explicitly requested busy port is reported as an error rather than silently moved. The forward
+  is raw TCP, so WebSocket and HMR work, and it rides its own ssh child so adding a port never restarts
+  the agent tunnel the session mirror follows. Desired ports persist on the host record and are restored
+  on reconnect; a failed forward turns only its own row into `error` and leaves the host connected.
+  `remote_port_forward`, `remote_ports_list` and `remote_port_forward_remove` expose the same three
+  actions to an agent — ungated, because a forward copies no credential. Disable with
+  `portForwarding: false`.
+- Search a remote workspace from the native file panel. `POST /files/search` joins the agent's file
+  surface (`file.search` capability) and the host-side adapter, so the panel's search box answers from
+  the remote tree instead of the empty local anchor. Matching follows the Host's own rules — a query
+  without `/` matches an entry name at any depth, one with `/` matches a workspace-relative path — and
+  the result keeps `truncated` and `incomplete` separate, because a walk stopped by its budgets must
+  not be presented as "no results". The walk never follows a symlink and never leaves its root.
+- Report a broken file-routing contract instead of showing an empty tree. The install step compares the
+  live `workspaceFiles` service against the methods the adapter replaces, names any that are missing in
+  the log, and exposes `fileRouting` in the state the Settings page reads. The adapter also now returns
+  a restorer that runs inside `ctx.effect`, deleting only the own properties it created.
+- Drop the `dsh-better-sidebar` integration. The native **Workspace files** panel already browses a
+  remote workspace without it, so the extra tab, its stylesheet, its glyph map, its tests and its copy
+  were dead weight in any profile that did not install that plugin.
+
 
 ### Fixed
 
@@ -52,6 +81,7 @@ A mirrored workspace now answers the two native review surfaces, with no UI chan
   A host with neither still installs one; the failure message now names both recoveries instead of
   only the destructive one.
 
+
 ## 1.0.1
 
 Re-publish of 1.0.0 with a tarball that actually exists.
@@ -65,6 +95,23 @@ Publishing runs on a maintainer's machine with `pnpm release:publish`, which bui
 dependency-first, and **downloads every published tarball before reporting success** — the check that
 would have caught 1.0.0. The `Release` workflow builds and attaches the GitHub release assets and does
 not touch npm.
+
+- Offer a deliberate **install remote Node.js** action instead of dead-ending on a missing runtime.
+  Provisioning still never installs one (`exit 21`/`exit 22`), but the expanded host card now probes
+  the remote first and then, on confirmation, installs nvm `v0.40.1` and the latest Node.js LTS
+  (`nvm install --lts`). nvm's installer runs with `PROFILE=/dev/null`, so no shell startup file is
+  modified; the card prints the snippet to add yourself. The finished panel offers **Reinstall**
+  because the running DSH keeps its old runtime until provisioning reruns. The action never rewrites
+  your `nvm alias default`, so the Node.js your own shells use is untouched; DSH resolves `lts/*`
+  directly. Verified end to end on a real host: from no nvm and no Node.js, and on a host where a
+  newer LTS already satisfied the minimum (nothing changed).
+- Stop retrying failures a retry cannot fix. A host with no Node.js, an outdated one, no npm, or a
+  profile that refuses migration is recorded as blocked: reconnecting no longer re-uploads the agent
+  and reruns the bootstrap every 30 seconds, the card keeps the real cause instead of a later
+  timeout, and the "retrying, attempt N" line stops growing. Transient failures still retry, now
+  bounded by the new `provisionRetryLimit` (default 3). **Reinstall** clears the block.
+- Prefer the nvm Node.js over an older system one during provisioning, so reinstalling after an
+  install actually switches the runtime instead of silently reusing the old `node`.
 
 ## 1.0.0
 
@@ -100,57 +147,6 @@ Everyone else keeps their state: an install of this version starts from an empty
 
 Previously, in the 0.8.x line:
 
-## Unreleased
-
-- Open a remote dev server in the right-sidebar browser. The native browser renders pages on this
-  machine, so `http://localhost:5173` typed there reaches a server here, not on the remote host — and
-  unlike files and terminals there is no Host service to shadow, because
-  `dsh-client-ui-sidebar-browser` has an empty Host half and navigates with the client's own `loadURL`.
-  Settings → **Remote ports** now publishes a remote loopback port on this machine's loopback through the
-  existing SSH transport (`ssh -N -L 127.0.0.1:<local>:127.0.0.1:<remote>`), so the unmodified browser
-  loads the remote page. The same port number is preferred, which is what keeps a dev server's own
-  absolute links working; when that number is taken locally an ephemeral port is used and the card warns,
-  while an explicitly requested busy port is reported as an error rather than silently moved. The forward
-  is raw TCP, so WebSocket and HMR work, and it rides its own ssh child so adding a port never restarts
-  the agent tunnel the session mirror follows. Desired ports persist on the host record and are restored
-  on reconnect; a failed forward turns only its own row into `error` and leaves the host connected.
-  `remote_port_forward`, `remote_ports_list` and `remote_port_forward_remove` expose the same three
-  actions to an agent — ungated, because a forward copies no credential. Disable with
-  `portForwarding: false`.
-- Search a remote workspace from the native file panel. `POST /files/search` joins the agent's file
-  surface (`file.search` capability) and the host-side adapter, so the panel's search box answers from
-  the remote tree instead of the empty local anchor. Matching follows the Host's own rules — a query
-  without `/` matches an entry name at any depth, one with `/` matches a workspace-relative path — and
-  the result keeps `truncated` and `incomplete` separate, because a walk stopped by its budgets must
-  not be presented as "no results". The walk never follows a symlink and never leaves its root.
-- Remove the browser-side `workspaceFiles` proxy. It rested on a false premise: that the Host binds
-  generated Remote methods once at mount time. The Typert Gateway resolves them per call with
-  `Reflect.get(receiver, method)`, so the host-side adapter alone reaches every caller. Dropping the
-  proxy also fixes a real defect — it forwarded the wire JSON, handing `readBytes` callers a base64
-  string where `WorkspaceFileBytes.data` is a `Uint8Array`.
-- Report a broken file-routing contract instead of showing an empty tree. The install step compares the
-  live `workspaceFiles` service against the methods the adapter replaces, names any that are missing in
-  the log, and exposes `fileRouting` in the state the Settings page reads. The adapter also now returns
-  a restorer that runs inside `ctx.effect`, deleting only the own properties it created.
-- Drop the `dsh-better-sidebar` integration. The native **Workspace files** panel already browses a
-  remote workspace without it, so the extra tab, its stylesheet, its glyph map, its tests and its copy
-  were dead weight in any profile that did not install that plugin.
-- Offer a deliberate **install remote Node.js** action instead of dead-ending on a missing runtime.
-  Provisioning still never installs one (`exit 21`/`exit 22`), but the expanded host card now probes
-  the remote first and then, on confirmation, installs nvm `v0.40.1` and the latest Node.js LTS
-  (`nvm install --lts`). nvm's installer runs with `PROFILE=/dev/null`, so no shell startup file is
-  modified; the card prints the snippet to add yourself. The finished panel offers **Reinstall**
-  because the running DSH keeps its old runtime until provisioning reruns. The action never rewrites
-  your `nvm alias default`, so the Node.js your own shells use is untouched; DSH resolves `lts/*`
-  directly. Verified end to end on a real host: from no nvm and no Node.js, and on a host where a
-  newer LTS already satisfied the minimum (nothing changed).
-- Stop retrying failures a retry cannot fix. A host with no Node.js, an outdated one, no npm, or a
-  profile that refuses migration is recorded as blocked: reconnecting no longer re-uploads the agent
-  and reruns the bootstrap every 30 seconds, the card keeps the real cause instead of a later
-  timeout, and the "retrying, attempt N" line stops growing. Transient failures still retry, now
-  bounded by the new `provisionRetryLimit` (default 3). **Reinstall** clears the block.
-- Prefer the nvm Node.js over an older system one during provisioning, so reinstalling after an
-  install actually switches the runtime instead of silently reusing the old `node`.
 - One source of truth for the minimum Node.js version and the shell check that enforces it
   (`node-runtime.ts`), so the bootstrap, `doctor`, and the localized message cannot disagree.
 - Fix the documentation, which claimed in one place that the installer downloads a Node.js tarball
@@ -171,10 +167,6 @@ Previously, in the 0.8.x line:
   `checkJs` over the directory, `scripts/*.test.mjs` cover the package-manager resolver and the
   development-version shape, and CI now runs the root `pnpm typecheck`/`pnpm test` — the previous
   `pnpm -r` form skips the root package, so none of this ran there.
-- Stop `install-local.sh` from attempting the reserved `desktop` profile through a launcher that cannot
-  manage it, and drop a pinned `dsh-client-ui-sidebar@0.2.2-rc.2` install from `test-sandbox.sh`: the
-  `dsh-web-app` bundle already depends on that package at the profile's own version.
-
 - Stamp local plugin builds with a unique `<version>-dev-<timestamp>` prerelease.
   A package manager keys an install on the dependency version and the recorded
   tarball integrity, so rebuilding at a constant version and path left the
@@ -182,25 +174,6 @@ Previously, in the 0.8.x line:
   while still running the previous code. `scripts/release-plugin.mjs --release`
   keeps the manifest version for publishing, and development builds now delete
   each other instead of accumulating.
-- Stamp the packed remote agent with a unique prerelease version by default, in
-  the manifest and in the bundle's `AGENT_VERSION` together, so the runtime
-  reports the version it actually ships. `--release` keeps the manifest version.
-- Align the remote agent on connect instead of only flagging it. A connected
-  host whose agent version differs from the bundled one is now re-provisioned
-  automatically; previously only an *older* agent was marked in the UI, so a
-  bundle that changed behaviour without a version bump was never corrected.
-- Stop calling `dsh plugin remove` during provisioning. On a profile with many
-  plugins it rewrote the manifest and then hung inside pnpm for minutes with no
-  output, leaving `package.json` half-written. Re-adding a different spec
-  replaces the dependency without it.
-- Install only the uploaded agent tarball on the remote, never a registry
-  package. `dsh plugin add <version>` resolves against the version recorded in
-  the remote profile, so when the published `0.2.12` differed from the local
-  build while keeping the same version number, the profile already satisfied the
-  request: nothing was replaced, and a stale `cordis.patch.yml` kept disabling
-  `dsh-api-remotes`, so the remote Web UI booted with `Failed to load plugins`
-  while every install log reported success. The timestamped upload path makes
-  each run's spec distinct, so the dependency really is replaced.
 - Install the remote `dsh` and `pnpm` into the npm global prefix instead of a
   private `$remoteInstallDir/node_modules`, so the `dsh` the plugin starts and
   the `dsh` an operator types are one file at one version. The prefix is
@@ -211,55 +184,8 @@ Previously, in the 0.8.x line:
   that is not on the login shell's `PATH` gets one printed `export PATH=…` line
   — no shell startup file is edited. An existing global `dsh` at the prefix is
   replaced with the requested version.
-- Resolve Node.js through the account's own shell before choosing that prefix.
-  A non-interactive SSH command does not read the startup files that nvm, fnm
-  and Volta use, so a host with both a system Node.js and a version-managed one
-  had the installer pick the system Node and compute a system-wide prefix —
-  installing `dsh` where the operator's shell would never find it. The login
-  shell is now asked first (login + interactive, falling back to login only), so
-  `npm prefix -g` answers what the operator actually sees.
-- Stop installing Node.js on the remote. It is now detected through the
-  account's own shell (nvm/fnm/Volta included) and only verified; a missing or
-  too-old runtime fails provisioning with an explicit message. Downloading a
-  runtime silently picked a version the operator never chose, and left a second
-  Node.js on hosts that already had one. `remoteNodeVersion`,
-  `autoInstallNode`, and `remoteInstallDir` are removed with it.
 - Report the remote DSH version from the installer (`DSH_WAYPOINT_DSH_VERSION`),
   so "Update remote DSH" compares real versions instead of `unknown`.
-- `dsh-waypoint-install doctor` reports the npm global prefix it would use, which
-  of npm's two write targets are usable (`lib/node_modules` and `bin`), the
-  `dsh` version that prefix yields, whether the login shell can find that
-  command, and how many `dsh web` processes are running (two for one `DSH_HOME`
-  overwrite each other's state file).
-- Default `dsh-waypoint-install --dsh-version` to `0.2.2-rc.3`, matching the
-  tested desktop and remote runtime.
-- Move the committed dependency baseline to DSH `0.2.2-rc.3`: every
-  `overrides` and `minimumReleaseAgeExclude` entry in `pnpm-workspace.yaml`, plus
-  the regenerated `pnpm-lock.yaml`, so a fresh clone installs the same release
-  CI tests instead of the previous one. The `engines.dsh` range already covered
-  rc.3 and is unchanged.
-- Run CI against `0.2.2-rc.3` instead of the stale `0.2.2-rc.2` baseline: one
-  `verify` job installs the committed lockfile, re-pins every installed DSH
-  package and peer to the workflow's `DSH_TARGET` with
-  `scripts/select_dsh_version.mjs`, asserts the resolved version, and then
-  builds, typechecks, tests, and packages. Bumping a DSH release means changing
-  that one value. The run uploads both installable tarballs, the plugin bundle
-  and the standalone remote agent, as a `dsh-waypoint-<DSH_TARGET>` artifact.
-- Rebuild the Settings panel as a host list instead of nested cards. Each
-  machine is one summary row with its details behind it, the rare and
-  destructive actions move into an overflow menu, and every colour now comes
-  from the Harness design tokens so the panel follows the active theme.
-- Merge the aliases of one `Host` line into a single entry. A config such as
-  `Host devcloud_64g_alice cloud64` used to appear twice, because grouping
-  compared alias text; it now groups on the resolved target, shows the longest
-  alias as the name, and tags the rest. A machine already registered under a
-  sibling alias is no longer offered again.
-- Choose the model-key source per host in Settings: `proxy` keeps the local
-  `DEEPSEEK_API_KEY` on this machine and routes model requests back over the
-  tunnel, `direct` lets the remote call the provider with its own key. The
-  profile-wide `credentialProxy` setting now only seeds hosts that never chose,
-  so existing hosts keep their behaviour.
-
 - Offer the remote host's models in the model menu for mirrored Sessions, by
   merging them into the shared per-Session model directory. Every selector
   reads that directory, so the rows appear for the native composer seat and for
@@ -278,9 +204,6 @@ Previously, in the 0.8.x line:
   the existing bridge, and a Session that is not a mirror keeps exactly the
   Host's own list.
 
-- Add an "Open remote Web UI" action to each connected host in Settings, so the
-  remote DSH Web UI (for installing remote plugins and similar) opens in a
-  browser tab already signed in through the SSH tunnel.
 - Serve the remote host's model catalog over `llm.catalog` and show it in
   Settings. A mirrored Session now checks a model selection against that
   catalog before sending, so a selection the remote cannot route to no longer
@@ -292,6 +215,7 @@ Previously, in the 0.8.x line:
   remembers it so later messages skip the failing round trip.
 - Add `session/model-unavailable` to the protocol error taxonomy (HTTP 400,
   not retryable).
+
 
 ## 0.8.21
 
@@ -609,3 +533,84 @@ Previously, in the 0.8.x line:
 ## 0.7.11
 
 - Add unified workspace creation and remote directory browsing.
+
+- Default `dsh-waypoint-install --dsh-version` to `0.2.2-rc.3`, matching the
+  tested desktop and remote runtime.
+- Move the committed dependency baseline to DSH `0.2.2-rc.3`: every
+  `overrides` and `minimumReleaseAgeExclude` entry in `pnpm-workspace.yaml`, plus
+  the regenerated `pnpm-lock.yaml`, so a fresh clone installs the same release
+  CI tests instead of the previous one. The `engines.dsh` range already covered
+  rc.3 and is unchanged.
+- Run CI against `0.2.2-rc.3` instead of the stale `0.2.2-rc.2` baseline: one
+  `verify` job installs the committed lockfile, re-pins every installed DSH
+  package and peer to the workflow's `DSH_TARGET` with
+  `scripts/select_dsh_version.mjs`, asserts the resolved version, and then
+  builds, typechecks, tests, and packages. Bumping a DSH release means changing
+  that one value. The run uploads both installable tarballs, the plugin bundle
+  and the standalone remote agent, as a `dsh-waypoint-<DSH_TARGET>` artifact.
+
+- Align the remote agent on connect instead of only flagging it. A connected
+  host whose agent version differs from the bundled one is now re-provisioned
+  automatically; previously only an *older* agent was marked in the UI, so a
+  bundle that changed behaviour without a version bump was never corrected.
+
+- Remove the browser-side `workspaceFiles` proxy. It rested on a false premise: that the Host binds
+  generated Remote methods once at mount time. The Typert Gateway resolves them per call with
+  `Reflect.get(receiver, method)`, so the host-side adapter alone reaches every caller. Dropping the
+  proxy also fixes a real defect — it forwarded the wire JSON, handing `readBytes` callers a base64
+  string where `WorkspaceFileBytes.data` is a `Uint8Array`.
+- Stop `install-local.sh` from attempting the reserved `desktop` profile through a launcher that cannot
+  manage it, and drop a pinned `dsh-client-ui-sidebar@0.2.2-rc.2` install from `test-sandbox.sh`: the
+  `dsh-web-app` bundle already depends on that package at the profile's own version.
+
+- Stamp the packed remote agent with a unique prerelease version by default, in
+  the manifest and in the bundle's `AGENT_VERSION` together, so the runtime
+  reports the version it actually ships. `--release` keeps the manifest version.
+- Stop calling `dsh plugin remove` during provisioning. On a profile with many
+  plugins it rewrote the manifest and then hung inside pnpm for minutes with no
+  output, leaving `package.json` half-written. Re-adding a different spec
+  replaces the dependency without it.
+- Install only the uploaded agent tarball on the remote, never a registry
+  package. `dsh plugin add <version>` resolves against the version recorded in
+  the remote profile, so when the published `0.2.12` differed from the local
+  build while keeping the same version number, the profile already satisfied the
+  request: nothing was replaced, and a stale `cordis.patch.yml` kept disabling
+  `dsh-api-remotes`, so the remote Web UI booted with `Failed to load plugins`
+  while every install log reported success. The timestamped upload path makes
+  each run's spec distinct, so the dependency really is replaced.
+- Resolve Node.js through the account's own shell before choosing that prefix.
+  A non-interactive SSH command does not read the startup files that nvm, fnm
+  and Volta use, so a host with both a system Node.js and a version-managed one
+  had the installer pick the system Node and compute a system-wide prefix —
+  installing `dsh` where the operator's shell would never find it. The login
+  shell is now asked first (login + interactive, falling back to login only), so
+  `npm prefix -g` answers what the operator actually sees.
+- Stop installing Node.js on the remote. It is now detected through the
+  account's own shell (nvm/fnm/Volta included) and only verified; a missing or
+  too-old runtime fails provisioning with an explicit message. Downloading a
+  runtime silently picked a version the operator never chose, and left a second
+  Node.js on hosts that already had one. `remoteNodeVersion`,
+  `autoInstallNode`, and `remoteInstallDir` are removed with it.
+- `dsh-waypoint-install doctor` reports the npm global prefix it would use, which
+  of npm's two write targets are usable (`lib/node_modules` and `bin`), the
+  `dsh` version that prefix yields, whether the login shell can find that
+  command, and how many `dsh web` processes are running (two for one `DSH_HOME`
+  overwrite each other's state file).
+- Rebuild the Settings panel as a host list instead of nested cards. Each
+  machine is one summary row with its details behind it, the rare and
+  destructive actions move into an overflow menu, and every colour now comes
+  from the Harness design tokens so the panel follows the active theme.
+- Merge the aliases of one `Host` line into a single entry. A config such as
+  `Host devcloud_64g_alice cloud64` used to appear twice, because grouping
+  compared alias text; it now groups on the resolved target, shows the longest
+  alias as the name, and tags the rest. A machine already registered under a
+  sibling alias is no longer offered again.
+- Choose the model-key source per host in Settings: `proxy` keeps the local
+  `DEEPSEEK_API_KEY` on this machine and routes model requests back over the
+  tunnel, `direct` lets the remote call the provider with its own key. The
+  profile-wide `credentialProxy` setting now only seeds hosts that never chose,
+  so existing hosts keep their behaviour.
+
+- Add an "Open remote Web UI" action to each connected host in Settings, so the
+  remote DSH Web UI (for installing remote plugins and similar) opens in a
+  browser tab already signed in through the SSH tunnel.

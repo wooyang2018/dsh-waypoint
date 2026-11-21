@@ -27,7 +27,7 @@
 | 组件 | 版本 |
 |---|---|
 | [DSH Desktop / 官方客户端](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)（已测试） |
-| 插件 | [**1.0.1**](https://www.npmjs.com/package/dsh-waypoint) |
+| 插件 | [**1.1.0**](https://www.npmjs.com/package/dsh-waypoint) |
 | 远端 DSH 运行时 | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)（已测试；新安装跟随本机 DSH 版本） |
 | 远端 Node.js | [**22.19+**](https://nodejs.org/en/download)（可在主机卡片一键安装 nvm + 最新 LTS） |
 | 远端操作系统 | Linux 或 macOS |
@@ -77,7 +77,7 @@ DSH 会从 npm 安装 bundle。这个包已经包含远端 agent 资源，不需
 如果 npmjs.com 对刚发布版本的 `latest` 解析仍旧滞后，可以改为安装当前的精确版本：
 
 ```text
-dsh-waypoint@1.0.1
+dsh-waypoint@1.1.0
 ```
 
 每次发新版本时同步更新这个版本号。
