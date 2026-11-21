@@ -38,27 +38,27 @@
 
 ## 已实现功能
 
-| 能力 | 状态 |
-|---|---|
-| 插件页一键安装 | 可用 |
-| 基于 SSH 的远端自动安装 | 可用 |
-| 主机注册、发现、SSH 隧道、健康检查、重连 | 可用 |
-| 远端工作区出现在本地工作区列表 | 可用 |
-| 远端 Session 出现在普通侧边栏 | 可用 |
-| 远端 Session 在普通 Conversation UI 中打开 | 可用 |
-| UI 跟随 DSH 语言（中文 / 英文） | 可用 |
-| Prompt、停止、转录、工具卡片、usage | 可用 |
-| 按主机选择模型 Key 来源（本地代理或远端直连） | 可用 |
-| 远端模型目录，并出现在镜像 Session 的模型菜单里 | 可用 |
-| 不重新安装、只重启远端 DSH | 可用（`systemd` 部署；`nohup` 部署用重新安装） |
-| 经隧道打开远端 DSH Web UI | 可用 |
-| 远端文件树和文件预览 | 可用（经 SSH 隧道的 agent API） |
-| 原生文件面板里的远端工作区搜索 | 可用（按条目名或工作区相对路径） |
-| 每个 Session 的远端终端 | 可用（本地 Session 用本地 PTY；远端 Session 用经 SSH 隧道的远端 agent PTY） |
-| 右侧栏浏览器预览远端 dev server | 可用（loopback 端口转发，见下文） |
-| 主机/工作区/Session 的 Agent 工具 | 可用 |
-| 审批提示接入本地 UI | 可用 |
-| Relay/NAT、云沙箱、多租户 | 尚未实现 |
+下列功能都在真实 SSH 主机上验证过，且不需要改动客户端：
+
+- 插件页一键安装
+- 基于 SSH 的远端自动安装
+- 主机注册、发现、SSH 隧道、健康检查、重连
+- 远端工作区出现在本地工作区列表
+- 远端 Session 出现在普通侧边栏，并在普通 Conversation UI 中打开
+- UI 跟随 DSH 语言（中文 / 英文）
+- Prompt、停止、转录、工具卡片、usage
+- 按主机选择模型 Key 来源（本地代理或远端直连）
+- 远端模型目录，并出现在镜像 Session 的模型菜单里
+- 不重新安装、只重启远端 DSH（`systemd` 部署；`nohup` 部署用重新安装）
+- 经隧道打开远端 DSH Web UI
+- 远端文件树和文件预览，经 SSH 隧道的 agent API
+- 原生文件面板里的远端工作区搜索，按条目名或工作区相对路径
+- 每个 Session 的远端终端——本地 Session 用本地 PTY，远端 Session 用经 SSH 隧道的远端 agent PTY
+- 右侧栏浏览器预览远端 dev server，经 loopback 端口转发（见下文）
+- 主机/工作区/Session 的 Agent 工具
+- 审批提示接入本地 UI
+
+**不支持**的部分——Windows 远端、relay/NAT 穿透——列在[已知限制](#已知限制)里，并附有可用的替代做法。
 
 > 文件/终端操作要求新版 agent API。远端 agent 过旧时，操作会提示 Reinstall，而不会再额外建立 SSH 连接。
 
@@ -342,7 +342,6 @@ dsh-remote-local-plugin`），避免同时出现两个设置分区；再按 `doc
   发现、隧道、会话镜像、文件与终端路由（英文正文：[remote-workspace-mechanism.md](docs/remote-workspace-mechanism.md)）
 - [Operations guide](docs/operations.md)
 - [Development](docs/development.md)
-- [Design document copy](docs/remote-development-design.md)
 - [Testing](docs/testing.md)
 - [Adapting to a new DSH release](docs/adapting-to-dsh-releases.md)
 - [Releasing](RELEASING.md)

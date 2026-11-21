@@ -42,27 +42,29 @@ pinned with `remoteDshVersion`.
 
 ## What works now
 
-| Capability | State |
-|---|---|
-| One-click local plugin install (`scripts/install-local.sh`) | Available |
-| Plugin-owned remote provisioning over SSH | Available |
-| Host registry, discovery, SSH tunnel, health, reconnect | Available |
-| Remote workspaces appear as normal local workspaces | Available |
-| Remote sessions appear in the normal sidebar | Available |
-| Remote sessions open in the normal Conversation UI | Available |
-| Localized UI follows the DSH language (zh / en) | Available |
-| Prompts, stop, transcripts, tool cards, usage | Available |
-| Per-host model key source (local proxy or remote direct) | Available |
-| Remote model catalog, offered in the model menu for mirrored Sessions | Available |
-| Restart the remote DSH without reinstalling | Available (`systemd` deployments; `nohup` uses Reinstall) |
-| Open the remote DSH Web UI through the tunnel | Available |
-| Remote file tree and file previews | Available (agent-backed over the SSH tunnel) |
-| Remote workspace search from the native file panel | Available (name or workspace-relative path) |
-| Remote terminal per Session | Available (local Sessions keep local PTY; remote Sessions use the remote agent PTY over the SSH tunnel) |
-| Remote dev servers in the right-sidebar browser | Available (loopback port forwards; see below) |
-| Agent tools for host/workspace/session operations | Available |
-| Approval prompts bridged into the local UI | Available |
-| Relay/NAT traversal, cloud sandbox, multi-tenant | Not yet |
+Everything below works against a real SSH host, with no client fork:
+
+- One-click local plugin install (`scripts/install-local.sh`)
+- Plugin-owned remote provisioning over SSH
+- Host registry, discovery, SSH tunnel, health, reconnect
+- Remote workspaces appear as normal local workspaces
+- Remote sessions appear in the normal sidebar, and open in the normal Conversation UI
+- Localized UI follows the DSH language (zh / en)
+- Prompts, stop, transcripts, tool cards, usage
+- Per-host model key source (local proxy or remote direct)
+- Remote model catalog, offered in the model menu for mirrored Sessions
+- Restart the remote DSH without reinstalling (`systemd` deployments; `nohup` uses Reinstall)
+- Open the remote DSH Web UI through the tunnel
+- Remote file tree and file previews, agent-backed over the SSH tunnel
+- Remote workspace search from the native file panel, by name or workspace-relative path
+- Remote terminal per Session — local Sessions keep the local PTY, remote Sessions use the remote
+  agent's PTY over the SSH tunnel
+- Remote dev servers in the right-sidebar browser, through loopback port forwards (see below)
+- Agent tools for host/workspace/session operations
+- Approval prompts bridged into the local UI
+
+What is **not** supported — Windows remotes, relay/NAT traversal — is listed under
+[Known limits](#known-limits), together with the workaround when there is one.
 
 > Remote file and terminal operations require the agent-backed API. If the connected remote agent is older, file/terminal actions fail with a Reinstall instruction instead of opening extra SSH connections.
 
@@ -445,7 +447,6 @@ then follow `docs/operations.md` for moving the host registry and cleaning up th
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
-- [Design document copy](docs/remote-development-design.md)
 
 ## Packages
 

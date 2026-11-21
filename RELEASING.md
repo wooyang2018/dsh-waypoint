@@ -86,11 +86,10 @@ different times:
    not with an empty string;
 2. the tarball becomes servable at the URL from step 1.
 
-Retrying only the download is a bug that shipped once: a version that had not propagated yet answered
-no URL at all, the check treated that as a hard failure, and a healthy release was reported
-`NOT DOWNLOADABLE` seconds after `npm publish` exited 0 — the 1.0.0 false alarm in reverse. Measured on
-the 1.0.1 and 1.1.0 publishes, the tarball became servable about six minutes after `npm publish`
-returned. A shorter window reports a good release as broken.
+Retrying only the download is not enough: a version that has not propagated yet answers **no URL at
+all**, so a check that resolves the URL before its retry loop fails immediately and reports a healthy
+release as broken. Both stages wait here. Measured across publishes, the tarball became servable about
+six minutes after `npm publish` returned; a shorter window reports a good release as broken.
 
 `pnpm release:publish:dry` shows what would be published without publishing. `--publish-only` skips
 build, pack **and preflight** and publishes the tarballs a previous run already produced — that is what
@@ -113,8 +112,8 @@ release, silently.
 
 ## How long a release takes, and where it goes
 
-Measured on 1.1.0, from a clean tree to a live GitHub release: **about 20 minutes of wall clock**, of
-which roughly two were actual work.
+From a clean tree to a live GitHub release: **about 20 minutes of wall clock**, dominated by registry
+propagation rather than by anything on this machine.
 
 | Stage | Time | Notes |
 |---|---|---|
@@ -129,21 +128,9 @@ version whose tarball 404'd. Do not "speed it up" by shortening the window — t
 false alarm. Start the publish, then do the GitHub steps only after verification passes; the tag must
 describe something already installable.
 
-What actually cost time on 1.1.0 was not the registry. Three avoidable round trips:
-
-1. **`pnpm build` failed** because `AGENT_VERSION` still said `1.0.0`. Caught in seconds — the cheap
-   case, because the build refuses to proceed.
-2. **The Release workflow failed at "Extract release notes"** because the CHANGELOG heading carried a
-   date. Build, typecheck and test had all passed, so this surfaced only after the tag was pushed and
-   npm had already published. The fix cost a tag deletion and a re-push.
-3. **`publish-local.mjs` reported a healthy release as broken** because it retried the download but not
-   the metadata lookup, then printed a message telling the operator to bump the version — advice that
-   would have burned an immutable version number for no reason. Recognising it as a false alarm
-   required reading the script rather than following its message.
-
-All three are now preflight checks or fixed code. The lesson worth keeping: **every failure discovered
-after `npm publish` is disproportionately expensive**, because the version cannot be recovered. Push
-the cheap checks as far left as they will go.
+**Every failure discovered after `npm publish` is disproportionately expensive**, because the version
+cannot be recovered. That is what `pnpm release:preflight` is for: push the cheap checks as far left as
+they will go.
 
 ## Verify
 
