@@ -35,6 +35,7 @@ import type {
   RemoteFileStat,
   RemoteFileText,
   RemoteFileWatchFrame,
+  RemoteFileSearchResult,
 } from './files.ts'
 import type {
   RemoteTerminalFrame,
@@ -289,6 +290,27 @@ export function isRemoteFileWatchFrame(value: unknown): value is RemoteFileWatch
   if (value.kind !== 'change' || !isRecord(value.change)) return false
   if (value.change.absent === true) return isString(value.change.absolutePath)
   return isString(value.change.absolutePath) && isString(value.change.version)
+}
+
+/** Guard for one search hit. */
+function isRemoteFileSearchMatch(value: unknown): boolean {
+  return isRecord(value)
+    && isString(value.path)
+    && (value.type === 'file' || value.type === 'directory' || value.type === 'other')
+}
+
+/**
+ * Guard for one workspace search result.
+ *
+ * Both flags are required: a response that omits `incomplete` would let a caller
+ * present a cut-short walk as a complete "no results".
+ */
+export function isRemoteFileSearchResult(value: unknown): value is RemoteFileSearchResult {
+  return isRecord(value)
+    && Array.isArray(value.matches)
+    && value.matches.every(isRemoteFileSearchMatch)
+    && typeof value.truncated === 'boolean'
+    && typeof value.incomplete === 'boolean'
 }
 
 function isRemoteTerminalShell(value: unknown): boolean {

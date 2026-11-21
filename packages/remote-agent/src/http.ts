@@ -33,9 +33,11 @@ import {
   type SessionStreamFrame,
   type RemoteTerminalCreateRequest,
   type RemoteTerminalInput,
+  type RemoteFileSearchRequest,
 } from '@dsh-waypoint/protocol'
 import { parseBearer, tokensEqual } from './auth.ts'
 import { listDirectories, listFile, readBytes, readText, statFile, watchFile } from './files.ts'
+import { searchFiles } from './search.ts'
 import type { RemoteAgentService } from './service.ts'
 import { AGENT_VERSION } from './version.ts'
 
@@ -152,6 +154,9 @@ export async function handleAgentRequest(
           return
         case 'file-bytes':
           sendJson(res, await readBytes(asPath(body), optionalInt(body, 'offset'), optionalInt(body, 'length')))
+          return
+        case 'file-search':
+          sendJson(res, await searchFiles(asPath(body), asSearchRequest(body), watchCancellation(req, res)))
           return
         case 'terminals':
           sendJson(res, service.terminals.create(asTerminalCreate(body)))
@@ -592,6 +597,60 @@ function asPath(value: unknown): string {
     throw new RemoteProtocolError({ code: 'request/invalid', message: 'path must be a non-empty string' })
   }
   return path
+}
+
+/**
+ * Read the search fields out of one request body.
+ *
+ * The query is the only required field and is trimmed here rather than trusted:
+ * an empty query would otherwise let the walk answer with the entire tree, which
+ * a panel renders as "everything matched". Optional collections are validated
+ * element by element so a malformed value cannot reach the walk as `undefined`
+ * and broaden it silently.
+ */
+function asSearchRequest(value: unknown): RemoteFileSearchRequest {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
+  }
+  const body = value as Record<string, unknown>
+  if (typeof body.query !== 'string' || body.query.trim() === '') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'query must be a non-empty string' })
+  }
+  let excludedPaths: string[] | undefined
+  if (body.excludedPaths !== undefined && body.excludedPaths !== null) {
+    if (!Array.isArray(body.excludedPaths) || !body.excludedPaths.every(entry => typeof entry === 'string')) {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'excludedPaths must be an array of strings' })
+    }
+    excludedPaths = body.excludedPaths as string[]
+  }
+  for (const key of ['includeHidden', 'respectGitignore'] as const) {
+    if (body[key] !== undefined && body[key] !== null && typeof body[key] !== 'boolean') {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: `${key} must be a boolean` })
+    }
+  }
+  return {
+    query: body.query,
+    ...excludedPaths === undefined ? {} : { excludedPaths },
+    ...typeof body.includeHidden === 'boolean' ? { includeHidden: body.includeHidden } : {},
+    ...typeof body.respectGitignore === 'boolean' ? { respectGitignore: body.respectGitignore } : {},
+  }
+}
+
+/**
+ * Cancellation for one non-streaming request.
+ *
+ * A long search must stop when the browser drops the request, but a plain
+ * request has no `AbortSignal` of its own; the socket closing is the only
+ * signal available before the response is written.
+ */
+function watchCancellation(req: IncomingMessage, res: ServerResponse): AbortSignal {
+  const controller = new AbortController()
+  const close = (): void => {
+    if (!res.writableEnded) controller.abort()
+  }
+  req.on('close', close)
+  res.on('close', close)
+  return controller.signal
 }
 
 function optionalInt(value: unknown, key: string): number | undefined {

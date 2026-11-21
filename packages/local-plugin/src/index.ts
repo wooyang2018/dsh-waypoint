@@ -14,6 +14,7 @@ import { Config, resolveConfig, type Config as LocalConfig } from './config.ts'
 import { registerHostApi } from './host-api/handler.ts'
 import { RemoteMirrorService } from './mirror/service.ts'
 import { installRemoteWorkspaceFiles } from './remote/files.ts'
+import { checkPatchContract, describePatchContract } from './remote/patch-contract.ts'
 import { installRemoteTerminalController } from './remote/terminal-controller.ts'
 import { RemoteTerminals } from './remote/terminal.ts'
 import { registerTerminalApi } from './host-api/terminal.ts'
@@ -64,7 +65,27 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
   await mirrors.sync()
   ctx.effect(() => registerTerminalApi(ctx, terminals), 'dsh-waypoint: remote terminal route')
   ctx.inject(['workspaceFiles'], child => {
-    installRemoteWorkspaceFiles(child, mirrors, service)
+    child.effect(() => {
+      const files = child.get('workspaceFiles') as unknown as object | undefined
+      const report = files === undefined
+        ? { active: false, missing: [{ method: 'workspaceFiles', reason: 'absent' as const }] }
+        : checkPatchContract(files)
+      if (!report.active) {
+        ctx.logger.warn(
+          'dsh-waypoint: remote file routing is %s; mirrored workspaces will show the empty local anchor',
+          describePatchContract(report),
+        )
+      }
+      service.setFileRouting({
+        status: report.active ? 'active' : 'bypassed',
+        ...report.missing.length === 0 ? {} : { missing: report.missing.map(item => item.method) },
+      })
+      const restore = installRemoteWorkspaceFiles(child, mirrors, service)
+      return () => {
+        restore()
+        service.setFileRouting({ status: 'bypassed' })
+      }
+    }, 'dsh-waypoint: remote workspace files')
   })
   ctx.inject(['terminalController'], child => {
     const controller = child.get('terminalController')

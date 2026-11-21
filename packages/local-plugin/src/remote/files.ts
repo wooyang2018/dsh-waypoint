@@ -6,6 +6,25 @@
  * the remote workspace root and serves every operation from the remote agent
  * over the existing SSH tunnel.
  *
+ * WHY THIS ONE LAYER IS ENOUGH (and a client-side proxy is not needed):
+ * the Host's Typert Gateway resolves a Remote method *per call*, not once at
+ * mount time. `prepareInvocation` does
+ *
+ *     const method = Reflect.get(callReceiver, implementation)
+ *     if (typeof method !== 'function') throw 'gateway/method-unavailable'
+ *
+ * and `invokePrepared` then does `Reflect.apply(prepared.method, receiver, args)`.
+ * The receiver is the service instance, and every method installed below is an
+ * own property of that instance, so a replacement here shadows the prototype
+ * implementation for every caller: the browser's generated Remote methods, the
+ * native sidebar tree, and the document preview alike. No browser-side proxy can
+ * observe or change that resolution, so adding one only creates a second
+ * interception point — and a wrong one: a client proxy that forwards the wire
+ * JSON hands `readBytes` callers a base64 *string* where
+ * `WorkspaceFileBytes.data` is contractually a `Uint8Array`. Leaving the call on
+ * the generated path lets Typert's codec encode the real Buffer this module
+ * returns.
+ *
  * @module dsh-waypoint/remote/files
  */
 
@@ -22,26 +41,39 @@ import type {
   WorkspaceFileText,
   WorkspaceFileWatchFrame,
 } from '@deepseek-ai/dsh-api-workspace-files'
-import type { AgentCapability, RemoteAgentClient } from '@dsh-waypoint/protocol'
+import type {
+  AgentCapability,
+  RemoteAgentClient,
+  RemoteFileSearchRequest,
+  RemoteFileSearchResult,
+} from '@dsh-waypoint/protocol'
 import { LocalError } from '../errors.ts'
 import type { RemoteHostsService } from '../service.ts'
 import type { RemoteMirrorService } from '../mirror/service.ts'
 import { resolveRemoteFileTarget, type RemoteFileTarget } from './remote-path.ts'
 
-/** Install the adapter over the host's workspace-files service. */
+/**
+ * Install the adapter over the host's workspace-files service.
+ *
+ * @returns a restorer that puts each method back the way it was found. Calling
+ * it twice is safe and idempotent: the second call is a no-op.
+ */
 export function installRemoteWorkspaceFiles(
   ctx: Context,
   mirrors: RemoteMirrorService,
   hosts: RemoteHostsService,
-): void {
+): () => void {
   const service = ctx.get('workspaceFiles') as unknown as WorkspaceFilesLike | undefined
-  if (service === undefined) return
+  if (service === undefined) return () => {}
 
   const originalRead = service.read.bind(service)
   const originalReadBytes = service.readBytes.bind(service)
   const originalStat = service.stat.bind(service)
   const originalList = service.list.bind(service)
   const originalChanges = service.changes.bind(service)
+  const originalSearch = typeof service.search === 'function' ? service.search.bind(service) : undefined
+  /** Names this installer replaced, so the restorer touches nothing else. */
+  const replaced: string[] = []
 
   service.read = async (scope, path, range, signal) => {
     const target = targetOf(mirrors, scope.workspaceRoot, path)
@@ -86,6 +118,50 @@ export function installRemoteWorkspaceFiles(
     if (target === undefined) return originalChanges(scope, path, signal)
     return watchAgent(agentFor(hosts, target.hostId, 'file.watch'), target, signal)
   }
+
+  // Search is the one operation the panel asks for that the stock service would
+  // answer from the local anchor, so without this a mirrored workspace always
+  // reports "no results". Its result paths are workspace-relative, which is the
+  // same namespace `list` uses, so nothing needs mapping on the way out.
+  service.search = async (scope, request, signal) => {
+    const target = targetOf(mirrors, scope.workspaceRoot, '')
+    if (target === undefined) {
+      // A local workspace keeps the stock behaviour when the service offers one;
+      // on a build without `search` there is nothing to fall back to, and
+      // answering with an empty result would misreport "no matches".
+      if (originalSearch !== undefined) return originalSearch(scope, request, signal)
+      throw new LocalError('request/invalid', 'workspace search is unavailable in this DSH build')
+    }
+    return agentFor(hosts, target.hostId, 'file.search').fileSearch(request, signal)
+  }
+
+  const installed: Record<string, unknown> = {
+    read: service.read,
+    readBytes: service.readBytes,
+    stat: service.stat,
+    list: service.list,
+    changes: service.changes,
+    search: service.search,
+  }
+  for (const name of Object.keys(installed)) replaced.push(name)
+
+  let restored = false
+  return () => {
+    if (restored) return
+    restored = true
+    const target = service as unknown as Record<string, unknown>
+    for (const name of replaced) {
+      // Only undo our own replacement: a second installer (or a later DSH
+      // adapter) may have taken the slot since, and clobbering that would turn
+      // a clean shutdown into another plugin's broken state.
+      if (target[name] !== installed[name]) continue
+      // `delete` restores prototype lookup exactly as it was. An own property
+      // that existed before installation is not restorable from here because
+      // the installer replaced it in place; deleting is still the closest
+      // honest state, and it is what the stock shape (prototype method) is.
+      delete target[name]
+    }
+  }
 }
 
 interface WorkspaceFilesLike {
@@ -94,6 +170,11 @@ interface WorkspaceFilesLike {
   stat(scope: { workspaceRoot: string }, path: string, signal: AbortSignal): Promise<WorkspaceFileStat>
   list(scope: { workspaceRoot: string }, path: string, signal: AbortSignal): Promise<WorkspaceDirectoryListing>
   changes(scope: { workspaceRoot: string }, path: string, signal: AbortSignal): AsyncIterable<WorkspaceFileWatchFrame>
+  search?(
+    scope: { workspaceRoot: string },
+    request: RemoteFileSearchRequest,
+    signal: AbortSignal,
+  ): Promise<RemoteFileSearchResult>
 }
 
 /** Resolve the agent client or fail with a visible "Reinstall" instruction. */

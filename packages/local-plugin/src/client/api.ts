@@ -104,6 +104,16 @@ export interface HostsApi {
   readonly fileRead: (sessionId: string, path: string, offset?: number, limit?: number, signal?: AbortSignal) => Promise<MirrorFileResult>
   readonly fileStat: (sessionId: string, path: string, signal?: AbortSignal) => Promise<MirrorFileResult>
   readonly fileBytes: (sessionId: string, path: string, offset?: number, length?: number, signal?: AbortSignal) => Promise<MirrorFileResult>
+  readonly fileSearch: (
+    sessionId: string,
+    request: {
+      readonly query: string
+      readonly excludedPaths?: readonly string[]
+      readonly includeHidden?: boolean
+      readonly respectGitignore?: boolean
+    },
+    signal?: AbortSignal,
+  ) => Promise<MirrorFileResult>
 
   // --- Endpoints with no UI caller yet ---
   // Kept so the browser surface stays one-to-one with the implemented host
@@ -178,6 +188,7 @@ export function createHostsApi(ctx: Context): HostsApi {
       ...offset === undefined ? {} : { offset },
       ...length === undefined ? {} : { length },
     }, signal),
+    fileSearch: (sessionId, request, signal) => call('host/files/search', { sessionId, ...request }, signal),
     prompt: (hostId, sessionId, text, mode, selection) => call('host/session/prompt', {
       hostId,
       sessionId,

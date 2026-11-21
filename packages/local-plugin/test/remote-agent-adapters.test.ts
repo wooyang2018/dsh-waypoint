@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { installRemoteWorkspaceFiles } from '../src/remote/files.ts'
+import { checkPatchContract, describePatchContract } from '../src/remote/patch-contract.ts'
 import { listRemoteDirectories } from '../src/remote/directory.ts'
 
 /**
@@ -60,6 +61,83 @@ describe('remote workspace files over the agent', () => {
       { kind: 'ready' },
       { kind: 'change', change: { absolutePath: join(anchor, 'a.txt'), version: 'v2' } },
     ])
+  })
+
+  it('hands readBytes callers native bytes, not the wire base64 string', async () => {
+    // `WorkspaceFileBytes.data` is contractually a Uint8Array. The adapter is the
+    // layer that decodes the agent's base64 into bytes, so a caller reaching it
+    // through the Host's Gateway receives a Buffer. A browser-side proxy used to
+    // sit in front of this and forward the raw wire JSON instead, which silently
+    // put a string where every binary consumer expects bytes.
+    const service: Record<string, unknown> = {
+      read: async () => { throw new Error('local read') },
+      readBytes: async () => { throw new Error('local bytes') },
+      stat: async () => { throw new Error('local stat') },
+      list: async () => { throw new Error('local list') },
+      changes: async function* () { yield { kind: 'ready' as const } },
+    }
+    const client = {
+      async fileBytes(path: string) { return { absolutePath: path, version: 'v', bytes: 3, offset: 0, data: Buffer.from('abc').toString('base64'), eof: true } },
+    }
+    const hosts = { supportsAgent: () => true, agentFor: () => client }
+    const mirrors = { remoteFileContext: () => ({ hostId: 'h', remoteRoot: '/remote' }) }
+    installRemoteWorkspaceFiles({ get: () => service } as never, mirrors as never, hosts as never)
+    const result = await (service.readBytes as Function)({ workspaceRoot: anchor }, 'a.txt', {}, new AbortController().signal)
+    assert.ok(result.data instanceof Uint8Array, 'data must be a Uint8Array, not the base64 wire string')
+    assert.equal(Buffer.from(result.data).toString(), 'abc')
+    assert.equal(result.absolutePath, join(anchor, 'a.txt'))
+  })
+
+  it('restores prototype methods and leaves a foreign replacement alone', async () => {
+    // Mirrors the stock shape: implementations live on the prototype, so the
+    // service has no own property for them. Restoring must delete our own
+    // property (revealing the prototype method again), not pin a bound copy.
+    class StockService {
+      async read() { return 'stock-read' }
+      async readBytes() { return 'stock-bytes' }
+      async stat() { return 'stock-stat' }
+      async list() { return 'stock-list' }
+      async *changes() { yield { kind: 'ready' as const } }
+    }
+    const service = new StockService()
+    assert.equal(Object.hasOwn(service, 'list'), false, 'precondition: stock methods are inherited')
+    const stockList = service.list
+    const hosts = { supportsAgent: () => false, agentFor: () => { throw new Error('unused') } }
+    const mirrors = { remoteFileContext: () => undefined }
+    const restore = installRemoteWorkspaceFiles({ get: () => service } as never, mirrors as never, hosts as never)
+    assert.notEqual(service.list, stockList, 'install must replace the method')
+
+    // A later adapter taking one slot must survive our restore.
+    const foreign = async () => 'someone-else'
+    service.read = foreign
+    restore()
+    assert.equal(service.list, stockList, 'an untouched slot falls back to the prototype method')
+    assert.equal(service.read, foreign, 'a slot replaced after install is not clobbered')
+    restore()
+    assert.equal(service.list, stockList, 'restoring twice is a no-op')
+  })
+})
+
+describe('patch contract', () => {
+  it('reports every missing method by name instead of failing silently', () => {
+    const complete = {
+      read() {}, readBytes() {}, stat() {}, list() {}, changes() {},
+    }
+    assert.deepEqual(checkPatchContract(complete), { active: true, missing: [] })
+
+    const partial = { read() {}, stat() {}, list() {} }
+    const report = checkPatchContract(partial)
+    assert.equal(report.active, false)
+    assert.deepEqual(report.missing.map(item => `${item.method}:${item.reason}`), [
+      'readBytes:absent',
+      'changes:absent',
+    ])
+    assert.match(describePatchContract(report), /readBytes: absent/u)
+  })
+
+  it('treats a non-callable slot as a contract failure', () => {
+    const service = { read() {}, readBytes() {}, stat() {}, list() {}, changes: 'nope' }
+    assert.deepEqual(checkPatchContract(service).missing, [{ method: 'changes', reason: 'not-callable' }])
   })
 })
 

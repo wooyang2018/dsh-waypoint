@@ -28,6 +28,10 @@ export type {
   RemoteFileStat,
   RemoteFileText,
   RemoteFileWatchFrame,
+  RemoteFileSearchEntryType,
+  RemoteFileSearchMatch,
+  RemoteFileSearchRequest,
+  RemoteFileSearchResult,
   RemoteDirectoryEntry,
   RemoteDirectoryListing,
 } from './files.ts'
@@ -146,6 +150,7 @@ export {
   isRemoteFileStat,
   isRemoteFileText,
   isRemoteFileWatchFrame,
+  isRemoteFileSearchResult,
   isRemoteTerminalFrame,
   isRemoteTerminalInfo,
   isRemoteTerminalListResult,

@@ -114,6 +114,22 @@ declare module '@deepseek-ai/cordis' {
 export interface HostsState {
   readonly protocolVersion: number
   readonly hosts: readonly HostView[]
+  /**
+   * Whether the host-side file routing adapter is installed and usable.
+   *
+   * `bypassed` means a mirrored workspace's file tree, previews and search fall
+   * back to the empty local anchor — the visible symptom would otherwise be an
+   * empty tree with no explanation. Set by the install step, which checks the
+   * live `workspaceFiles` service against {@link REQUIRED_WORKSPACE_FILE_METHODS}.
+   */
+  readonly fileRouting: FileRoutingState
+}
+
+/** Outcome of installing the host-side file routing adapter. */
+export interface FileRoutingState {
+  readonly status: 'active' | 'bypassed'
+  /** Expected methods the live service did not expose, when bypassed. */
+  readonly missing?: readonly string[]
 }
 
 /** Connected resources for one host. */
@@ -151,6 +167,8 @@ export class RemoteHostsService {
   readonly #catalogs = new Map<string, { readonly at: number; readonly value: ModelCatalogResult }>()
   #discovery: { readonly at: number; readonly value: SshDiscoveryResult } | undefined
   #discoveryInFlight: Promise<SshDiscoveryResult> | undefined
+  /** Set once the file adapter's install step has inspected the live service. */
+  #fileRouting: FileRoutingState = { status: 'bypassed' }
   readonly #records = new Map<string, HostRecord>()
   readonly #runtime = new Map<string, HostRuntime>()
   readonly #tunnels = new Map<string, Tunnel>()
@@ -202,7 +220,19 @@ export class RemoteHostsService {
 
   /** Browser/tool snapshot. */
   state(): HostsState {
-    return { protocolVersion: PROTOCOL_VERSION, hosts: this.list() }
+    return { protocolVersion: PROTOCOL_VERSION, hosts: this.list(), fileRouting: this.#fileRouting }
+  }
+
+  /**
+   * Record whether the host-side file adapter is usable.
+   *
+   * Called by the install step once it has checked the live service. Before any
+   * check runs the state is `bypassed`, so a profile that never installed the
+   * adapter (or installed it against an unexpected DSH shape) reports honestly
+   * instead of implying remote files work.
+   */
+  setFileRouting(next: FileRoutingState): void {
+    this.#fileRouting = next
   }
 
   /** All hosts in creation order. */

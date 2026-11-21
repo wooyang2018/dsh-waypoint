@@ -170,6 +170,7 @@ export class RemoteAgentService {
         'file.read',
         'file.bytes',
         'file.watch',
+        'file.search',
         'directory.list',
         'llm.catalog',
         'terminal',

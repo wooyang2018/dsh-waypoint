@@ -24,6 +24,7 @@ export const AGENT_ROUTES = {
   fileRead: `${AGENT_API_PREFIX}/files/read`,
   fileBytes: `${AGENT_API_PREFIX}/files/bytes`,
   fileWatch: `${AGENT_API_PREFIX}/files/watch`,
+  fileSearch: `${AGENT_API_PREFIX}/files/search`,
   directories: `${AGENT_API_PREFIX}/directories`,
   terminals: `${AGENT_API_PREFIX}/terminals`,
   modelCatalog: `${AGENT_API_PREFIX}/llm/catalog`,
@@ -52,6 +53,7 @@ export type AgentRoute =
   | { readonly kind: 'file-read' }
   | { readonly kind: 'file-bytes' }
   | { readonly kind: 'file-watch' }
+  | { readonly kind: 'file-search' }
   | { readonly kind: 'directory-list' }
   | { readonly kind: 'model-catalog' }
   | { readonly kind: 'terminals' }
@@ -187,6 +189,8 @@ export function matchAgentRoute(pathname: string): AgentRoute | undefined {
       return { kind: 'file-bytes' }
     case AGENT_ROUTES.fileWatch:
       return { kind: 'file-watch' }
+    case AGENT_ROUTES.fileSearch:
+      return { kind: 'file-search' }
     case AGENT_ROUTES.directories:
       return { kind: 'directory-list' }
     case AGENT_ROUTES.modelCatalog:

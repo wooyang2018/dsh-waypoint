@@ -59,6 +59,7 @@ export type HostApiEndpoint =
   | 'host/files/read'
   | 'host/files/stat'
   | 'host/files/bytes'
+  | 'host/files/search'
 
 /** One active mirrored workspace, exposed for UI copy decisions. */
 export interface MirroredWorkspace {
@@ -75,6 +76,18 @@ export interface RemoteHostsState {
   readonly mirroredWorkspaceIds: readonly string[]
   /** Titles of active mirrored workspaces, used to scope workspace-delete copy. */
   readonly mirroredWorkspaces: readonly MirroredWorkspace[]
+  /**
+   * Whether host-side file routing is installed.
+   *
+   * `bypassed` means a mirrored workspace's file tree shows the empty local
+   * anchor, because the live `workspaceFiles` service no longer exposes a method
+   * this plugin replaces. Surfacing it lets the Settings page say so instead of
+   * leaving an empty tree to be misread as "the remote directory is empty".
+   */
+  readonly fileRouting: {
+    readonly status: 'active' | 'bypassed'
+    readonly missing?: readonly string[]
+  }
 }
 
 /** Result of parsing a destination. */
@@ -223,6 +236,13 @@ export interface HostApiPayloads {
   'host/files/read': { sessionId: string; path: string; offset?: number; limit?: number }
   'host/files/stat': { sessionId: string; path: string }
   'host/files/bytes': { sessionId: string; path: string; offset?: number; length?: number }
+  'host/files/search': {
+    sessionId: string
+    query: string
+    excludedPaths?: readonly string[]
+    includeHidden?: boolean
+    respectGitignore?: boolean
+  }
 }
 
 /** Values returned by each endpoint. */
@@ -261,4 +281,5 @@ export interface HostApiValues {
   'host/files/read': MirrorFileResult
   'host/files/stat': MirrorFileResult
   'host/files/bytes': MirrorFileResult
+  'host/files/search': MirrorFileResult
 }

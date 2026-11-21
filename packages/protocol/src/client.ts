@@ -60,6 +60,8 @@ import type {
   RemoteFileStat,
   RemoteFileText,
   RemoteFileWatchFrame,
+  RemoteFileSearchRequest,
+  RemoteFileSearchResult,
 } from './files.ts'
 import type {
   RemoteTerminalCreateRequest,
@@ -88,6 +90,7 @@ import {
   isRemoteFileStat,
   isRemoteFileText,
   isRemoteFileWatchFrame,
+  isRemoteFileSearchResult,
   isRemoteTerminalFrame,
   isRemoteTerminalInfo,
   isRemoteTerminalListResult,
@@ -401,6 +404,17 @@ export class RemoteAgentClient {
   /** List child directories for the workspace-creation picker. */
   listDirectories(path: string, signal?: AbortSignal): Promise<RemoteDirectoryListing> {
     return this.#request(directoryListPath(path), isRemoteDirectoryListing, { signal })
+  }
+
+  /**
+   * Search one remote workspace by entry name or workspace-relative path.
+   *
+   * `request.query` is trimmed and must be non-empty; the agent refuses an empty
+   * query rather than answering with the whole tree, which a caller would render
+   * as a result set.
+   */
+  fileSearch(request: RemoteFileSearchRequest, signal?: AbortSignal): Promise<RemoteFileSearchResult> {
+    return this.#request(AGENT_ROUTES.fileSearch, isRemoteFileSearchResult, { method: 'POST', body: request, signal })
   }
 
   /** Follow one remote file or directory watch. */

@@ -302,6 +302,33 @@ async function dispatch(
       })
       return { accepted: true as const }
     }
+    case 'host/files/search': {
+      const body = requireRecord(payload)
+      const sessionId = requireStringField(body, 'sessionId')
+      const sessions = ctx.get('sessions')
+      const session = sessions?.get(sessionId as SessionId)
+      const root = session?.header.cwd
+      if (root === undefined || mirrors?.remoteFileContext(root) === undefined) return { mirrored: false }
+      const files = ctx.get('workspaceFiles')
+      if (files === undefined || typeof files.search !== 'function') return { mirrored: false }
+      const scope: WorkspaceFileScope = { sessionId: sessionId as SessionId, workspaceRoot: root }
+      const excluded = body.excludedPaths
+      if (excluded !== undefined && (!Array.isArray(excluded) || !excluded.every(item => typeof item === 'string'))) {
+        throw new LocalError('request/invalid', 'payload.excludedPaths must be an array of strings')
+      }
+      return {
+        mirrored: true,
+        value: await files.search(scope, {
+          query: requireStringField(body, 'query'),
+          // The service's request type has every field required; this plugin's
+          // wire type makes the filters optional so a caller can omit them and
+          // let the agent apply its own defaults. Resolve the difference here.
+          excludedPaths: (excluded ?? []) as readonly string[],
+          includeHidden: optionalBooleanField(body, 'includeHidden') ?? false,
+          respectGitignore: optionalBooleanField(body, 'respectGitignore') ?? false,
+        }, signal),
+      }
+    }
     case 'host/files/list':
     case 'host/files/read':
     case 'host/files/stat':
