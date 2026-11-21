@@ -151,6 +151,18 @@ interface MirrorRuntime {
    */
   skippedRemoteSeqs: Set<number>
   /**
+   * Local sequence of each projected `workspace/changes` event, and the turn it
+   * announced.
+   *
+   * The native change card is addressed by `(sessionId, seq)`, and that seq is
+   * the LOCAL one — the card reads it off the event it is rendering. The remote
+   * recorder, however, is addressed by its own seq, which the mirror does not
+   * keep in the local log. This map is the bridge: it records the pairing while
+   * the mapping is still fresh, so a later summary read can reverse it without
+   * scanning the whole log.
+   */
+  changesTurns: Map<number, number>
+  /**
    * Turns this mirror closed on its own behalf, so the remote's own `turn/end`
    * for the same turn is skipped rather than closing it twice.
    */
@@ -547,6 +559,16 @@ export class RemoteMirrorService {
   #state: MirrorState = { version: MIRROR_VERSION, sessions: {}, workspaces: {}, testHidden: [] }
   #testVisibility: TestVisibility = { hiddenPaths: [], hiddenWorkspaceIds: [] }
   #runtimes = new Map<string, MirrorRuntime>()
+  /**
+   * Fetches one turn's change summary from the remote before the announcing
+   * event is appended.
+   *
+   * The native change card reads `workspaceChanges.summary(sessionId, seq)`
+   * synchronously, and for a mirrored Session that record lives on the remote.
+   * Populating the cache BEFORE the append is what makes the read total: once a
+   * client can see the event, its summary is already there.
+   */
+  #changesPrefetch: ((sessionId: string, localSeq: number) => Promise<void>) | undefined
   #pendingApprovals = new Map<string, RemoteApprovalRequest[]>()
   #approvingApprovals = new Set<string>()
   #visibleSessions = new Map<string, number>()
@@ -813,6 +835,44 @@ export class RemoteMirrorService {
       const record = this.#state.sessions[ref]
       return record === undefined || !present.has(record.localSessionId)
     })
+  }
+
+  /**
+   * Resolve one announced `workspace/changes` event to the remote recorder that
+   * can answer for it.
+   *
+   * @param localSessionId - the mirrored Session the card is reading.
+   * @param localSeq - the sequence of the announcing event, as the LOCAL log
+   *   numbers it.
+   * @returns the host and remote Session to ask, plus the turn; undefined for a
+   *   local Session, an unknown seq, or an event this mirror never projected.
+   */
+  changesEvent(
+    localSessionId: string,
+    localSeq: number,
+  ): { hostId: string; remoteSessionId: string; turn: number } | undefined {
+    const runtime = this.#runtimes.get(localSessionId)
+    if (runtime === undefined || runtime.stopped) return undefined
+    const turn = runtime.changesTurns.get(localSeq)
+    if (turn === undefined) return undefined
+    return {
+      hostId: runtime.record.hostId,
+      remoteSessionId: runtime.record.remoteSessionId,
+      turn,
+    }
+  }
+
+  /**
+   * Install the change-summary prefetch hook.
+   *
+   * Kept as a setter rather than a constructor argument because the plugin owns
+   * the cache and the agent clients, while the mirror owns the moment an event
+   * is about to be appended.
+   * @param hook - called with the local Session and the sequence the announcing
+   *   event will occupy; resolves after the summary is cached or the attempt failed.
+   */
+  setChangesPrefetch(hook: (sessionId: string, localSeq: number) => Promise<void>): void {
+    this.#changesPrefetch = hook
   }
 
   /** Resolve a local workspace anchor to its remote filesystem context. */
@@ -2340,6 +2400,7 @@ export class RemoteMirrorService {
       waiters: [],
       rejectedSelections: new Set(),
       skippedRemoteSeqs: new Set(),
+      changesTurns: new Map(),
       closedTurns: new Set(),
       diverged: undefined,
     } satisfies MirrorRuntime
@@ -2548,6 +2609,13 @@ export class RemoteMirrorService {
         continue
       }
       try {
+        // A replayed announcement is projected synchronously, so the summary
+        // cannot be awaited here. Start the fetch and let it land: a reader that
+        // arrives first sees no card, which is the same degradation a Host
+        // reports for a summary it no longer serves.
+        if (event.type === 'workspace/changes' && this.#changesPrefetch !== undefined) {
+          void this.#changesPrefetch(runtime.record.localSessionId, (runtime.session as unknown as { seq: number }).seq)
+        }
         this.#appendEvent(runtime, event)
       } catch (error) {
         // One event the local projection rejects must not freeze every event
@@ -2571,6 +2639,9 @@ export class RemoteMirrorService {
   #adoptSnapshotSequence(runtime: MirrorRuntime, nextSeq: number): void {
     for (const seq of [...runtime.remoteToLocalSeq.keys()]) {
       if (seq >= nextSeq) runtime.remoteToLocalSeq.delete(seq)
+    }
+    for (const seq of [...runtime.changesTurns.keys()]) {
+      if (seq >= nextSeq) runtime.changesTurns.delete(seq)
     }
     for (const seq of [...runtime.skippedRemoteSeqs]) {
       if (seq >= nextSeq) runtime.skippedRemoteSeqs.delete(seq)
@@ -2760,6 +2831,11 @@ export class RemoteMirrorService {
       runtime.applyingRemote = false
     }
     const after = (runtime.session as unknown as { seq: number }).seq
+    if (event.type === 'workspace/changes') {
+      const turn = (event.data as { turn?: unknown } | undefined)?.turn
+      const local = mappedSeq ?? (after > before ? after - 1 : undefined)
+      if (typeof turn === 'number' && local !== undefined) runtime.changesTurns.set(local, turn)
+    }
     if (mappedSeq !== undefined) {
       runtime.remoteToLocalSeq.set(event.seq, mappedSeq)
       this.#flushAssistantEnd(runtime, event.seq)

@@ -14,6 +14,10 @@ import { Config, resolveConfig, type Config as LocalConfig } from './config.ts'
 import { registerHostApi } from './host-api/handler.ts'
 import { RemoteMirrorService } from './mirror/service.ts'
 import { installRemoteWorkspaceFiles } from './remote/files.ts'
+import { installRemoteConfine } from './remote/sandbox.ts'
+import { installRemoteFileSystem } from './remote/fs.ts'
+import { installRemoteSubprocess } from './remote/subprocess.ts'
+import { installRemoteWorkspaceChanges, prefetchChangesSummary, RemoteChangesCache } from './remote/workspace-changes.ts'
 import { checkPatchContract, describePatchContract } from './remote/patch-contract.ts'
 import { installRemoteTerminalController } from './remote/terminal-controller.ts'
 import { RemoteTerminals } from './remote/terminal.ts'
@@ -46,6 +50,10 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
     },
   })
   const mirrors = new RemoteMirrorService(ctx, service, resolved)
+  // Shared between the mirror's prefetch hook and the workspaceChanges
+  // replacement, so the summary is already cached when the event lands.
+  const changesCache = new RemoteChangesCache()
+  mirrors.setChangesPrefetch((sessionId, seq) => prefetchChangesSummary(mirrors, service, changesCache, sessionId, seq))
   const terminals = new RemoteTerminals(ctx, service, mirrors)
   ctx.effect(
     () => async () => {
@@ -86,6 +94,34 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
         service.setFileRouting({ status: 'bypassed' })
       }
     }, 'dsh-waypoint: remote workspace files')
+  })
+  // The Forge panel reads a mirrored checkout through `ctx.subprocess` (Git) and
+  // `ctx.fs` (file contents), and the change card reads its summary through
+  // `ctx.workspaceChanges`. Each adapter routes only mirrored workspaces and
+  // delegates everything else, so local Sessions keep the stock behaviour.
+  ctx.inject(['subprocess'], child => {
+    child.effect(
+      () => installRemoteSubprocess(child, mirrors, service),
+      'dsh-waypoint: gateway git routing',
+    )
+  })
+  ctx.inject(['sandbox'], child => {
+    child.effect(
+      () => installRemoteConfine(child, mirrors),
+      'dsh-waypoint: remote process confinement bypass',
+    )
+  })
+  ctx.inject(['fs'], child => {
+    child.effect(
+      () => installRemoteFileSystem(child, mirrors, service),
+      'dsh-waypoint: remote filesystem reads',
+    )
+  })
+  ctx.inject(['workspaceChanges'], child => {
+    child.effect(
+      () => installRemoteWorkspaceChanges(child, mirrors, service, changesCache),
+      'dsh-waypoint: remote workspace changes',
+    )
   })
   ctx.inject(['terminalController'], child => {
     const controller = child.get('terminalController')

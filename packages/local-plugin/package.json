@@ -56,47 +56,67 @@
     }
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-api-session-controller": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-api-terminal-controller": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-api-workspace-files": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-ui-session": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-ui-workspace": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-fs": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-sandbox": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-subprocess": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-workspace": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-workspace-changes": "0.2.2-rc.3",
     "@dsh-waypoint/installer": "workspace:*",
     "@dsh-waypoint/protocol": "workspace:*",
-    "@deepseek-ai/dsh-credentials": "0.2.2-rc.3",
-    "@deepseek-ai/dsh-agent": "0.2.2-rc.3",
-    "@deepseek-ai/dsh-session": "0.2.2-rc.3",
-    "@deepseek-ai/dsh-workspace": "0.2.2-rc.3",
-    "@deepseek-ai/dsh-client-ui-workspace": "0.2.2-rc.3",
-    "@deepseek-ai/dsh-scope": "0.2.2-rc.3",
-    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.3",
-    "@deepseek-ai/dsh-api-workspace-files": "0.2.2-rc.3",
-    "@deepseek-ai/dsh-api-terminal-controller": "0.2.2-rc.3",
-    "dsh-waypoint-terminal-controller": "workspace:*",
     "dsh-waypoint-agent": "workspace:*",
-    "@deepseek-ai/dsh-api-session-controller": "0.2.2-rc.3",
-    "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-client-ui-session": "0.2.2-rc.3"
+    "dsh-waypoint-terminal-controller": "workspace:*"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.5 <4.2.0",
+    "@deepseek-ai/dsh-agent": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-api-session-controller": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-api-terminal-controller": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-api-workspace-files": ">=0.2.2-rc.2 <0.3.0-0",
     "@deepseek-ai/dsh-client-connection": ">=0.2.2-rc.2 <0.3.0-0",
     "@deepseek-ai/dsh-client-ui-renderer": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-session": ">=0.2.2-rc.2 <0.3.0-0",
     "@deepseek-ai/dsh-client-ui-settings": ">=0.2.2-rc.2 <0.3.0-0",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-workspace": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-credentials": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-fs": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-sandbox": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-scope": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-session": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-subprocess": ">=0.2.2-rc.2 <0.3.0-0",
     "@deepseek-ai/dsh-tools": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-user-approval": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-workspace": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-workspace-changes": ">=0.2.2-rc.2 <0.3.0-0",
     "@deepseek-ai/schemastery": ">=3.18.0 <4.0.0",
     "react": ">=18.2.0 <19",
-    "react-dom": ">=18.2.0 <19",
-    "@deepseek-ai/dsh-credentials": ">=0.2.2-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-agent": ">=0.2.2-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-session": ">=0.2.2-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-workspace": ">=0.2.2-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-workspace": ">=0.2.2-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-scope": ">=0.2.2-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-user-approval": ">=0.2.2-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-api-workspace-files": ">=0.2.2-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-api-terminal-controller": ">=0.2.2-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-api-session-controller": ">=0.2.2-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-session": ">=0.2.2-rc.2 <0.3.0-0"
+    "react-dom": ">=18.2.0 <19"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-api-session-controller": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-api-terminal-controller": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-api-workspace-files": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-connection": {
@@ -105,13 +125,46 @@
     "@deepseek-ai/dsh-client-ui-renderer": {
       "optional": true
     },
+    "@deepseek-ai/dsh-client-ui-session": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-client-ui-settings": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-slots": {
       "optional": true
     },
+    "@deepseek-ai/dsh-client-ui-workspace": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-credentials": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-fs": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-sandbox": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-scope": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-subprocess": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-user-approval": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-workspace": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-workspace-changes": {
       "optional": true
     },
     "@deepseek-ai/schemastery": {
@@ -121,39 +174,6 @@
       "optional": true
     },
     "react-dom": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-credentials": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-agent": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-session": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-workspace": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-ui-workspace": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-scope": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-user-approval": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-api-workspace-files": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-api-terminal-controller": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-api-session-controller": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-ui-session": {
       "optional": true
     }
   },
