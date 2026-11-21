@@ -145,7 +145,8 @@ check and tunnel watcher schedule a bounded reconnect on any transport failure.
 | `GET` | `/llm/catalog` | `ModelCatalogResult` — the providers/models this host can actually route to |
 | `GET` | `/approvals/events` | SSE `event: ready`, then one `event: request` per pending approval, with `event: heartbeat` keepalives |
 | `GET` | `/files/watch?path=...` | SSE `event: file` with `{ kind: "ready" \| "change" }` |
-| `GET` | `/directories?path=...` | `RemoteDirectoryListing` || `GET` | `/terminals` | `{ terminals: RemoteTerminalInfo[] }` |
+| `GET` | `/directories?path=...` | `RemoteDirectoryListing` |
+| `GET` | `/terminals` | `{ terminals: RemoteTerminalInfo[] }` |
 | `GET` | `/terminals/:id/attach` | SSE `event: frame` with terminal frames |
 
 Read routes use `GET`. Write routes use `POST` with a JSON body:
@@ -162,6 +163,9 @@ Read routes use `GET`. Write routes use `POST` with a JSON body:
 | `POST` | `/approvals/answer` | `{ "id": "…", "outcome": "allowed-once" \| "rejected" \| "cancelled" \| "unavailable" }` | `{ "accepted": true }` |
 | `POST` | `/files/stat`, `/files/list`, `/files/read`, `/files/bytes` | `{ "path": "/abs/path", "offset"?, "limit"?, "length"? }` | file/list result |
 | `POST` | `/files/search` | `{ "path": "/abs/root", "query": "…", "excludedPaths"?, "includeHidden"?, "respectGitignore"? }` | `RemoteFileSearchResult` |
+| `POST` | `/git` | `{ "cwd": "/abs/dir", "args": ["status", "--porcelain=v2"], "env"?, "timeoutMs"? }` | `RemoteGitResult` |
+| `POST` | `/workspace-changes/summary` | `{ "sessionId": "…", "turn": 3 }` | `RemoteWorkspaceChangesSummary` |
+| `POST` | `/workspace-changes/diff` | `{ "sessionId": "…", "turn": 3, "index": 0 }` | `RemoteWorkspaceFileDiff` |
 | `POST` | `/terminals` | `{ "cwd": "/abs/dir", "id"?, "title"?, "cols"?, "rows"?, "shellPath"? }` | `RemoteTerminalInfo` |
 | `POST` | `/terminals/:id/input` | `{ "type": "write", "data": "…" }` or `{ "type": "resize", "cols": 100, "rows": 30 }` | `{ "accepted": true }` |
 | `POST` | `/terminals/:id/rename` | `{ "title": "…" }` | `{ "accepted": true }` |
@@ -339,6 +343,37 @@ A cursor is the next expected `seq`. `EventCursor` (in `@dsh-waypoint/protocol`)
 
 The local mirror applies the same cursor rules when it replays remote events.
 
+## Git bridge
+
+`/git` runs one Git invocation in the remote host's execution world, so the local Host's Forge panel
+can describe a mirrored workspace's checkout instead of the empty local anchor. Its response shape
+mirrors the Host's own subprocess result closely enough to be a drop-in replacement: collected
+stdout/stderr, an exit code, and a `truncated` flag the caller maps onto its `lossy` read.
+
+**It is not a general remote exec, and it is not a privilege boundary.** The agent already exposes a
+full PTY on this host, so a caller that wanted to run arbitrary commands does not need this route.
+What the allowlist buys is protection against *misuse*: the panel only needs to read refs, the index
+and diffs, so a caller-supplied argv is narrowed to read-only plumbing and a mistake fails before
+spawn instead of having a surprising side effect.
+
+- `args[0]` must be in a read-only subcommand allowlist (`status`, `diff`, `log`, `show`,
+  `rev-parse`, `for-each-ref`, `ls-files`, `merge-base`, `cat-file`, and similar). Anything else is
+  refused. `status` and `diff` can refresh the index, so the agent pins `GIT_OPTIONAL_LOCKS=0` to keep
+  that refresh non-persistent.
+- A few arguments are refused anywhere in the argv even though no current caller sends them:
+  `--ext-diff` and `--textconv` hand argv control to a program the repository configures (which would
+  escape the allowlist entirely), and `--output` turns a diff into a file write.
+- `env` is filtered: only `GIT_*` and `LC_ALL` survive, so a caller cannot inject `PATH` or `HOME`.
+
+`/workspace-changes/summary` and `/workspace-changes/diff` serve the native **changed-files** card.
+They are addressed by the **remote Session id and turn number**, not by a path: the summary lives in
+the remote process, and the local mirror fetches it just before it appends the announcing event so the
+card has data on first render. The summary is not persisted; `diff` round-trips on demand by file
+index within that summary.
+
+Both routes require the `git.exec` / `workspace.changes` capabilities. An agent that predates them
+reports `error.agentOutdated`, and Settings offers **Reinstall** rather than silently degrading.
+
 ## Web URL
 
 `/web-url` returns a browser-authenticated path on the remote DSH origin. The local plugin rewrites
@@ -382,18 +417,21 @@ only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
-`index.ts` exports 127 symbols in total. They split into 60 contract symbols, 44 symbols referenced
-only inside `packages/protocol/src`, and 23 symbols referenced nowhere at all. Every name below is
-listed explicitly, so the counts can be recomputed from this page without expanding any wildcard.
+`index.ts` exports 143 symbols in total. They split into 66 contract symbols and 77 symbols that no
+other package consumes, of which 2 are referenced nowhere at all. Every name below is listed
+explicitly, and `scripts/protocol-surface.mjs` recomputes these numbers from the source tree; run it
+whenever you add or remove an export, and a test fails if the two disagree.
 
-**Import contract (60 symbols).** Consumed by another package through a named import. Changing or
-removing one of these is a cross-package change.
+**Import contract (66 symbols).** Consumed by another package's production code through a named
+import, or reached through `RemoteAgentClient`'s signatures. Changing or removing one of these is a
+cross-package change. Test files are not counted as consumers: a test that imports a path builder to
+build a URL does not make it part of the contract.
 
 - Version and headers (9): `PROTOCOL_VERSION`, `AGENT_API_PREFIX`, `HEADER_PROTOCOL_VERSION`,
   `HEADER_SERVER_PROTOCOL_VERSION`, `HEADER_HOST_ID`, `HEADER_AGENT_VERSION`, `HEADER_REQUEST_ID`,
   `negotiateProtocol`, `parseProtocolHeader`
-- Client, routing, and cursors (5): `RemoteAgentClient`, `matchAgentRoute`, `sessionArchivePath`,
-  `EventCursor`, `parseCursorQuery`
+- Client, routing, and cursors (4): `RemoteAgentClient`, `matchAgentRoute`, `EventCursor`,
+  `parseCursorQuery`
 - Discovery (3): `AgentDiscoveryState`, `isAgentDiscoveryState`, `isAgentLive`
 - Envelopes and errors (4): `ApiSuccess`, `ApiFailure`, `RemoteProtocolError`, `httpStatusForCode`
 - Host and workspace (5): `AgentCapability`, `HostInfo`, `RemoteWorkspace`, `CreateWorkspaceRequest`,
@@ -402,8 +440,11 @@ removing one of these is a cross-package change.
   `SessionStreamFrame`, `ListSessionsResult`, `RemoteAssistantFrame`, `AcceptedResult`,
   `CreateSessionRequest`, `CreateSessionResult`, `PromptSessionRequest`, `PromptContentPart`,
   `PromptDeliveryMode`, `SelectModelRequest`
-- Files (7): `RemoteFileStat`, `RemoteFileText`, `RemoteFileBytes`, `RemoteFileEntry`,
-  `RemoteFileListing`, `RemoteFileWatchFrame`, `RemoteDirectoryListing`
+- Files (10): `RemoteFileStat`, `RemoteFileText`, `RemoteFileBytes`, `RemoteFileEntry`,
+  `RemoteFileListing`, `RemoteFileWatchFrame`, `RemoteDirectoryListing`, `RemoteFileSearchRequest`,
+  `RemoteFileSearchResult`, `RemoteFileSearchMatch`
+- Git (2): `RemoteGitRequest`, `RemoteGitResult`
+- Review data (2): `RemoteWorkspaceChangesSummary`, `RemoteWorkspaceFileDiff`
 - Terminals (4): `RemoteTerminalCreateRequest`, `RemoteTerminalFrame`, `RemoteTerminalInfo`,
   `RemoteTerminalInput`
 - Models (5): `ModelCatalogResult`, `RemoteModel`, `RemoteModelFailure`, `RemoteModelGroup`,
@@ -411,38 +452,39 @@ removing one of these is a cross-package change.
 - Approvals, JSON, and Web UI (5): `ApprovalOutcome`, `RemoteApprovalFrame`,
   `RemoteApprovalRequest`, `JsonValue`, `WebUrlResult`
 
-**Internal (67 symbols).** Exported from `index.ts` but imported by no other package. Treat them as
+**Internal (77 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
 private: they carry no cross-package guarantee, and nothing outside `packages/protocol/src` should
 start importing them without promoting them to the contract above.
 
-*Referenced only inside `packages/protocol/src` (44).*
+*Used inside `packages/protocol/src` (75).*
 
-- Guards used by `client.ts` (24): `isAcceptedResult`, `isApiFailure`, `isCreateSessionResult`,
+- Guards (30): `isAcceptedResult`, `isApiFailure`, `isCreateSessionResult`, `isCursor`,
   `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`, `isModelCatalogResult`,
   `isProtocolSupported`, `isRecord`, `isRemoteApprovalFrame`, `isRemoteAssistantFrame`,
-  `isRemoteDirectoryListing`, `isRemoteFileBytes`, `isRemoteFileListing`, `isRemoteFileStat`,
-  `isRemoteFileText`, `isRemoteFileWatchFrame`, `isRemoteTerminalFrame`, `isRemoteTerminalInfo`,
-  `isRemoteTerminalListResult`, `isRemoteWorkspace`, `isSessionSnapshot`, `isSessionStreamFrame`,
-  `isWebUrlResult`
-- Path builders used by `client.ts` (14): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`,
-  `sessionCancelPath`, `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`,
+  `isRemoteChangesDiff`, `isRemoteChangesSummary`, `isRemoteDirectoryListing`, `isRemoteFileBytes`,
+  `isRemoteFileListing`, `isRemoteFileSearchResult`, `isRemoteFileStat`, `isRemoteFileText`,
+  `isRemoteFileWatchFrame`, `isRemoteGitResult`, `isRemoteTerminalFrame`, `isRemoteTerminalInfo`,
+  `isRemoteTerminalListResult`, `isRemoteWorkspace`, `isRetryableCode`, `isSessionSnapshot`,
+  `isSessionStreamFrame`, `isWebUrlResult`
+- Path builders (15): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
+  `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionArchivePath`,
   `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`, `terminalAttachPath`,
   `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
-- Types, constants, and functions used inside the package (6): `RemoteFailure`,
+- Types, constants, and functions used inside the package (30): `RemoteFailure`,
   `RemoteTerminalListResult`, `SessionSnapshotOptions`, `SetSandboxModeRequest`,
-  `DEFAULT_REQUEST_TIMEOUT_MS`, `parseSseStream`
+  `DEFAULT_REQUEST_TIMEOUT_MS`, `parseSseStream`, `AgentRoute`, `CursorAcceptance`,
+  `DISCOVERY_STATE_VERSION`, `JsonPrimitive`, `MAX_SUPPORTED_PROTOCOL_VERSION`,
+  `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`, `PromptImagePart`, `ProtocolErrorCode`,
+  `ProtocolNegotiation`, `RemoteAgentClientOptions`, `RemoteChangesDiffRequest`,
+  `RemoteChangesSummaryRequest`, `RemoteDirectoryEntry`, `RemoteFileSearchEntryType`,
+  `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteReasoningEffort`, `RemoteSandboxMode`,
+  `RemoteTerminalShell`, `RemoteWorkspaceChangedFile`, `RemoteWorkspaceDiffHunk`,
+  `SessionStreamEndReason`, `SseMessage`
 
-*Referenced nowhere (23).*
+*Referenced nowhere (2).*
 
-- `ApiEnvelope`, `AgentRoute`, `CursorAcceptance`, `DISCOVERY_STATE_VERSION`, `JsonPrimitive`,
-  `MAX_SUPPORTED_PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`,
-  `PromptImagePart`, `ProtocolErrorCode`, `ProtocolNegotiation`, `RemoteAgentClientOptions`,
-  `RemoteDirectoryEntry`, `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteReasoningEffort`,
-  `RemoteSandboxMode`, `RemoteTerminalShell`, `SessionStreamEndReason`, `SseMessage`, `isApiSuccess`,
-  `isCursor`, `isRetryableCode`
+- `ApiEnvelope`, `isApiSuccess`
 
-`ApiEnvelope` and `isApiSuccess` are currently referenced by no package and no internal module. They
-are kept because `isApiSuccess` pairs with `isApiFailure`, which the client uses on every request;
-splitting a guard pair reads worse than one unused guard. `PROTOCOL_ERROR_CODES` and
-`ProtocolErrorCode` are kept for the same reason: `client.ts` asks `isProtocolErrorCode` rather than
-reading the array, so the list exists as documentation of the closed set.
+`ApiEnvelope` is the only export nothing names at all; `isApiSuccess` is called by no module but is
+exported as the positive half of the `isApiFailure` guard pair the client uses on every request.
+Splitting a guard pair reads worse than one unused guard, so both stay.

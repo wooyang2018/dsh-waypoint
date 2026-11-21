@@ -5,8 +5,7 @@ touches npm.
 
 ## Prerequisites
 
-- npm account with publish access to `dsh-waypoint`, `dsh-waypoint-agent` and
-  `dsh-waypoint-terminal-controller`
+- npm account with publish access to `dsh-waypoint` and `dsh-waypoint-agent`
 - **a granular access token with "Allow bypass 2FA" enabled**, exported as `NPM_TOKEN`
 
 ```sh
@@ -33,8 +32,8 @@ harvested publish tokens. `npm audit` and Socket.dev do not inspect configuratio
 Edit `packages/local-plugin/package.json`, then update the pinned version quoted in `README.md`,
 `README.zh.md` and `packages/local-plugin/README.md`.
 
-`packages/remote-agent` and `packages/terminal-controller` only need a bump when their own code
-changed; the plugin bundles them at whatever version they declare.
+`packages/remote-agent` only needs a bump when its own code changed; the plugin bundles it at
+whatever version it declares.
 
 ## Publish
 

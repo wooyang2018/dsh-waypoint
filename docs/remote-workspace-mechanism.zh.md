@@ -387,7 +387,7 @@ return await Reflect.apply(prepared.method, prepared.receiver, prepared.args)
 本版本的面板是只读的：不提供上传、编辑、重命名或删除，因为往锚点写入会让远端已经拥有的字节出现第二个
 权威副本。
 
-### 6.2a 变更数据：Forge 面板与变更卡片
+### 6.3 变更数据：Forge 面板与变更卡片
 
 有两处原生界面展示「改了什么」，它们在设计上互不相关：
 
@@ -466,7 +466,7 @@ if (this.store[key]) throw new Error(`service "${name}" has been registered at <
   `ctx.set` 与第二次 `ctx.provide` 会被拒绝、以及依赖方 plugin context 能触达被替换的方法。若某次
   Cordis 升级把 provided 值包进代理，该测试会失败，而不是让所有面板悄悄失效。
 
-### 6.3 终端
+### 6.4 终端
 
 终端跟文件走的是同一套机制：stock `terminal-controller` 行提供 `terminalController` 服务，
 `installRemoteTerminalController`（`src/remote/terminal-controller.ts`）在**它上面按方法赋值**。Host 的
@@ -506,7 +506,7 @@ Host 的 `TerminalController` 暴露十二个方法，其中九个能映射到�
 （`@deepseek-ai/dsh-api-terminal-controller/typert`）比对。某个 DSH 版本新增了终端方法时，该测试会失败，
 而不是悄悄让新方法在镜像会话里落到本机 PTY。
 
-## 6.5 端口：让远端 dev server 可达
+### 6.5 端口：让远端 dev server 可达
 
 远端工作区上的 dev server 是本插件唯一不能像文件、终端、Git 那样"路由"的东西，所以值得说清原因，以及它改用了什么。
 
@@ -519,12 +519,12 @@ Host 的 `TerminalController` 暴露十二个方法，其中九个能映射到�
 `ElectronWebViewImpl`（主进程租约下的原生 `<webview>`）。两者都在**客户端**用
 `element.src` / `element.loadURL(url)` 导航。
 
-这很关键，因为 §6.1–6.3 的文件与终端缝在这里都不存在。那些之所以可行，是因为它们替换的是**Host 服务**——
+这很关键，因为 §6.1–6.4 的文件与终端缝在这里都不存在。那些之所以可行，是因为它们替换的是**Host 服务**——
 Host 与客户端都经由 Gateway 解析它（`installRemoteWorkspaceFiles` 遮蔽 `workspaceFiles`；
 `installRemoteTerminalController` 遮蔽 `terminalController`）。浏览器没有这样的服务：页面字节按其 URL
 来自 HTTP，而 URL 由**绘制这个 frame 的那台机器**解析。没有东西可遮蔽；`sidebarRightTabs.register` 是每个
 kind 一个槽位的注册表，body 按 definition 自己的 id 分发，所以"替换"浏览器意味着把它的整套 UI 做成构建期
-fork（§6.3 的重锤），而收益为零。
+fork——这正是本仓库为终端试过、后来又删掉的方案，而收益为零。
 
 所以远端 dev server 打不开的原因比"渲染器在本地"更简单：在这个浏览器里输入 `http://localhost:5173`，
 解析发生在**用户**机器上。修法与 **Open remote Web UI** 动作已经在用的那个相同——把远端 loopback 端口发布

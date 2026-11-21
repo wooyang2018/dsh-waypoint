@@ -345,6 +345,7 @@ dsh-remote-local-plugin`），避免同时出现两个设置分区；再按 `doc
 - [Design document copy](docs/remote-development-design.md)
 - [Testing](docs/testing.md)
 - [Adapting to a new DSH release](docs/adapting-to-dsh-releases.md)
+- [Releasing](RELEASING.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)

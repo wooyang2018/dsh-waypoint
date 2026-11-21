@@ -435,10 +435,12 @@ then follow `docs/operations.md` for moving the host registry and cleaning up th
 - [Wire protocol](docs/protocol.md)
 - [Remote workspace mechanism](docs/remote-workspace-mechanism.md) — how a remote directory becomes a
   local workspace: discovery, tunnel, the session mirror, files/terminal routing
+  ([中文版](docs/remote-workspace-mechanism.zh.md))
 - [Operations guide](docs/operations.md)
 - [Development](docs/development.md)
 - [Testing](docs/testing.md)
 - [Adapting to a new DSH release](docs/adapting-to-dsh-releases.md)
+- [Releasing](RELEASING.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)

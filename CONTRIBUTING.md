@@ -23,9 +23,8 @@ pnpm -r test
 ## Development boundaries
 
 - `packages/local-plugin` is the installable DSH plugin. Its build produces the host/client bundles
-  and the bundled remote-agent tarball.
-- `packages/terminal-controller` is bundled into the local plugin. Keep its patch compatible with the
-  main plugin patch.
+  and the bundled remote-agent tarball. It replaces no profile row: terminals are routed by patching
+  the service the stock `terminal-controller` provides.
 - `packages/remote-agent` runs on the remote DSH host.
 - `packages/installer` is the remote bootstrap implementation.
 - `packages/protocol` is the shared wire contract. Change it only with matching client/agent tests.
@@ -50,7 +49,7 @@ For a release bundle:
 node scripts/release-plugin.mjs --release
 ```
 
-The resulting tarball includes the terminal-controller fork as a bundled dependency. Drop `--release`
+The resulting tarball bundles the remote-agent asset. Drop `--release`
 to get a unique `<version>-dev-<timestamp>` build for local iteration: package managers key an install
 on version plus tarball integrity, so a repeated local version silently keeps the files already
 unpacked in a profile.

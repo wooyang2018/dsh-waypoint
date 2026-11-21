@@ -438,7 +438,7 @@ Three consequences the reader should know:
 The panel is read-only in this release: it offers no upload, edit, rename or delete, because writing
 into the anchor would create a second authority for bytes the remote already owns.
 
-### 6.2a Review data: the Forge panel and the change card
+### 6.3 Review data: the Forge panel and the change card
 
 Two native surfaces show what changed, and they are unrelated by design:
 
@@ -532,7 +532,7 @@ Two consequences follow, and both are real:
   plugin context reaches the patched method. A Cordis upgrade that wrapped provided values would fail
   that test instead of quietly un-routing every panel.
 
-### 6.3 Terminals
+### 6.4 Terminals
 
 Terminals use the same mechanism as files: the stock `terminal-controller` row provides the
 `terminalController` service, and `installRemoteTerminalController` (`src/remote/terminal-controller.ts`)
@@ -578,7 +578,7 @@ The `AgentTerminal` returned by `openForAgent` wires the members with a remote m
 (`@deepseek-ai/dsh-api-terminal-controller/typert`). A DSH release that adds a terminal method fails
 that test instead of quietly serving the new method from the local PTY.
 
-## 6.5 Ports: making a remote dev server reachable
+### 6.5 Ports: making a remote dev server reachable
 
 A dev server on a remote workspace is the one thing this plugin cannot route the way it routes files,
 terminals and Git, so it is worth stating why — and what it does instead.
@@ -592,14 +592,14 @@ Web uses `createIframePage` → `IframeImpl` + `IframePresentation` (an `<iframe
 Desktop uses `createElectronPage` → `ElectronWebViewImpl` (a native `<webview>` under a main-process lease).
 Both navigate with `element.src` / `element.loadURL(url)` **in the client**.
 
-That matters because the file and terminal seams from §6.1–6.3 are unavailable here. Those work by
+That matters because the file and terminal seams from §6.1–6.4 are unavailable here. Those work by
 replacing a **Host service** that both the Host and the client reach through the Gateway
 (`installRemoteWorkspaceFiles` shadows `workspaceFiles`; `installRemoteTerminalController` shadows
 `terminalController`). The browser has no such service: a page's bytes arrive over HTTP from wherever its
 URL points, and the URL is resolved by the machine that draws the frame. There is nothing to shadow;
 `sidebarRightTabs.register` is a registry with one slot per kind, and the body is dispatched under the
 definition's own id, so "replacing" the browser would mean reimplementing its whole UI as a build-time
-fork — the §6.3 hammer, for no benefit.
+fork — the approach this repository tried for terminals and then removed, for no benefit.
 
 So a remote dev server fails for a simpler reason than "the renderer is local": `http://localhost:5173`
 typed into that browser resolves on the **user's** machine. The fix is the same one the **Open remote Web

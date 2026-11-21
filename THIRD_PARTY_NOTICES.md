@@ -14,10 +14,15 @@ Renaming a DSH bundle also renames the identity DSH persists, so the two are sep
 |---|---|---|
 | Bundle package | `dsh-remote-local-plugin` | `dsh-waypoint` |
 | Remote agent | `@goldenpigeon/dsh-remote-agent` | `dsh-waypoint-agent` |
-| Terminal controller | `dsh-remote-terminal-controller` | `dsh-waypoint-terminal-controller` |
 | Host state directory | `$DSH_HOME/remote` | `$DSH_HOME/waypoint` |
 | Remote agent state | `$DSH_HOME/remote-agent` | `$DSH_HOME/waypoint-agent` |
 | systemd user unit | `dsh-remote-agent.service` | `dsh-waypoint-agent.service` |
+
+Upstream also shipped a `terminal-controller` package that replaced the stock DSH row. This fork
+dropped it: the fork could not resolve its own dependencies from a profile, and because it also
+disabled the stock row the Host ended up with no terminal service at all. Terminals are now routed by
+patching the service the stock `@deepseek-ai/dsh-api-terminal-controller` provides, so nothing is
+redistributed and there is no third-party code to attribute here.
 
 Installing this fork does not migrate or read upstream state; `docs/operations.md` describes the
 manual move for anyone switching over.
@@ -26,10 +31,6 @@ manual move for anyone switching over.
 
 This project depends on DeepSeek Harness packages published by DeepSeek. Those packages remain under
 their respective licenses.
-
-The `dsh-waypoint-terminal-controller` package is a profile-level fork that re-exports and builds upon
-`@deepseek-ai/dsh-api-terminal-controller`; its original MIT license and copyright notices are
-retained in the upstream package and in this repository's license.
 
 No third-party source is vendored except generated package metadata and the dependencies installed by
 the package manager at build time.
