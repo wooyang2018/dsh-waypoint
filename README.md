@@ -57,6 +57,7 @@ pinned with `remoteDshVersion`.
 | Restart the remote DSH without reinstalling | Available (`systemd` deployments; `nohup` uses Reinstall) |
 | Open the remote DSH Web UI through the tunnel | Available |
 | Remote file tree and file previews | Available (agent-backed over the SSH tunnel) |
+| Remote workspace search from the native file panel | Available (name or workspace-relative path) |
 | Remote terminal per Session | Available (local Sessions keep local PTY; remote Sessions use the remote agent PTY over the SSH tunnel) |
 | Agent tools for host/workspace/session operations | Available |
 | Approval prompts bridged into the local UI | Available |
@@ -332,9 +333,11 @@ The remote agent config remains available for advanced deployments:
 - The local workspace anchor is a metadata handle. File listing, preview, and terminal are routed to
   the remote workspace; remote diffs and some advanced file actions still use the native session's
   own tool results.
-- `dsh-better-sidebar`'s own files tab reads the Session cwd, which for a remote workspace is the empty
-  anchor, so it shows an empty tree. The plugin registers its own **Remote files** tab in that sidebar
-  (read over the tunnel, no local copy); the native **Workspace files** panel works without it.
+- The native **Workspace files** panel browses a remote workspace with no third-party sidebar plugin:
+  the plugin replaces the Host's `workspaceFiles` service methods, so the panel's listings, previews,
+  searches and change watches are served by the remote agent over the tunnel. A DSH release that
+  renames one of those methods turns that routing off; Settings → Remote development then reports
+  that file routing is bypassed instead of showing an unexplained empty tree.
 - A remote session longer than `mirrorMaxEvents` is mirrored from the first complete turn in the
   available tail; older history stays in the remote session. Increase the limit to mirror further
   back, or open the session on the remote host to read the rest.

@@ -145,8 +145,7 @@ check and tunnel watcher schedule a bounded reconnect on any transport failure.
 | `GET` | `/llm/catalog` | `ModelCatalogResult` — the providers/models this host can actually route to |
 | `GET` | `/approvals/events` | SSE `event: ready`, then one `event: request` per pending approval, with `event: heartbeat` keepalives |
 | `GET` | `/files/watch?path=...` | SSE `event: file` with `{ kind: "ready" \| "change" }` |
-| `GET` | `/directories?path=...` | `RemoteDirectoryListing` |
-| `GET` | `/terminals` | `{ terminals: RemoteTerminalInfo[] }` |
+| `GET` | `/directories?path=...` | `RemoteDirectoryListing` || `GET` | `/terminals` | `{ terminals: RemoteTerminalInfo[] }` |
 | `GET` | `/terminals/:id/attach` | SSE `event: frame` with terminal frames |
 
 Read routes use `GET`. Write routes use `POST` with a JSON body:
@@ -162,6 +161,7 @@ Read routes use `GET`. Write routes use `POST` with a JSON body:
 | `POST` | `/sessions/:id/archive` | `{ "stopActivity"?: true }` (default `true`) | `{ "accepted": true }` |
 | `POST` | `/approvals/answer` | `{ "id": "…", "outcome": "allowed-once" \| "rejected" \| "cancelled" \| "unavailable" }` | `{ "accepted": true }` |
 | `POST` | `/files/stat`, `/files/list`, `/files/read`, `/files/bytes` | `{ "path": "/abs/path", "offset"?, "limit"?, "length"? }` | file/list result |
+| `POST` | `/files/search` | `{ "path": "/abs/root", "query": "…", "excludedPaths"?, "includeHidden"?, "respectGitignore"? }` | `RemoteFileSearchResult` |
 | `POST` | `/terminals` | `{ "cwd": "/abs/dir", "id"?, "title"?, "cols"?, "rows"?, "shellPath"? }` | `RemoteTerminalInfo` |
 | `POST` | `/terminals/:id/input` | `{ "type": "write", "data": "…" }` or `{ "type": "resize", "cols": 100, "rows": 30 }` | `{ "accepted": true }` |
 | `POST` | `/terminals/:id/rename` | `{ "title": "…" }` | `{ "accepted": true }` |
@@ -183,6 +183,13 @@ surface — both `POST /terminals` (which allocates the PTY and starts the login
 `POST /terminals/:id/input` — reaches a shell, and both are gated by the same bearer token. File and
 terminal traffic from the local UI travels over the existing SSH tunnel; no per-operation SSH
 connection is opened by the local plugin.
+
+`/files/search` answers the file panel's search box. Its result carries two independent flags rather
+than one: `truncated` means the match list hit its cap, `incomplete` means the walk stopped early — at
+its entry budget, its depth limit, its deadline, or an unreadable directory. A client must not render a
+stopped walk as "no results": absence of a match after an incomplete walk is not evidence that the file
+does not exist. The walk never follows a symbolic link and never leaves the root it was given, so a link
+inside a workspace cannot widen a search to the host.
 
 ## Approvals
 
@@ -361,9 +368,11 @@ never logged or stored by the local plugin.
 - The protocol never carries model credentials.
 - The agent's write surface is session/workspace creation, prompts, cancel, archive, model and sandbox
   selection, approval answers, and terminal input/rename/close. The native UI's file tree, previews,
-  file watching, and terminals are served by this same HTTP protocol over the existing SSH tunnel
-  (`/files/*`, `/files/watch`, `/terminals/*`); the local plugin never opens a per-operation SSH
-  connection.
+  file watching, workspace search, and terminals are served by this same HTTP protocol over the
+  existing SSH tunnel (`/files/*`, `/files/watch`, `/files/search`, `/terminals/*`); the local plugin
+  never opens a per-operation SSH connection. `file.search` joins the capability set for the same
+  reason as the others: an agent that predates it must be reinstalled rather than silently answering
+  the panel's search from the wrong axis.
 - Adding another mutation verb requires a protocol revision and a re-review of this boundary.
 
 ## Package surface: contract versus internals

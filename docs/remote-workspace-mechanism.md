@@ -391,36 +391,53 @@ side differ:
    (`resolveRemoteFileTarget` in `src/remote/remote-path.ts`). This rule is what lets a Windows client
    browse a Linux workspace.
 
-### 6.2 A file tree inside `dsh-better-sidebar`
+### 6.2 The native file panel, and why one interception layer is enough
 
-The right sidebar's own files tab (`dsh-better-sidebar`'s `editor` type with no path) reads the Session
-cwd with `node:fs`, and a mirrored Session's cwd is the **empty local anchor**. That tab therefore shows
-an empty directory for remote workspaces, which is expected rather than a bug: the plugin never copies
-remote files to local disk.
+The Host ships its own right-sidebar file panel (`@deepseek-ai/dsh-client-ui-sidebar-files`, the
+**Workspace files** page). It reads a Session's tree through `remote.workspaceFiles.list(sessionId,
+path)`, previews through `read`/`stat`/`readBytes`, searches through `search`, and follows external
+changes through `changes` — never through `node:fs`. Because a mirrored Session's cwd is the **empty
+local anchor**, that panel would show an empty tree; §6.1's adapter is what makes it browse the remote
+workspace instead. No third-party sidebar plugin takes part.
 
-To make remote files reachable from that sidebar without introducing a second copy, the plugin
-contributes **its own tab** through the sidebar's public extension point:
+The mechanism is worth stating precisely, because a plausible reading of the code suggests the
+opposite and once led this repository to ship a redundant browser-side proxy:
+
+**The Host's Typert Gateway resolves a Remote method per call, not once at mount time.**
 
 ```ts
-ctx.inject(['betterSidebar'], child => {
-  child.effect(() => registerRemoteTreeTab(child, api, t))   // "Remote files"
-})
+// prepareInvocation
+const method = Reflect.get(callReceiver, implementation)
+if (typeof method !== 'function') throw new TypertGatewayError('gateway/method-unavailable', …)
+// invokePrepared
+return await Reflect.apply(prepared.method, prepared.receiver, prepared.args)
 ```
 
-`registerRemoteTreeTab` (`src/client/remote-tree-tab.tsx`) registers a tab whose component asks the
-`host/files/*` endpoints — the same adapter described in 6.1 — so every listing and page comes from the
-remote agent over the tunnel. Three details make this work:
+`callReceiver` is the service instance, and `installRemoteWorkspaceFiles` installs its
+implementations as **own properties of that instance**, shadowing the prototype for every caller in
+the process. The browser's generated Remote methods, the native sidebar tree and the document preview
+therefore all reach the adapter, whether or not anything is patched in the browser.
 
-- **The injection is conditional.** `betterSidebar` is an optional third-party service; a module-level
-  `inject` entry would stop the whole plugin from activating for users who do not have it.
-- **Only a structural type is declared.** The module does not import the sidebar package, so it stays
-  out of this package's dependencies and the client bundle's externals.
-- **Paths are workspace paths, not remote absolute paths.** `host/files/list` resolves a relative path
-  against the mirrored workspace, and the listed `path` comes back in that same space (empty for the
-  root). The tab therefore never needs the anchor or the remote root, and works for any workspace path.
+A browser-side proxy cannot observe that resolution, so it can only add a second interception point —
+and it is a *wrong* one: forwarding the wire JSON hands `readBytes` callers the base64 **string** where
+`WorkspaceFileBytes.data` is contractually a `Uint8Array`. The adapter decodes base64 into a `Buffer`,
+and leaving the call on the generated path lets Typert's codec encode that Buffer correctly.
 
-The tab is read-only: it offers no upload, edit, rename or delete, because writing into the anchor would
-create a second authority for bytes the remote already owns.
+Three consequences the reader should know:
+
+- **There is exactly one layer to maintain.** `read`, `readBytes`, `stat`, `list`, `search` and
+  `changes` are all replaced there; a new capability is one more assignment, not a second plumbing
+  path through the browser.
+- **A renamed Host method is a silent failure, so it is checked and reported.** `remote/patch-contract.ts`
+  compares the live service against `REQUIRED_WORKSPACE_FILE_METHODS` at install time; a missing name
+  logs the exact method and sets `fileRouting: 'bypassed'` in the state the Settings page reads, so the
+  symptom is "routing is off" rather than "the remote directory is empty".
+- **The replacement is reversible.** The installer returns a restorer that runs inside `ctx.effect`;
+  it deletes only the own properties it created, so the prototype method becomes visible again and a
+  replacement installed by a later plugin is left alone.
+
+The panel is read-only in this release: it offers no upload, edit, rename or delete, because writing
+into the anchor would create a second authority for bytes the remote already owns.
 
 ### 6.3 Terminals
 
@@ -489,7 +506,7 @@ the provisioning flow directly (the remote process has to restart with the new e
 | Remote sessions over `mirrorMaxEvents` mirror only the tail | The snapshot is "the newest page"; earlier history stays in the remote UI |
 | Cold sessions have no event stream, only polling | The remote answers `session/not-live`; cold resume is not implemented |
 | The anchor is empty, so reading `fs` locally sees nothing | Remote content never lands on local disk |
-| `dsh-better-sidebar`'s own files tab shows an empty tree for a mirrored Session | That tab reads the cwd with `node:fs`; use the plugin's **Remote files** tab instead (6.2) |
+| A renamed `workspaceFiles` method would silently switch file routing off | The install step checks the live service and reports `fileRouting: 'bypassed'` (6.2) |
 | Remote diffs / some advanced file actions still use the native tool results | Only `workspaceFiles` and the terminal are intercepted |
 | SSH reachability required; no relay/NAT traversal | Only ssh `-L`/`-R` today |
 | Windows remotes unsupported | The bootstrap is POSIX bash, and Node.js is handled as Linux/macOS |

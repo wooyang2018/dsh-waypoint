@@ -50,6 +50,24 @@ Previously, in the 0.8.x line:
 
 ## Unreleased
 
+- Search a remote workspace from the native file panel. `POST /files/search` joins the agent's file
+  surface (`file.search` capability) and the host-side adapter, so the panel's search box answers from
+  the remote tree instead of the empty local anchor. Matching follows the Host's own rules — a query
+  without `/` matches an entry name at any depth, one with `/` matches a workspace-relative path — and
+  the result keeps `truncated` and `incomplete` separate, because a walk stopped by its budgets must
+  not be presented as "no results". The walk never follows a symlink and never leaves its root.
+- Remove the browser-side `workspaceFiles` proxy. It rested on a false premise: that the Host binds
+  generated Remote methods once at mount time. The Typert Gateway resolves them per call with
+  `Reflect.get(receiver, method)`, so the host-side adapter alone reaches every caller. Dropping the
+  proxy also fixes a real defect — it forwarded the wire JSON, handing `readBytes` callers a base64
+  string where `WorkspaceFileBytes.data` is a `Uint8Array`.
+- Report a broken file-routing contract instead of showing an empty tree. The install step compares the
+  live `workspaceFiles` service against the methods the adapter replaces, names any that are missing in
+  the log, and exposes `fileRouting` in the state the Settings page reads. The adapter also now returns
+  a restorer that runs inside `ctx.effect`, deleting only the own properties it created.
+- Drop the `dsh-better-sidebar` integration. The native **Workspace files** panel already browses a
+  remote workspace without it, so the extra tab, its stylesheet, its glyph map, its tests and its copy
+  were dead weight in any profile that did not install that plugin.
 - Offer a deliberate **install remote Node.js** action instead of dead-ending on a missing runtime.
   Provisioning still never installs one (`exit 21`/`exit 22`), but the expanded host card now probes
   the remote first and then, on confirmation, installs nvm `v0.40.1` and the latest Node.js LTS

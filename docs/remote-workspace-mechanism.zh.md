@@ -346,31 +346,47 @@ running 标记，以及「inbox 里的下一条 prompt 何时放行」。远端 
    （`src/remote/remote-path.ts` 的 `resolveRemoteFileTarget`）。这条规则是 Windows 客户端浏览 Linux
    工作区的前提。
 
-### 6.2 右侧边栏里的文件树
+### 6.2 原生文件面板，以及为什么一层拦截就够了
 
-右侧边栏自带的文件标签页（`dsh-better-sidebar` 的 `editor` 类型在不带 path 时的形态）用 `node:fs`
-读 Session 的 cwd，而镜像会话的 cwd 是**空的本地锚点**。所以它对远程工作区显示空目录——这是预期行为，
-不是缺陷：本插件从不把远端文件复制到本地磁盘。
+宿主自带右侧栏文件面板（`@deepseek-ai/dsh-client-ui-sidebar-files`，即 **Workspace files /
+工作区文件** 页）。它读 Session 的树走 `remote.workspaceFiles.list(sessionId, path)`，预览走
+`read`/`stat`/`readBytes`，搜索走 `search`，跟随外部改动走 `changes`——**从不走 `node:fs`**。而镜像会话
+的 cwd 是**空的本地锚点**，所以这个面板本来会显示空树；正是 6.1 那层适配器让它改为浏览远端工作区。
+整个过程不涉及任何第三方侧栏插件。
 
-为了让这个边栏也能访问远端文件、同时不引入第二份副本，插件通过该边栏的公开扩展点**注册自己的标签页**：
+这个机制值得讲准确，因为按代码字面很容易得出相反结论，而本仓库正因为那个错误结论多写了一层浏览器
+代理：
+
+**宿主的 Typert Gateway 是「每次调用时」解析 Remote 方法，而不是在挂载时绑定一次。**
 
 ```ts
-ctx.inject(['betterSidebar'], child => {
-  child.effect(() => registerRemoteTreeTab(child, api, t))   // 「远端文件」
-})
+// prepareInvocation
+const method = Reflect.get(callReceiver, implementation)
+if (typeof method !== 'function') throw new TypertGatewayError('gateway/method-unavailable', …)
+// invokePrepared
+return await Reflect.apply(prepared.method, prepared.receiver, prepared.args)
 ```
 
-`registerRemoteTreeTab`（`src/client/remote-tree-tab.tsx`）注册的标签页调用 `host/files/*` 端点——也就是
-6.1 那套适配器——因此每次列目录和读文件都经隧道来自远端 agent。三个细节让它成立：
+`callReceiver` 是 service 实例，而 `installRemoteWorkspaceFiles` 把实现装在**该实例的自有属性**上，
+在进程内遮蔽了原型实现。因此浏览器的生成方法、原生文件树、文档预览**全都会走到适配器**，无论浏览器侧
+是否还有一层补丁。
 
-- **注入是条件式的**。`betterSidebar` 是可选的第三方服务；把它写进模块级 `inject` 会让没装该插件的用户
-  整个插件都无法激活。
-- **只声明结构化类型**。该模块不 import 那个边栏包，所以它既不会进入本包的依赖，也不会进入客户端 bundle
-  的 external 列表。
-- **路径是工作区路径，不是远端绝对路径**。`host/files/list` 会把相对路径解析到镜像工作区，返回的 `path`
-  也在同一命名空间（根为空字符串）。因此标签页既不需要锚点、也不需要远端根路径，任何工作区路径都能用。
+浏览器侧代理观察不到这次解析，它只能再加一个拦截点——而且是**错的**那一个：转发 wire JSON 会让
+`readBytes` 的调用方拿到 base64 **字符串**，而 `WorkspaceFileBytes.data` 按契约必须是 `Uint8Array`。
+适配器把 base64 解成 `Buffer`，让调用停在生成路径上，Typert 的 codec 才能把它正确编码出去。
 
-标签页是只读的：不提供上传、编辑、重命名或删除，因为往锚点写入会让远端已经拥有的字节出现第二个权威副本。
+由此有三点读者应当知道：
+
+- **只有一层需要维护。** `read`、`readBytes`、`stat`、`list`、`search`、`changes` 都在那里替换；
+  新增一个能力只是多一处赋值，而不是在浏览器里再铺一条管线。
+- **宿主改名是静默失败，所以它被检查并上报。** `remote/patch-contract.ts` 在安装时拿 live service 与
+  `REQUIRED_WORKSPACE_FILE_METHODS` 比对；缺失时日志写出具体方法名，并把 `fileRouting: 'bypassed'`
+  写进设置页读取的 state——症状于是是「路由已关闭」，而不是「远端目录是空的」。
+- **替换是可还原的。** 安装函数返回 restorer，由 `ctx.effect` 持有；它只删除自己建立的自有属性，于是
+  原型方法重新可见，而后来插件装的替换不会被误删。
+
+本版本的面板是只读的：不提供上传、编辑、重命名或删除，因为往锚点写入会让远端已经拥有的字节出现第二个
+权威副本。
 
 ### 6.3 终端
 
@@ -427,8 +443,8 @@ ctx.inject(['betterSidebar'], child => {
 | 超过 `mirrorMaxEvents` 的远端会话只镜像尾部 | 快照是「最新一页」，更早历史仍在远端 UI |
 | 冷会话没有事件流，只有轮询 | 远端 `session/not-live`，cold resume 未实现 |
 | 锚点是空目录，本地直接读 `fs` 会看到空 | 远端内容从不落地到本地磁盘 |
-| `dsh-better-sidebar` 自带的文件标签页对镜像会话显示空树 | 该标签页用 `node:fs` 读 cwd；请改用本插件的「远端文件」标签页（6.2） |
-| remote diff / 部分高级文件动作仍用本地工具的既有结果 | 只接管了 `workspaceFiles` 与终端两个接缝 |
+| remote diff / 部分高级文件动作仍用本地工具的既有结果 | 只接管了 `workspaceFiles`、`workspaceChanges` 之外的两处接缝 |
+| 宿主重命名 `workspaceFiles` 方法会让文件路由静默失效 | 安装时自检并上报 `fileRouting: 'bypassed'`（6.2） |
 | 需要 SSH 可达，无 relay/NAT 穿透 | 当前只有 ssh `-L`/`-R` |
 | Windows 远端不支持 | bootstrap 是 POSIX bash，Node.js 也按 Linux/macOS 处理 |
 | 远端终端需要 `python3` | PTY 是 Python 标准库 `pty` 辅助脚本，不是原生 node-pty |

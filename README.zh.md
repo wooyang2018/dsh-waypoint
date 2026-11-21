@@ -53,6 +53,7 @@
 | 不重新安装、只重启远端 DSH | 可用（`systemd` 部署；`nohup` 部署用重新安装） |
 | 经隧道打开远端 DSH Web UI | 可用 |
 | 远端文件树和文件预览 | 可用（经 SSH 隧道的 agent API） |
+| 原生文件面板里的远端工作区搜索 | 可用（按条目名或工作区相对路径） |
 | 每个 Session 的远端终端 | 可用（本地 Session 用本地 PTY；远端 Session 用经 SSH 隧道的远端 agent PTY） |
 | 主机/工作区/Session 的 Agent 工具 | 可用 |
 | 审批提示接入本地 UI | 可用 |
@@ -251,7 +252,9 @@ $DSH_HOME/waypoint/test-visibility.json
 
 - 完整的远端 DSH 浏览器 UI 是诊断入口，不是主流程。远端 agent 保持 `dsh-api-remotes` 启用，该界面照常启动；审批桥以 `prepend` 注册，镜像审批仍会到达本地原生 UI。需要远端浏览器时（例如安装远端插件），用主机卡片上的 **打开远端 Web UI**。
 - 本地 workspace anchor 只是元数据句柄。文件列表、预览和终端会路由到远端；远端 diff 和部分高级文件操作仍使用原生 Session 的工具结果。
-- `dsh-better-sidebar` 自带的文件标签页读 Session 的 cwd，而远程工作区的 cwd 是空锚点，因此它显示空树。插件会在该边栏里注册自己的 **远端文件** 标签页（经隧道读取、不落本地副本）；原生 **Workspace files** 面板无需该插件也可用。
+- 原生 **Workspace files（工作区文件）** 面板可直接浏览远端工作区，**不需要任何第三方侧栏插件**：插件替换了宿主的
+  `workspaceFiles` 服务方法，因此该面板的列目录、预览、搜索与变更监听都由远端 agent 经隧道应答。若某个 DSH 版本改
+  了其中任一方法名，这层路由即失效——此时「设置 → 远程开发」会显示文件路由已 bypass，而不是只留一个没有解释的空树。
 - 超过 `mirrorMaxEvents` 的远端 Session 会从可用尾部里第一个完整 turn 开始镜像；更早的历史留在远端 Session。想镜像更早的内容就调大限制，或直接在远端打开该会话查看。
 - 不支持 Windows 远端，也不支持 relay/NAT 穿透。
 
