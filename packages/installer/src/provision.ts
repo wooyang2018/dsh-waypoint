@@ -10,9 +10,20 @@
  */
 
 import { access } from 'node:fs/promises'
-import { renderBootstrapScript } from './bootstrap.ts'
+import { renderBootstrapScript, shellPath } from './bootstrap.ts'
 import type { StartMode } from './options.ts'
-import { parseTarget, runRemoteScript, uploadFile } from './ssh.ts'
+import { parseTarget, runRemote, runRemoteScript, uploadFile } from './ssh.ts'
+
+/**
+ * Name of the uploaded agent package, inside the state directory.
+ *
+ * Fixed rather than timestamped: pnpm records the `file:` spec in the profile's
+ * `pnpm-lock.yaml`, so whatever path is uploaded to stays referenced for the life
+ * of that profile. A timestamped name would leave every older package referenced
+ * and, once the operating system reclaimed it, make the next install fail on a
+ * path that can never come back. One fixed name means one file, always present.
+ */
+const AGENT_PACKAGE_NAME = 'agent-package.tgz'
 
 /** Inputs for one remote provisioning run. */
 export interface ProvisionRemoteOptions {
@@ -62,12 +73,67 @@ export interface ProvisionRemoteResult {
   readonly remoteTarball: string
 }
 
+/**
+ * Render the remote command that prepares the package directory and answers its
+ * absolute path.
+ *
+ * Exported for tests: the shape of this command decides whether a first install
+ * works at all, and it is cheap to assert without an SSH host.
+ *
+ * @param dshHome - Configured remote DSH home, possibly `~`-relative.
+ * @returns One shell command whose stdout is the resolved directory.
+ */
+export function preparePackageDirectoryCommand(dshHome: string): string {
+  const stateDir = `${shellPath(dshHome)}/waypoint-agent`
+  // The path is printed by the remote shell, not assembled here: `~/.dsh` can
+  // only be expanded on that side, and the answer is what the upload uses.
+  // `mkdir -p` is part of the same command because scp will not create it and the
+  // bootstrap's own `mkdir` runs after the upload.
+  return `mkdir -p ${stateDir} && printf %s ${stateDir}`
+}
+
+/**
+ * Resolve the remote directory the agent package is uploaded to, creating it.
+ *
+ * The package goes under the state directory beside `agent.json` — a path the
+ * remote profile holds anyway, rather than a temporary one — because pnpm writes
+ * the upload path into the profile lockfile and keeps that record. A path whose
+ * file the operating system may reclaim turns every later install into a
+ * failure, so the location has to outlive the install.
+ *
+ * @param target - Validated SSH destination.
+ * @param options - Provisioning options supplying SSH settings and the state dir.
+ * @returns Absolute remote path of the uploaded package.
+ * @throws When the directory cannot be prepared, which makes any upload attempt
+ * pointless and should be reported before spending time on one.
+ */
+async function prepareRemotePackagePath(
+  target: ReturnType<typeof parseTarget>,
+  options: ProvisionRemoteOptions,
+): Promise<string> {
+  // stdout carries the resolved path alone; echoStdout is off so a verbose run
+  // cannot interleave it with diagnostics.
+  const probe = await runRemote(target, preparePackageDirectoryCommand(options.dshHome), {
+    binary: options.sshBinary,
+    strictHostKeyChecking: options.strictHostKeyChecking,
+    timeoutMs: 30_000,
+    verbose: options.verbose ?? false,
+    echoStdout: false,
+  })
+  const directory = probe.stdout.trim()
+  if (directory === '' || !directory.startsWith('/')) {
+    throw new Error(`could not resolve the remote state directory (got ${JSON.stringify(directory)})`)
+  }
+  return `${directory}/${AGENT_PACKAGE_NAME}`
+}
+
 /** Upload the agent and run the bootstrap script. */
 export async function provisionRemoteAgent(options: ProvisionRemoteOptions): Promise<ProvisionRemoteResult> {
   const target = parseTarget(options.target)
   await access(options.agentTarballPath)
-  const remoteTarball = `/tmp/dsh-waypoint-agent-${Date.now()}-${process.pid}.tgz`
   const timeoutMs = Math.max(options.timeoutMs ?? 600_000, 600_000)
+
+  const remoteTarball = await prepareRemotePackagePath(target, options)
 
   options.onProgress?.('dsh-waypoint: uploading agent package')
   await uploadFile(options.agentTarballPath, remoteTarball, target, {
