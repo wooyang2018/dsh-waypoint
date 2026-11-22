@@ -54,6 +54,28 @@
   takes no local port and answers with one row. `parseLoopbackUrl` accepts a scheme-less `localhost:5173`
   as well as `http://…`, because `new URL('localhost:5173')` parses as scheme `localhost:` with an empty
   host and a base argument does not change that.
+- **`install-local` installs into the `desktop` profile instead of printing instructions.** It used to
+  pack, print a tarball path and stop, leaving a second manual step, because `dsh plugin --profile
+  desktop` is refused at argument parse time. That refusal is fed by a boolean parameter of the exported
+  `runCli(options)`, so the script imports it and passes `manageDesktopProfile: true`: the install then
+  runs through the Host's own `runProfilePnpm`, including the file lock, the compatibility preflight and
+  the `reconcile` step that registers the bundle. Nothing is reimplemented. Two platform facts shape
+  the implementation: only the application's runtime can read inside `app.asar`, so the script
+  re-executes itself under it when started with plain Node; and a bare Windows path is refused by
+  `import` with `ERR_UNSUPPORTED_ESM_URL_SCHEME`, so the CLI is imported through a `file://` URL. The
+  packed tarball travels in `DSH_INSTALL_TARBALL` because spawning pnpm from that runtime fails on
+  Windows. Quit DSH before installing: a running Host holds the plugin files that pnpm renames.
+- **`install-local.sh` is now `install-local.mjs`.** A shell cannot do this portably on Windows — `node`
+  need not be on its PATH, a Windows Node can lose stdout through a WSL command substitution, and the
+  resulting `/mnt/c/...` path is unreadable to the Host — and the desktop install needs to become the
+  application's own process, which a shell script cannot arrange for itself.
+- **`test-sandbox.sh` is now `test-sandbox.mjs`** for the same reason, and it is the one documented
+  command for an isolated environment. Four shell idioms each failed on Windows: `mktemp -d`,
+  backgrounding with `&` plus `kill`, polling a log with `grep -o`, and a heredoc. The replacement
+  compares resolved paths before adopting a `DSH_HOME` (so `~/.dsh/../.dsh` and a case difference are
+  still refused), spawns the host without a shell — one would split a path containing spaces — and
+  stops it on exit, including the shim's grandchild on Windows. It reports the tokenized URL it waited
+  for and writes the `test-visibility.json` manifest rather than deleting test workspaces.
 
 ### Fixed
 

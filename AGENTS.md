@@ -34,7 +34,7 @@ Never test against the user's primary DSH profile or a production remote `~/.dsh
 environment, which builds and installs into a fresh temporary `DSH_HOME` and prints its URL:
 
 ```sh
-./scripts/test-sandbox.sh
+node scripts/test-sandbox.mjs
 ```
 
 For a real remote test, point a second profile at throwaway directories under `/tmp` and use

@@ -90,17 +90,23 @@ dsh-waypoint@1.1.1
 cd /path/to/dsh-waypoint
 pnpm install
 pnpm -r build
-./scripts/install-local.sh
+node scripts/install-local.mjs
 ```
 
-脚本会构建 workspace，生成一个单插件 tarball，并安装到 `desktop` profile。安装到 DSH Web profile：
+脚本会构建 workspace，生成一个单插件 tarball，并完成安装——默认装进 `desktop` profile：
 
 ```sh
-./scripts/install-local.sh --profile web
-# 重启使用该 profile 的 DSH Web 进程
+node scripts/install-local.mjs              # desktop profile
+node scripts/install-local.mjs --profile web
 ```
 
-重新打开 DSH 后出现 **Settings → Remote development**。
+`desktop` profile 会在解析参数阶段拒绝 `dsh plugin`，所以脚本改为调用 CLI 自己导出的 `runCli`，并传入
+那道检查要找的进程内许可。这与运行中的 Host 走的是同一条代码路径，包含 bundle 注册步骤，因此没有任何
+一部分被重新实现，profile 的文件锁也照常生效。又因为只有应用自己的运行时能读 `app.asar` 内部，脚本在
+普通 Node 下启动时会自己换用该运行时重新执行。
+
+运行中的 DSH 会占用插件文件，而 pnpm 替换包靠的是重命名目录，所以安装前请退出应用，装完再打开以加载
+新的 host 与 client bundle。之后出现 **Settings → Remote development**。
 
 ## 使用
 
@@ -138,7 +144,7 @@ $DSH_HOME/waypoint/test-visibility.json
 面向 agent 的测试说明在 [AGENTS.md](AGENTS.md)。UI / 集成工作请使用隔离环境：
 
 ```sh
-./scripts/test-sandbox.sh
+node scripts/test-sandbox.mjs
 ```
 
 测试工作区可见性见 [docs/testing.md](docs/testing.md)。

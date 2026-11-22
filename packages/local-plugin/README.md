@@ -70,11 +70,16 @@ Keep this pinned version in sync with each release.
 
 ```sh
 cd ../..
-./scripts/install-local.sh          # desktop profile
-./scripts/install-local.sh --profile web
+node scripts/install-local.mjs          # desktop profile
+node scripts/install-local.mjs --profile web
 ```
 
-The installer creates one tarball; restart DSH after it finishes.
+The installer creates one tarball and installs it, including into the reserved `desktop` profile: it
+imports the CLI's own `runCli` and passes the in-process permission that the argument-parse guard looks
+for, so the install is the Host's own code path rather than a reimplementation. Only the application's
+runtime can read inside `app.asar`, so the script re-executes itself under it when started with plain
+Node. Quit DSH before installing and reopen it afterwards — a running Host holds the plugin files open
+that pnpm needs to rename.
 
 ## Use
 

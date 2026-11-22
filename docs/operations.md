@@ -6,18 +6,23 @@ side itself.
 
 ## 1. Install the local plugin
 
-Run the installer; it can install while DSH Desktop is open. Restart the app afterwards to load the new
-host and client bundles:
+Quit DSH Desktop first, then run the installer. A running Host holds plugin files open, and pnpm
+replaces packages by renaming directories:
 
 ```sh
 cd /path/to/dsh-waypoint
-./scripts/install-local.sh
+node scripts/install-local.mjs
 ```
+
+That installs into the `desktop` profile by default. The CLI refuses that profile at argument parse
+time, so the script calls the CLI's own exported `runCli` with the in-process permission that check
+looks for — the same code path the running Host uses, including bundle registration and the profile
+file lock. Reopen DSH afterwards.
 
 For a DSH Web profile:
 
 ```sh
-./scripts/install-local.sh --profile web
+node scripts/install-local.mjs --profile web
 # restart the DSH Web process after the script finishes
 ```
 
@@ -347,7 +352,8 @@ The normal plugin flow calls the same provisioning library.
 
 ## Updating
 
-- Local plugin: quit DSH, run `./scripts/install-local.sh`, reopen.
+- Local plugin: quit DSH, run `node scripts/install-local.mjs`, reopen. The script installs into the
+  `desktop` profile itself.
 - Remote agent: click **重新安装** on the host card.
 - Remote DSH: when the host card reports that the remote runtime is older than the local one,
   click **Update remote DSH**. The host remains usable while the update is pending; the plugin

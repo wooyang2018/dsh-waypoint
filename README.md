@@ -44,7 +44,7 @@ pinned with `remoteDshVersion`.
 
 Everything below works against a real SSH host, with no client fork:
 
-- One-click local plugin install (`scripts/install-local.sh`)
+- One-click local plugin install (`scripts/install-local.mjs`)
 - Plugin-owned remote provisioning over SSH
 - Host registry, discovery, SSH tunnel, health, reconnect
 - Remote workspaces appear as normal local workspaces
@@ -98,18 +98,26 @@ For development, clone the repository and run the installer:
 cd /path/to/dsh-waypoint
 pnpm install
 pnpm -r build
-./scripts/install-local.sh
+node scripts/install-local.mjs
 ```
 
-The script builds the workspace, creates a single plugin tarball, and installs that tarball into the
-`desktop` profile. For a DSH Web profile:
+The script builds the workspace, creates a single plugin tarball, and installs it — into the `desktop`
+profile by default:
 
 ```sh
-./scripts/install-local.sh --profile web
-# restart that DSH Web process
+node scripts/install-local.mjs              # desktop profile
+node scripts/install-local.mjs --profile web
 ```
 
-Reopen DSH. **Settings → Remote development** appears.
+The `desktop` profile refuses `dsh plugin` at argument parse time, so the script installs through the
+CLI's own exported `runCli` with the in-process permission that check looks for. That is the same code
+path the running Host uses, including the bundle registration step, so nothing is reimplemented and the
+profile lock still serializes the write. Because only the application's runtime can read inside
+`app.asar`, the script re-executes itself under it when started with plain Node.
+
+A running DSH holds plugin files open and pnpm replaces packages by renaming directories, so quit the
+app before installing, then reopen it to load the new bundles. **Settings → Remote development**
+appears.
 
 ## Use
 
@@ -165,7 +173,7 @@ Agent-facing testing instructions live in [AGENTS.md](AGENTS.md). For UI/integra
 isolated environment:
 
 ```sh
-./scripts/test-sandbox.sh
+node scripts/test-sandbox.mjs
 ```
 
 See [docs/testing.md](docs/testing.md) for test workspace visibility.

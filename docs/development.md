@@ -88,8 +88,8 @@ run it without a TypeScript loader, and `scripts/tsconfig.json` type-checks the 
 | `select_dsh_version.mjs` | Re-pins every DSH package to one target version (CI) |
 | `release-notes.mjs` | Prints the CHANGELOG section for the current version |
 | `test-e2e.mjs` | Packs, then runs Playwright against that exact tarball |
-| `install-local.sh` | Build, pack, and install into a local profile |
-| `test-sandbox.sh` | Starts an isolated `DSH_HOME` DSH Web for integration tests |
+| `install-local.mjs` | Build, pack, and install into a local profile, including the reserved `desktop` one |
+| `test-sandbox.mjs` | Starts an isolated `DSH_HOME` DSH Web for integration tests |
 
 Removing build output is not always harmless: a file git still *tracks* under `lib/` would show up as
 a deletion in the next commit. `node scripts/clean.mjs` therefore warns when that is about to happen,
@@ -135,19 +135,41 @@ There is deliberately no `dsh plugin remove` step. On a profile carrying many pl
 manifest and then hangs inside pnpm (observed: nine minutes, no output, killed by timeout), leaving
 `package.json` half-written. Re-adding a different spec replaces the dependency on its own.
 
-The tarball path is printed on stdout and nothing else, because `scripts/install-local.sh` and
-`scripts/test-sandbox.sh` consume it as `TARBALL="$(node scripts/release-plugin.mjs)"`. Progress goes
-to stderr.
+The tarball path is printed on stdout and nothing else, because `scripts/install-local.mjs` and
+`scripts/test-sandbox.mjs` consume it as `TARBALL="$(node scripts/release-plugin.mjs)"`. Progress goes
+to stderr. Both callers also keep their own build output on stderr for the same reason: letting pnpm
+inherit stdout put a 32-line build log ahead of the path a caller was capturing.
 
-Two profile details matter when installing by hand:
+The reserved `desktop` profile needs a deliberately different install path:
 
-- `dsh plugin --profile desktop …` is refused (`managed exclusively by the Electron application`), so
-  a local build goes into that profile with `pnpm add` from inside `$DSH_HOME/profiles/desktop`.
-  Only the app's own launcher passes the permission this refusal checks for;
-  `scripts/install-local.sh` detects the case and stops with the manual instructions rather than
-  letting the CLI error surface after a full build.
-- `pnpm add` records the dependency but does **not** add the package to `dsh.profile.bundles`. Add it
-  there too, or DSH will not load the bundle.
+- `dsh plugin --profile desktop …` is refused with `managed exclusively by the Electron
+  application`. The refusal is `rejectElectronProfile` in the launcher's `bin`, which runs at argument
+  parse time; the flag that would permit it (`manageDesktopProfile`) is an in-process argument that no
+  command-line option or environment variable sets.
+- It **is** reachable from code. `runCli(options)` is exported and destructures that flag, so
+  `scripts/install-local.mjs` imports it and passes `manageDesktopProfile: true`. The install then runs
+  through the Host's own `runProfilePnpm`: the file lock on `package.json`, the compatibility
+  preflight, `pnpm add`, and the `reconcile` pass that appends the package to `dsh.profile.bundles`.
+  Nothing is reimplemented and no lock is bypassed — what the guard defends against is a second process
+  racing the application's writes, and that lock is what actually serializes them.
+- Plain Node **cannot read inside `app.asar`**: `fs.existsSync` returns false for a path the
+  application's runtime reads happily, and a bare Windows path is refused by `import` with
+  `ERR_UNSUPPORTED_ESM_URL_SCHEME`. The script therefore re-executes itself under the application's
+  binary with `ELECTRON_RUN_AS_NODE=1` and imports the CLI through a `file://` URL. The already-packed
+  tarball travels in `DSH_INSTALL_TARBALL`, because spawning pnpm from that runtime fails on Windows the
+  same way the section below describes.
+- A running Host holds loaded plugin files open, and pnpm replaces packages by renaming directories.
+  That surfaces as `EPERM` on whichever dependency is held, which has nothing to do with the plugin
+  being installed. Quit the application, install, reopen.
+
+The `plugin_manager` tool drives the same Host-side install from inside a session, which is the right
+choice when a session is already running. Its `application` field says whether the change took effect:
+`applied`, or `restart-required` with a `restartReason` naming what forced the restart.
+
+`dsh plugin add` handles bundle registration on every profile it manages, including `desktop`:
+`runProfilePnpm` calls the same `reconcile` step that appends the new package to
+`dsh.profile.bundles`. A hand-written `pnpm add` from inside the profile directory does **not**, and
+that is the case where the package has to be added to `bundles` by hand.
 
 ## npm and pnpm on Windows
 
