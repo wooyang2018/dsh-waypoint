@@ -221,16 +221,26 @@ describe('bootstrap rendering', () => {
       agentTarball: '/tmp/agent.tgz',
       modelRoutes: overlay,
     })
+    // `--patch` belongs to the `web` command and must follow it immediately.
+    // After `--host`/`--port` the launch fails outright with
+    // "error: unknown option '--patch'", which a real host showed; the app never
+    // started, so this position is behavioural and not cosmetic.
     assert.match(
       unit,
-      /ExecStart="\$DSH_BIN" web --host 127\.0\.0\.1 --port \$PORT --no-open --patch "\$DSH_HOME\/waypoint-agent\/model-routes\.json"/,
+      /ExecStart="\$DSH_BIN" web --patch "\$DSH_HOME\/waypoint-agent\/model-routes\.json" --host 127\.0\.0\.1 --port \$PORT --no-open/,
     )
     const script = renderBootstrapScript({
       profile: 'web', port: 0, dshHome: '/srv/dsh',
       dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', start: 'nohup',
       agentTarball: '/tmp/a.tgz', modelRoutes: overlay,
     })
-    assert.match(script, /--no-open --patch "\$DSH_HOME\/waypoint-agent\/model-routes\.json"/)
+    assert.match(script, /web --patch "\$DSH_HOME\/waypoint-agent\/model-routes\.json" --host 127\.0\.0\.1 --port "\$PORT" --no-open/)
+    // The failing shape must not come back.
+    assert.equal(
+      /--no-open --patch/u.test(unit) || /--no-open --patch/u.test(script),
+      false,
+      '--patch after --no-open makes the whole launch fail',
+    )
   })
 
   it('carries the overlay as base64 so no provider text reaches shell syntax', () => {

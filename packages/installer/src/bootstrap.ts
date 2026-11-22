@@ -94,7 +94,11 @@ export function renderSystemdUnit(options: BootstrapOptions): string {
     'Environment="DSH_WAYPOINT_DSH_VERSION=$DSH_VERSION"',
     ...options.modelBaseUrl === undefined ? [] : ['Environment="DEEPSEEK_BASE_URL=$MODEL_BASE_URL"'],
     ...options.modelApiKey === undefined ? [] : ['Environment="DEEPSEEK_API_KEY=$MODEL_API_KEY"'],
-    `ExecStart="$DSH_BIN" web --host 127.0.0.1 --port $PORT --no-open${options.modelRoutes === undefined ? '' : ' --patch "$DSH_HOME/waypoint-agent/model-routes.json"'}`,
+    // `--patch` must follow the `web` subcommand directly, before the app's own
+    // flags. It is a launcher option parsed by the `web` command, so placing it
+    // after `--host`/`--port` fails with "unknown option '--patch'" — the app
+    // never starts. Verified against a real host, not inferred from help text.
+    `ExecStart="$DSH_BIN" web${options.modelRoutes === undefined ? '' : ' --patch "$DSH_HOME/waypoint-agent/model-routes.json"'} --host 127.0.0.1 --port $PORT --no-open`,
     'Restart=always',
     'RestartSec=3',
     'WorkingDirectory=$DSH_HOME',
@@ -679,7 +683,7 @@ echo "dsh-waypoint: starting dsh web under nohup"
 # $DSH_NODE_BIN_DIR is explicit because dsh runs under a "#!/usr/bin/env node"
 # shebang, and a non-login SSH session need not have that directory on PATH.
 ${modelEnv}DSH_WAYPOINT_DSH_VERSION="$DSH_VERSION" PATH="$DSH_PREFIX/bin:$DSH_NODE_BIN_DIR:$PATH" \\
-  nohup "$DSH_BIN" web --host 127.0.0.1 --port "$PORT" --no-open${patchArgs} > "$DSH_HOME/waypoint-agent/web.log" 2>&1 &
+  nohup "$DSH_BIN" web${patchArgs} --host 127.0.0.1 --port "$PORT" --no-open > "$DSH_HOME/waypoint-agent/web.log" 2>&1 &
 echo $! > "$DSH_HOME/waypoint-agent/web.pid"
 echo "dsh-waypoint: started dsh web under nohup (pid $(cat "$DSH_HOME/waypoint-agent/web.pid"))"`
 }
