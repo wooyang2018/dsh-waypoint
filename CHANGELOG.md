@@ -28,6 +28,13 @@ below had to be fixed together for it to work at all.
   (verified on a real host — a `.gitattributes` rule plus `filter.<name>.clean` executes), so the
   gate is about clear errors, not safety. `env` likewise drops only client-local path variables
   (`PATH`, `HOME`, `TMPDIR`, …) that cannot mean anything on a Linux remote, and forwards the rest.
+- **A repository without `.gitattributes` failed every diff.** The Forge panel reads that
+  optional file inside `try/catch` and tolerates only `FsError` + `FS_NOT_FOUND`, while the
+  adapter rethrew the protocol's `workspace-file/not-found`. The result was a changed-files view
+  that worked only on repositories that happened to have the file. `stat`, `lstat` and the stat
+  `readBytes` performs now map that code, and a failure that is not "not found" still propagates.
+  Found by driving the Forge panel's own code against a real remote checkout
+  (`scripts/e2e-review/`); the unit tests only ever read files that exist.
 - **Path interception only knew the local anchor.** The first inspection canonicalizes the paths Git
   printed, so from that point on the panel works in the *remote* namespace: its runner's `cwd` is the
   remote checkout and each changed file is read relative to it. `subprocess.spawn` did not recognize

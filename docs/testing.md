@@ -148,6 +148,65 @@ from the record. Finally open the forwarded URL in the sidebar Browser tab.
 Do the disconnect step with `ss`/`netstat` open. A row can read `Not started` while a stale `ssh` child
 still holds the port, and that difference is invisible in the UI.
 
+## Review and changes surfaces against a real host
+
+`scripts/e2e-review/` answers a question the unit suite cannot: is the **real**
+consumer satisfied? The adapter tests drive the adapters with fakes, so they
+prove a shape, never that the Forge panel's own code is happy.
+
+The harness imports the Forge package's `inspectCheckout`, `listBranches`,
+`hasBranch`, `localDiff`, `localText`, `localChanges` and `baseBranches` from the
+sources shipped inside the DSH runtime on the test host, and drives them through
+this plugin's real adapters against a real checkout with real pending changes.
+Every service call the adapters do not claim throws, so an unrouted call fails
+loudly instead of quietly producing an empty panel.
+
+It exists because it found two defects the unit suite passed straight through:
+
+- a repository **without** `.gitattributes` failed every diff. The panel reads
+  that optional file inside `try/catch` and tolerates only
+  `FsError` + `FS_NOT_FOUND`, while the adapter rethrew the protocol code
+  `workspace-file/not-found`. Every existing test read files that exist, so the
+  whole class of "absent optional file" was untested.
+- `readBytes` stats the path before paging, and *that* stat was the call site
+  which surfaced it — the first fix wrapped the other one.
+
+Both are why a green unit suite is not evidence that the surface works.
+
+```sh
+node scripts/e2e-review/bundle-adapters.mjs          # writes adapters/ (git-ignored)
+```
+
+Copy `scripts/e2e-review/run.mjs` and `adapters/` to the test host, together with
+a copy of the Forge sources taken **out** of `node_modules` (Node refuses to strip
+types for a file under it):
+
+```sh
+FORGE=<dsh>/node_modules/@deepseek-ai/dsh-experimental-client-ui-forge/src
+cp "$FORGE"/*.ts ~/harness/forge-src/
+```
+
+The checkout under test needs what a normal clone provides, so every assertion
+has something to see: `main` pushed to `origin` with `refs/remotes/origin/HEAD`
+set (`git remote set-head origin main` — without it there is no fork point and no
+local-changes card), a `feature` branch that changes a tracked file, one staged
+change, one unstaged change, one untracked file, and ideally a non-ASCII filename,
+which is what a dropped `core.quotePath` would mangle.
+
+Then, on the host:
+
+```sh
+WP_FORGE_SRC=~/harness/forge-src WP_REMOTE_ROOT=~/checkout WP_ANCHOR=~/anchor \
+WP_AGENT_PORT=<from agent.json> WP_AGENT_TOKEN=<from agent.json> \
+node --experimental-strip-types ~/harness/run.mjs
+```
+
+It prints one `PASS`/`FAIL` line per surface and exits non-zero on any failure.
+
+This is not part of `pnpm test`: it needs a reachable host and a DSH runtime. Run
+it after changing anything in `remote/fs.ts`, `remote/subprocess.ts`,
+`remote/sandbox.ts` or the agent's `/git` route.
+
 ## Mirror regression checks
 
 After `pnpm -r build`, run the focused checks from the repository root:

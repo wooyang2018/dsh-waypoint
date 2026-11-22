@@ -6,7 +6,12 @@
     "noEmit": true,
     "declaration": false,
     "declarationMap": false,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["*.mjs"]
+  "include": [
+    "*.mjs",
+    "e2e-review/*.mjs"
+  ]
 }

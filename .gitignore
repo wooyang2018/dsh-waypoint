@@ -25,3 +25,6 @@ playwright-report/
 
 # Ad-hoc end-to-end scaffolding: fixtures, screenshots and captured output
 .e2e/
+
+# Generated adapter bundles for scripts/e2e-review (rebuild them locally)
+scripts/e2e-review/adapters/
