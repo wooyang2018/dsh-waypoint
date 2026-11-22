@@ -89,7 +89,7 @@ verification you run will be of the old code.
 
 ## Port forward checks
 
-The forwarding path has three layers of coverage, cheapest first.
+The forwarding path has five layers of coverage, cheapest first.
 
 1. **`packages/local-plugin/test/loopback-url.test.ts`** — which addresses count. Every accept/refuse row
    is pinned, including the two that look like bugs: a scheme-less `localhost:5173` (WHATWG parses it as
@@ -101,13 +101,16 @@ The forwarding path has three layers of coverage, cheapest first.
    Session, a non-loopback link, a link back into the DSH page, and a failed mirror lookup all end in the
    native navigation; a refused bind suppresses navigation but opens nothing. A Session promoted from local
    to mirrored starts forwarding once the poll refreshes its target.
-3. **`packages/local-plugin/test/forward-args.test.ts`** and **`forward-transport.test.ts`** — the `ssh -L`
+3. **`packages/local-plugin/test-e2e/session-routing.e2e.ts`** — which Sessions are allowed to forward at
+   all. The answer comes from `host/session/mirror`, so the three branches (local, mirrored, pending blank)
+   are pinned against the real mirror service; see layer 3 below.
+4. **`packages/local-plugin/test/forward-args.test.ts`** and **`forward-transport.test.ts`** — the `ssh -L`
    argv (both ends `127.0.0.1`, no caller can inject a remote host) and real bytes (HTTP plus a WebSocket
    upgrade through a stand-in forward, and a released local port on stop).
-4. **`packages/local-plugin/test-e2e/remote-forward.e2e.ts`** — the only layer that exercises `ssh -L`
+5. **`packages/local-plugin/test-e2e/remote-forward.e2e.ts`** — the only layer that exercises `ssh -L`
    against a real host, and the only one that can prove the multi-port property.
 
-For layer 4, no profile is touched at all: the script builds its own isolated `stateDir` under the OS temp
+For layer 5, no profile is touched at all: the script builds its own isolated `stateDir` under the OS temp
 directory and sets `autoProvision: false`, so it cannot reinstall the remote agent or rewrite the remote
 model environment. To keep the same guarantee in a manual profile-based run, use an isolated home:
 
@@ -145,7 +148,7 @@ curl -s http://127.0.0.1:27123/
 node .e2e/ws-check.mjs 27123
 ```
 
-## Real-host forward check (layer 4)
+## Real-host forward check (layer 5)
 
 This one is scripted, so it does not need a profile at all:
 
@@ -172,8 +175,36 @@ forward carries raw TCP) on two remote loopback ports, and asserts:
 
 Passing on two real Linux x64 SSH hosts: 26 checks each.
 
-The one thing no layer covers is the browser-side click, because that needs a mirrored Session in a live
-GUI. `test/link-forwarding.test.ts` covers the handler; to confirm it end to end, click a
+## Which Sessions forward (layer 3)
+
+The forward is only correct if it happens for the right Sessions, so the routing answer gets its own
+scripted check:
+
+```sh
+node --import tsx --test packages/local-plugin/test-e2e/session-routing.e2e.ts
+```
+
+It runs the **real** `RemoteMirrorService` over a real Cordis `Context` — only the local session and
+workspace stores are stubbed — and asks the **real** `host/session/mirror` endpoint the click handler
+calls. Five checks:
+
+- a **local** Session answers `null`, so nothing is published: its `localhost:5173` is already this
+  machine;
+- a **mirrored** Session answers with the host id, so the caller never guesses which machine to reach;
+- a **pending blank** — created against a remote workspace, first prompt not yet sent — also answers
+  with its host. Its shell and files are already remote, so a dev server it starts is remote too, and its
+  links must forward before any prompt materializes the remote Session;
+- a real mirror record wins over a blank's empty placeholder, so the caller carries the real remote id;
+- and the endpoint maps a local Session to `null` and a mirrored one to its host, which is the value the
+  click consumes.
+
+Two mechanical notes for anyone extending this file: the fixture must call `mirrors.sync()` before
+`startBlankSession`, because that call reads the workspace mapping `sync()` writes and otherwise reports
+"mirrored workspace is not available"; and every fixture must be disposed, because a mirrored Session
+owns a poll timer that keeps the runner alive.
+
+The one thing no layer covers is the browser-side click itself, because that needs a mirrored Session in
+a live GUI. `test/link-forwarding.test.ts` covers the handler; to confirm it end to end, click a
 `http://localhost:<port>/` link in a mirrored Session and check that the page loads in the Browser tab on
 that **first** click, and that the host's expanded row in Settings shows the mapping.
 
