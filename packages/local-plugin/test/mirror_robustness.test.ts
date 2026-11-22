@@ -129,7 +129,76 @@ describe('the change summary is cached before its event is visible', () => {
 
   })
 
-describe('a gap in the remote log', () => {
+/**
+ * A consumed event that leaves no local node must not be silent.
+ *
+ * `lastSeq` tracks the remote position and the local Session has its own seq
+ * space, so the values differ by design — but the *progress* must not. When an
+ * event advanced `lastSeq` without appending, the mirror fell behind, and before
+ * this diagnostic the only evidence was `mirrors.json` ahead of the session's own
+ * last seq, with no indication of which event caused it.
+ */
+/**
+ * What the projection diagnostic promises.
+ *
+ * `lastSeq` tracks the remote position and the local Session has its own seq
+ * space, so the values differ by design — but consumed events should still be
+ * accounted for. The helper splits its report accordingly: a filtered event is
+ * routine and logs at debug, a consumed-yet-unappended one is a loss and logs at
+ * warn.
+ *
+ * The warn branch is not covered here. Reaching it requires an event that passes
+ * the closed-turn and noise exits *and* appends nothing, which means a
+ * `user/message` whose reuse branch fires — that needs `pendingUsers` populated,
+ * and the fixture exposes no way to seed it. Recorded as a known gap rather than
+ * implied by a test that does not exercise it.
+ */
+describe('the projection diagnostic accounts for consumed events', () => {
+  it('reports a filtered event as routine, not as a loss', async () => {
+    const test = await mounted()
+    try {
+      // `agent/inbox/spliced` is filtered by `isMirrorNoise`, so it never appends.
+      test.setSnapshot(parent.sessionId, snapshotOf([
+        ...HEALTHY,
+        { seq: 3, type: 'agent/inbox/spliced', data: {} },
+      ], false, 4))
+      await test.poll(parent.sessionId)
+
+      const debug = test.debugLines.join('\n')
+      assert.match(debug, /filtered remote .*agent\/inbox\/spliced/u, 'the filter is stated')
+      assert.doesNotMatch(
+        test.warnings.join('\n'),
+        /advanced lastSeq.*without appending/u,
+        'a filtered event is not reported as a loss',
+      )
+    } finally {
+      await test.service.dispose()
+    }
+  })
+
+  it('says nothing about an event that did append', async () => {
+    const test = await mounted()
+    const baseline = test.local.snapshotEvents().length
+    try {
+      test.setSnapshot(parent.sessionId, snapshotOf([...HEALTHY, say(2, 'after', 3)], false, 4))
+      await test.poll(parent.sessionId)
+
+      assert.ok(
+        appended(test.local, baseline).includes('user/message'),
+        'the event was projected',
+      )
+      assert.doesNotMatch(
+        `${test.warnings.join('\n')}\n${test.debugLines.join('\n')}`,
+        /advanced lastSeq.*without appending|filtered remote user\/message/u,
+        'a projected event produces no diagnostic at either level',
+      )
+    } finally {
+      await test.service.dispose()
+    }
+  })
+})
+
+
   it('realigns instead of retrying the same position forever', async () => {
     // The remote jumps from seq 3 straight to seq 8: seqs 3..7 never existed
     // for this mirror. Previously `#replaySnapshot` threw, `#poll` rescheduled,
@@ -166,7 +235,6 @@ describe('a gap in the remote log', () => {
       await test.service.dispose()
     }
   })
-})
 
 describe('an event the local projection rejects', () => {
   it('does not freeze every later event', async () => {

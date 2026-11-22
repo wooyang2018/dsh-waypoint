@@ -190,6 +190,11 @@ export function harness() {
   ctx.provide('workspaceRegistry', registry as never)
   ctx.provide('agents', agents as never)
   ctx.logger.warn = (message: unknown, ...args: unknown[]) => { warnings.push([message, ...args].map(String).join(' ')) }
+  // Debug is captured separately: the mirror filters some events by design and
+  // logs that at debug, so a test must be able to tell a routine filter from a
+  // real loss rather than treating both as silence.
+  const debugLines: string[] = []
+  ctx.logger.debug = (message: unknown, ...args: unknown[]) => { debugLines.push([message, ...args].map(String).join(' ')) }
 
   const host: { id: string; label: string; phase: 'connected' | 'disconnected' } = { id: 'host-test', label: 'Test host', phase: 'connected' }
   const workspace = { workspaceId: 'remote-workspace', path: '/srv/project', title: 'project' }
@@ -287,6 +292,7 @@ export function harness() {
     cancelled,
     remoteArchived,
     warnings,
+    debugLines,
     setRemote(next: Summary[]) { remote = next },
     setFailPrompt(value: boolean) { failPrompt = value },
     setRejectSelection(value: { provider: string; model: string } | undefined) { rejectSelection = value },

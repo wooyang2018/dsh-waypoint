@@ -2677,6 +2677,9 @@ export class RemoteMirrorService {
         runtime.record.lastSeq = event.seq + 1
         continue
       }
+      // Where the local log stood before this event. `#appendEvent` appends
+      // through the Session, so the delta is exactly "did a node get placed".
+      const localBefore = runtime.session.seq
       try {
         // Fetch first, then project: the card's `summary()` read is synchronous,
         // so the cache has to be warm before any client can see the event. This
@@ -2691,6 +2694,7 @@ export class RemoteMirrorService {
         runtime.skippedRemoteSeqs.add(event.seq)
         this.#noteSkipped(runtime, event, error)
       }
+      this.#noteProjection(runtime, event, runtime.session.seq > localBefore)
       runtime.record.lastSeq = event.seq + 1
     }
   }
@@ -2733,6 +2737,41 @@ export class RemoteMirrorService {
       ? (event.data as { turn?: unknown }).turn
       : undefined
     return typeof turn === 'number' && runtime.closedTurns.has(turn)
+  }
+
+  /**
+   * Report an event that advanced `lastSeq` without leaving a node behind.
+   *
+   * `lastSeq` tracks the remote position; the local Session has its own seq
+   * space, so the two values legitimately differ. What must not differ is
+   * progress: every consumed, non-noise event should have appended a node. When
+   * one does not, this line is the only durable record that the mirror fell
+   * behind — otherwise the symptom is a `mirrors.json` `lastSeq` ahead of the
+   * session's own last seq, with nothing saying which event caused it.
+   *
+   * A filtered event is routine and logs at debug; a dropped one is a real loss
+   * and logs as a warning naming the seq and type needed to chase it.
+   */
+  #noteProjection(runtime: MirrorRuntime, event: RemoteSessionEvent, grew: boolean): void {
+    if (grew) return
+    if (runtime.skippedRemoteSeqs.has(event.seq)) return
+    if (isMirrorNoise(event)) {
+      this.#ctx.logger.debug(
+        'dsh-waypoint: filtered remote %s (seq %s) for %s by design',
+        event.type,
+        String(event.seq),
+        runtime.record.remoteSessionId,
+      )
+      return
+    }
+    this.#ctx.logger.warn(
+      'dsh-waypoint: remote %s (seq %s) advanced lastSeq to %s for %s without appending to the local log (local seq %s)',
+      event.type,
+      String(event.seq),
+      String(event.seq + 1),
+      runtime.record.remoteSessionId,
+      String(runtime.session.seq),
+    )
   }
 
   /** Record a hole in the mirrored log as a visible transcript entry. */
