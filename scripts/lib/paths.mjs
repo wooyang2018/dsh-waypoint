@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 /** Repository root, resolved from this file rather than from the process cwd. */
-export const repoRoot = resolve(import.meta.dirname, '..')
+export const repoRoot = resolve(import.meta.dirname, '..', '..')
 
 /**
  * A package manifest, as far as these scripts read it.

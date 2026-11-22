@@ -12,9 +12,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
-import { repoRoot } from './paths.mjs'
+import { repoRoot } from '../lib/paths.mjs'
 
-const SCRIPT = join(repoRoot, 'scripts', 'test-sandbox.mjs')
+const SCRIPT = join(repoRoot, 'scripts', 'test', 'test-sandbox.mjs')
 const SOURCE = readFileSync(SCRIPT, 'utf8')
 
 describe('test-sandbox.mjs', () => {

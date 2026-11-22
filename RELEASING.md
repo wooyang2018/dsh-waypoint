@@ -38,7 +38,7 @@ it does, because the plugin and the agent negotiate capabilities. When it moves,
 bundle whose constant disagrees with its manifest, so `pnpm build` fails until they match. That check
 is doing its job — an agent that misreports its own version makes `agentOutdated` useless.
 
-The CHANGELOG section heading must be exactly `## <version>`. `scripts/release-notes.mjs` matches
+The CHANGELOG section heading must be exactly `## <version>`. `scripts/release/release-notes.mjs` matches
 `^##\s+\[?<version>\]?\s*$`, so a dated heading like `## 1.1.0 — 2026-11-21` does not match, and the
 Release workflow fails at "Extract release notes" *after* npm has already accepted an immutable
 publish.
@@ -64,7 +64,7 @@ because a published version cannot be replaced.
 pnpm release:publish
 ```
 
-The script (`scripts/publish-local.mjs`) does the whole release:
+The script (`scripts/release/publish-local.mjs`) does the whole release:
 
 1. fails fast if `lib/` is missing or the registry already has the version;
 2. builds the workspace, packs the remote agent at the manifest version, packs the plugin with the
@@ -146,7 +146,7 @@ If the Settings page changed visibly since the last release, regenerate the mark
 before tagging:
 
 ```sh
-node scripts/screenshots.mjs
+node scripts/release/screenshots.mjs
 ```
 
 It writes the four images `screenshots.json` lists. The script refuses to capture unless the fixture

@@ -19,9 +19,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
-import { repoRoot } from './paths.mjs'
+import { repoRoot } from '../lib/paths.mjs'
 
-const SCRIPT = join(repoRoot, 'scripts', 'install-local.mjs')
+const SCRIPT = join(repoRoot, 'scripts', 'dev', 'install-local.mjs')
 const SOURCE = readFileSync(SCRIPT, 'utf8')
 
 /**
@@ -130,7 +130,7 @@ describe('install-local.mjs', () => {
   })
 
   it('keeps the tarball path as the only thing on stdout', () => {
-    // `TARBALL=$(node scripts/install-local.mjs)` must get the path alone.
+    // `TARBALL=$(node scripts/dev/install-local.mjs)` must get the path alone.
     const main = mainBody()
     const writes = [...main.matchAll(/process\.stdout\.write\(([^\n]*)/gu)].map(match => match[1] ?? '')
     assert.ok(writes.length > 0, 'the script must report its result')

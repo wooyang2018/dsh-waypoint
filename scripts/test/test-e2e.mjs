@@ -12,9 +12,9 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { repoRoot } from './paths.mjs'
+import { repoRoot } from '../lib/paths.mjs'
 
-const packArgs = [join(repoRoot, 'scripts', 'release-plugin.mjs')]
+const packArgs = [join(repoRoot, 'scripts', 'release', 'release-plugin.mjs')]
 if (process.argv.includes('--release')) packArgs.push('--release')
 
 const output = execFileSync(process.execPath, packArgs, { cwd: repoRoot, encoding: 'utf8' })

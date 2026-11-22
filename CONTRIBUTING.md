@@ -37,7 +37,7 @@ intentionally ignored.
 Use an isolated DSH home:
 
 ```sh
-./scripts/test-sandbox.sh
+node scripts/test/test-sandbox.mjs
 ```
 
 Never create test workspaces or sessions in the primary `~/.dsh` profile. See
@@ -46,7 +46,7 @@ Never create test workspaces or sessions in the primary `~/.dsh` profile. See
 For a release bundle:
 
 ```sh
-node scripts/release-plugin.mjs --release
+node scripts/release/release-plugin.mjs --release
 ```
 
 The resulting tarball bundles the remote-agent asset. Drop `--release`

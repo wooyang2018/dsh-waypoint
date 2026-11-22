@@ -17,7 +17,7 @@
     "@dsh-waypoint/protocol": "workspace:*"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node ../../scripts/build-host.mjs --entry src/bin.ts --out lib/cli.js --cli && node ../../scripts/build-host.mjs",
+    "build": "tsc -p tsconfig.build.json && node ../../scripts/build/build-host.mjs --entry src/bin.ts --out lib/cli.js --cli && node ../../scripts/build/build-host.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --import tsx --test test/*.test.ts"
   }

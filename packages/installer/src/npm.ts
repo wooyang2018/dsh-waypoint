@@ -6,7 +6,7 @@
  * `cmd.exe` unescaped. npm ships a real entry point next to the running Node
  * installation, so prefer that: `node <node dir>/node_modules/npm/bin/npm-cli.js`.
  *
- * `scripts/package-manager.mjs` mirrors this for the build scripts, which
+ * `scripts/lib/package-manager.mjs` mirrors this for the build scripts, which
  * cannot import TypeScript. pnpm needs no equivalent here: the remote install
  * runs `npm install --global pnpm@<version>`, so nothing in this package
  * spawns pnpm directly.

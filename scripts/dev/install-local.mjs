@@ -2,8 +2,8 @@
  * Build, pack, and install the local plugin into a DSH profile.
  *
  * Usage:
- *   node scripts/install-local.mjs                 # desktop profile
- *   node scripts/install-local.mjs --profile web   # any other profile
+ *   node scripts/dev/install-local.mjs                 # desktop profile
+ *   node scripts/dev/install-local.mjs --profile web   # any other profile
  *
  * This replaces the former `install-local.sh`. A shell script cannot portably do
  * this job on Windows: the Node installation need not be on the shell's PATH,
@@ -32,8 +32,8 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { pnpmInvocation } from './package-manager.mjs'
-import { repoRoot } from './paths.mjs'
+import { pnpmInvocation } from '../lib/package-manager.mjs'
+import { repoRoot } from '../lib/paths.mjs'
 
 const PLUGIN_DIR = join(repoRoot, 'packages', 'local-plugin')
 const DESKTOP_PROFILE = 'desktop'
@@ -70,7 +70,7 @@ function parseProfile(argv) {
  * without a shell, so `pnpmInvocation()` resolves the executable instead.
  *
  * Output goes to stderr: this script's stdout carries the tarball path alone, so
- * a caller doing `TARBALL=$(node scripts/install-local.mjs)` gets exactly that
+ * a caller doing `TARBALL=$(node scripts/dev/install-local.mjs)` gets exactly that
  * and not a build log.
  *
  * @param {string[]} args Arguments after the resolved pnpm prefix.
@@ -117,7 +117,7 @@ function buildAndPack() {
   progress('packing the local plugin')
   // Captured rather than inherited: the path is this script's stdout result.
   const invocation = pnpmInvocation()
-  const printed = execFileSync(invocation.command, [...invocation.prefixArgs, 'exec', 'node', 'scripts/release-plugin.mjs'], {
+  const printed = execFileSync(invocation.command, [...invocation.prefixArgs, 'exec', 'node', 'scripts/release/release-plugin.mjs'], {
     cwd: repoRoot,
     encoding: 'utf8',
   })
@@ -171,7 +171,7 @@ function cliModuleFor(appExecutable) {
  * This is the one platform fact that makes the closed loop possible: the archive
  * is readable only to the Electron binary, so the process that imports `runCli`
  * must be that binary. Re-executing is cheap and leaves the caller's command
- * line unchanged — `node scripts/install-local.mjs` still does the whole job.
+ * line unchanged — `node scripts/dev/install-local.mjs` still does the whole job.
  *
  * The already-built tarball travels in the environment. The child is Electron
  * with `ELECTRON_RUN_AS_NODE`, and spawning pnpm from there fails on Windows the

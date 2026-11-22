@@ -72,8 +72,8 @@ Keep this pinned version in sync with each release.
 
 ```sh
 cd ../..
-node scripts/install-local.mjs          # desktop profile
-node scripts/install-local.mjs --profile web
+node scripts/dev/install-local.mjs          # desktop profile
+node scripts/dev/install-local.mjs --profile web
 ```
 
 The installer creates one tarball and installs it, including into the reserved `desktop` profile: it

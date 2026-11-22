@@ -10,12 +10,12 @@
  * moving the committed baseline; use this script to try a target.
  */
 import { execFileSync } from 'node:child_process'
-import { pnpmInvocation } from './package-manager.mjs'
-import { repoRoot } from './paths.mjs'
+import { pnpmInvocation } from '../lib/package-manager.mjs'
+import { repoRoot } from '../lib/paths.mjs'
 
 const version = process.argv[2]
 if (version === undefined || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) {
-  throw new Error('Usage: node scripts/select_dsh_version.mjs <exact-dsh-version>')
+  throw new Error('Usage: node scripts/dev/select_dsh_version.mjs <exact-dsh-version>')
 }
 
 const pnpm = pnpmInvocation()

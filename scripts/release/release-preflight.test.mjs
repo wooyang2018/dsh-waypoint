@@ -14,9 +14,9 @@ import { describe, it } from 'node:test'
 
 import { pathToFileURL } from 'node:url'
 
-import { repoRoot } from './paths.mjs'
+import { repoRoot } from '../lib/paths.mjs'
 
-const PREFLIGHT = join(repoRoot, 'scripts', 'release-preflight.mjs')
+const PREFLIGHT = join(repoRoot, 'scripts', 'release', 'release-preflight.mjs')
 // A bare Windows path is not a valid ESM specifier; the import needs a file URL.
 const PREFLIGHT_URL = pathToFileURL(PREFLIGHT).href
 

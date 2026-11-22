@@ -757,5 +757,5 @@ agent `1.1.0`），由 `packages/local-plugin/test-e2e/remote-forward.e2e.ts` �
 以及 `autoProvision: false` 未触碰远端 agent 的版本与 pid）。两次运行都没有观测到的只有浏览器侧的点击：
 处理器由 `test/link-forwarding.test.ts` 覆盖，而在真实转录里驱动它需要在运行中的 GUI 里有一个镜像会话。
 
-若要确认某条结论，最小的复现路径是 `node scripts/test-sandbox.mjs` 起隔离环境，再按
+若要确认某条结论，最小的复现路径是 `node scripts/test/test-sandbox.mjs` 起隔离环境，再按
 [docs/testing.md](testing.md) 的可见性约定跑一次集成用例。

@@ -25,7 +25,7 @@ done
 ```
 
 Check `@deepseek-ai/cordis` separately: it is not versioned with DSH, and
-`scripts/select_dsh_version.mjs` hard-codes it to `4.1.0`. If the new DSH line moved Cordis, that
+`scripts/dev/select_dsh_version.mjs` hard-codes it to `4.1.0`. If the new DSH line moved Cordis, that
 constant and the `>=4.0.5 <4.2.0` peer range need updating together.
 
 ## 2. Confirm the terminal Remote face still has twelve methods
@@ -43,7 +43,7 @@ removing it from the comparison.
 
 ```sh
 pnpm install --frozen-lockfile          # committed lock must still install
-node scripts/select_dsh_version.mjs <new-version>
+node scripts/dev/select_dsh_version.mjs <new-version>
 pnpm install --no-frozen-lockfile       # resolves outside the lock, as CI does
 ```
 
@@ -67,7 +67,7 @@ patch/prerelease update inside `0.2.2` needs no edit there; a new minor line (`0
 Then verify the whole chain, not just the parts you touched:
 
 ```sh
-pnpm -r build && pnpm -r typecheck && pnpm -r test && node scripts/release-plugin.mjs
+pnpm -r build && pnpm -r typecheck && pnpm -r test && node scripts/release/release-plugin.mjs
 ```
 
 ## 5. Expect the compatibility failures to be specific

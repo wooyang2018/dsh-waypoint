@@ -6,15 +6,15 @@
  * routed by patching the service the stock terminal-controller provides.
  *
  * By default the build gets a unique prerelease version (see
- * `scripts/dev-version.mjs` for why a constant version silently ships stale
+ * `scripts/lib/dev-version.mjs` for why a constant version silently ships stale
  * code). `--release` keeps the manifest version untouched for a real publish.
  */
 import { copyFileSync, cpSync, existsSync, mkdtempSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { developmentVersion } from './dev-version.mjs'
-import { packTarball } from './npm-pack.mjs'
-import { readManifest, repoRoot } from './paths.mjs'
+import { developmentVersion } from '../lib/dev-version.mjs'
+import { packTarball } from '../lib/npm-pack.mjs'
+import { readManifest, repoRoot } from '../lib/paths.mjs'
 
 const pluginDir = join(repoRoot, 'packages', 'local-plugin')
 const manifest = readManifest(pluginDir)
@@ -73,7 +73,7 @@ try {
   copyFileSync(packTarball({ cwd: staging, destination: staging }), target)
   pruneDevelopmentBuilds(`dsh-waypoint-${version}.tgz`)
   // stdout carries the tarball path alone: callers consume it as
-  // `TARBALL="$(node scripts/release-plugin.mjs)"`. Progress goes to stderr.
+  // `TARBALL="$(node scripts/release/release-plugin.mjs)"`. Progress goes to stderr.
   if (!release) process.stderr.write(`release-plugin: dev version ${version}\n`)
   process.stdout.write(`${target}\n`)
 } finally {

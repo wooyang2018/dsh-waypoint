@@ -7,7 +7,7 @@
  * workspace devDependency.
  *
  * A development pack stamps the agent with a unique prerelease version (see
- * `scripts/dev-version.mjs` for why). The remote profile installs this tarball
+ * `scripts/lib/dev-version.mjs` for why). The remote profile installs this tarball
  * through `dsh plugin add`, which keys its decision on the version: with a
  * constant version, re-provisioning a host whose profile already records it
  * silently keeps the files unpacked on the first attempt — including a stale
@@ -21,9 +21,9 @@
 import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { developmentVersion } from './dev-version.mjs'
-import { packTarball } from './npm-pack.mjs'
-import { readManifest, repoRoot } from './paths.mjs'
+import { developmentVersion } from '../lib/dev-version.mjs'
+import { packTarball } from '../lib/npm-pack.mjs'
+import { readManifest, repoRoot } from '../lib/paths.mjs'
 
 const agentDir = join(repoRoot, 'packages', 'remote-agent')
 const assetsDir = join(repoRoot, 'packages', 'local-plugin', 'assets')

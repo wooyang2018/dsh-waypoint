@@ -44,7 +44,7 @@ pinned with `remoteDshVersion`.
 
 Everything below works against a real SSH host, with no client fork:
 
-- One-click local plugin install (`scripts/install-local.mjs`)
+- One-click local plugin install (`scripts/dev/install-local.mjs`)
 - Plugin-owned remote provisioning over SSH
 - Host registry, discovery, SSH tunnel, health, reconnect
 - Remote workspaces appear as normal local workspaces
@@ -98,15 +98,15 @@ For development, clone the repository and run the installer:
 cd /path/to/dsh-waypoint
 pnpm install
 pnpm -r build
-node scripts/install-local.mjs
+node scripts/dev/install-local.mjs
 ```
 
 The script builds the workspace, creates a single plugin tarball, and installs it — into the `desktop`
 profile by default:
 
 ```sh
-node scripts/install-local.mjs              # desktop profile
-node scripts/install-local.mjs --profile web
+node scripts/dev/install-local.mjs              # desktop profile
+node scripts/dev/install-local.mjs --profile web
 ```
 
 The `desktop` profile refuses `dsh plugin` at argument parse time, so the script installs through the
@@ -173,7 +173,7 @@ Agent-facing testing instructions live in [AGENTS.md](AGENTS.md). For UI/integra
 isolated environment:
 
 ```sh
-node scripts/test-sandbox.mjs
+node scripts/test/test-sandbox.mjs
 ```
 
 See [docs/testing.md](docs/testing.md) for test workspace visibility.

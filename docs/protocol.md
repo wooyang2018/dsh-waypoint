@@ -427,13 +427,13 @@ never logged or stored by the local plugin.
 ## Package surface: contract versus internals
 
 `@dsh-waypoint/protocol` is a workspace package, not a published one — the release workflow publishes
-only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build-host.mjs`
+only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
 `index.ts` exports 143 symbols in total. They split into 66 contract symbols and 77 symbols that no
 other package consumes, of which 2 are referenced nowhere at all. Every name below is listed
-explicitly, and `scripts/protocol-surface.mjs` recomputes these numbers from the source tree; run it
+explicitly, and `scripts/check/protocol-surface.mjs` recomputes these numbers from the source tree; run it
 whenever you add or remove an export, and a test fails if the two disagree.
 
 **Import contract (66 symbols).** Consumed by another package's production code through a named

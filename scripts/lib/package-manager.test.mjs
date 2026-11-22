@@ -1,5 +1,5 @@
 /**
- * `scripts/package-manager.mjs` resolves a spawnable npm/pnpm on every platform.
+ * `scripts/lib/package-manager.mjs` resolves a spawnable npm/pnpm on every platform.
  *
  * `packages/installer/test/npm.test.ts` covers the TypeScript mirror; nothing
  * covered the `.mjs` half the build scripts actually use, so a branch could rot

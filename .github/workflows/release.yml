@@ -30,7 +30,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
       # Root forms, not `pnpm -r`: `-r` skips the root package, which is where
-      # `scripts/`'s checkJs pass and the `scripts/*.test.mjs` live. Release
+      # `scripts/`'s checkJs pass and the `scripts/**/*.test.mjs` live. Release
       # must not be gated more weakly than CI, which already runs the root form.
       - run: pnpm typecheck
       - run: pnpm test
@@ -48,12 +48,12 @@ jobs:
           # agent inside the plugin reports that string as its runtime version,
           # and the remote host's install decision is keyed on it. Re-pack it at
           # the manifest version before the plugin copies it in.
-          node scripts/package-agent.mjs --release
+          node scripts/build/package-agent.mjs --release
           # `--release` keeps the manifest version. Without it the packer stamps
           # a unique `-dev-<stamp>-<random>` prerelease, which is what a local
           # iteration wants and what a published release must never be: the tag
           # check below would fail.
-          TARBALL="$(node scripts/release-plugin.mjs --release)"
+          TARBALL="$(node scripts/release/release-plugin.mjs --release)"
           echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
           test -f "$TARBALL"
       - name: Verify tag matches package version
@@ -63,7 +63,7 @@ jobs:
           test "v${VERSION}" = "${GITHUB_REF_NAME}"
       - name: Extract release notes
         if: startsWith(github.ref, 'refs/tags/')
-        run: node scripts/release-notes.mjs > "$RUNNER_TEMP/release-notes.md"
+        run: node scripts/release/release-notes.mjs > "$RUNNER_TEMP/release-notes.md"
       # The plugin-market entry points at `releases/latest/download/dsh-waypoint.tgz`.
       # `latest/download/` resolves `latest` at request time but takes the file
       # name literally, so a versioned asset name would 404 the moment the next

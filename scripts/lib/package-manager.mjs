@@ -9,7 +9,7 @@
  *
  * Plain JavaScript so the `scripts/*.mjs` build tools can import it without a
  * TypeScript loader. Mirrors `packages/installer/src/npm.ts`; the parameters
- * below exist so `scripts/package-manager.test.mjs` can exercise every branch
+ * below exist so `scripts/lib/package-manager.test.mjs` can exercise every branch
  * without a matching filesystem.
  */
 import { existsSync } from 'node:fs'

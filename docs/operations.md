@@ -11,7 +11,7 @@ replaces packages by renaming directories:
 
 ```sh
 cd /path/to/dsh-waypoint
-node scripts/install-local.mjs
+node scripts/dev/install-local.mjs
 ```
 
 That installs into the `desktop` profile by default. The CLI refuses that profile at argument parse
@@ -22,7 +22,7 @@ file lock. Reopen DSH afterwards.
 For a DSH Web profile:
 
 ```sh
-node scripts/install-local.mjs --profile web
+node scripts/dev/install-local.mjs --profile web
 # restart the DSH Web process after the script finishes
 ```
 
@@ -359,7 +359,7 @@ The normal plugin flow calls the same provisioning library.
 
 ## Updating
 
-- Local plugin: quit DSH, run `node scripts/install-local.mjs`, reopen. The script installs into the
+- Local plugin: quit DSH, run `node scripts/dev/install-local.mjs`, reopen. The script installs into the
   `desktop` profile itself.
 - Remote agent: click **重新安装** on the host card.
 - Remote DSH: when the host card reports that the remote runtime is older than the local one,

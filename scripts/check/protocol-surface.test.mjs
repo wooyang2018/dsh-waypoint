@@ -17,7 +17,7 @@ import { describe, it } from 'node:test'
 
 import { documentedCounts, protocolSurface } from './protocol-surface.mjs'
 
-const DOC = String(readFileSync(new URL('../docs/protocol.md', import.meta.url), 'utf8'))
+const DOC = String(readFileSync(new URL('../../docs/protocol.md', import.meta.url), 'utf8'))
 const NAME = /`([A-Za-z_$][A-Za-z0-9_$]*)`/g
 
 /**

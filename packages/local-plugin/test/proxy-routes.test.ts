@@ -174,6 +174,89 @@ describe('credential proxy route table', () => {
   })
 })
 
+/**
+ * Await one promise, failing instead of hanging when it never settles.
+ *
+ * The streaming case below exists to prove a chunk arrives *before* the upstream
+ * finishes. If the proxy regressed to buffering the whole answer, the read would
+ * simply never resolve — and a test that hangs reports far less than one that
+ * names what never happened.
+ *
+ * @param promise - the read to bound.
+ * @param what - what was awaited, for the failure message.
+ */
+function withDeadline<T>(promise: Promise<T>, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => { reject(new Error(`${what} did not arrive within 5s`)) }, 5_000)
+    promise.then(
+      value => { clearTimeout(timer); resolve(value) },
+      (error: unknown) => { clearTimeout(timer); reject(error instanceof Error ? error : new Error(String(error))) },
+    )
+  })
+}
+
+describe('credential proxy streaming', () => {
+  it('relays upstream SSE chunks as they arrive, not after the upstream finishes', async () => {
+    // A model reply is streamed, and the proxy hands the upstream response
+    // straight through with `upstreamResponse.pipe(res)`. Reading the body to
+    // completion before asserting would pass even if the proxy buffered the
+    // whole answer, so the first chunk is asserted while the upstream is still
+    // holding its connection open: a buffering proxy cannot deliver it yet.
+    let release: () => void = () => {}
+    const released = new Promise<void>(resolve => { release = resolve })
+    const server = createServer((req, res) => {
+      req.resume()
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.write('data: {"choices":[{"delta":{"content":"first-chunk"}}]}\n\n')
+        void released.then(() => {
+          res.write('data: [DONE]\n\n')
+          res.end()
+        })
+      })
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address() as { port: number }
+
+    const proxy = new ModelCredentialProxy({
+      routes: [{ id: 'stream', upstreamBaseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: DEFAULT_KEY }],
+      isTokenValid: token => token === PROXY_TOKEN,
+    })
+    const url = (await proxy.start()).baseUrl
+    try {
+      const response = await fetch(`${url}/p/stream/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': PROXY_TOKEN },
+        body: JSON.stringify({ model: 'claude-sonnet-5', stream: true }),
+      })
+      assert.equal(response.status, 200)
+      assert.match(response.headers.get('content-type') ?? '', /^text\/event-stream/u)
+      assert.ok(response.body !== null, 'a streaming answer must expose a body')
+
+      const reader = response.body.getReader()
+      // Bounded: a proxy that buffered the answer would never resolve this read,
+      // and a hung test says less than a failed one.
+      const first = await withDeadline(reader.read(), 'the first chunk')
+      const firstText = new TextDecoder().decode(first.value)
+      assert.match(firstText, /first-chunk/u, 'the first chunk must arrive before the upstream ends')
+      assert.equal(first.done, false)
+
+      release()
+      let rest = ''
+      for (;;) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        rest += new TextDecoder().decode(chunk.value)
+      }
+      assert.match(rest, /\[DONE\]/u, 'the terminal frame must still be relayed')
+    } finally {
+      release()
+      await proxy.stop()
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
+  })
+})
+
 describe('credential proxy without a catch-all', () => {
   it('refuses a bare path rather than guessing a provider', async () => {
     const upstream = await startUpstream()

@@ -41,7 +41,7 @@ pnpm --filter @dsh-waypoint/installer build    # rebuild one package
 
 ## Automatic guard
 
-`pnpm typecheck` runs `scripts/check-workspace-libs.mjs` first (through the `pretypecheck` hook). It
+`pnpm typecheck` runs `scripts/check/check-workspace-libs.mjs` first (through the `pretypecheck` hook). It
 compares each package's built `main`/`types` against the newest file under its `src`, and stops with
 an actionable message instead of letting the stale-artefact error surface:
 
@@ -73,44 +73,93 @@ Build, release, and check tooling. Everything here is plain `.mjs` so a package'
 run it without a TypeScript loader, and `scripts/tsconfig.json` type-checks the whole directory with
 `allowJs` + `checkJs` — no `.ts` rewrite needed, and `noUnusedLocals` still applies.
 
+Scripts are grouped by **when you reach for them**, and a `*.test.mjs` always sits beside the script
+it covers:
+
+| Directory | The rule that puts a file there |
+|---|---|
+| `lib/` | Side-effect free and imported by several other scripts. Nothing here writes to disk when evaluated. |
+| `build/` | Produces `lib/` output or packs a tarball; also the cleanup for that output. |
+| `check/` | Reads the tree and fails; produces no artifact. |
+| `release/` | Produces or publishes an artifact that is committed, uploaded, or on npm. |
+| `dev/` | Changes this machine: installs into a profile, re-pins dependencies. |
+| `test/` | Starts a real DSH host or drives Playwright. |
+| `e2e-review/` | Run **on a remote host**, after being copied there by hand (see [testing.md](testing.md)). |
+
+`lib/` — shared modules:
+
+| Script | What it does |
+|---|---|
+| `paths.mjs` | Shared `repoRoot` and manifest reader |
+| `package-manager.mjs` | Resolves a spawnable npm/pnpm (the Windows `.cmd` problem) |
+| `dev-version.mjs` | The `-dev-<stamp>-<random>` version stamp both packers apply |
+| `npm-pack.mjs` | Shared `npm pack` invocation used by both packers |
+
+`build/` — output:
+
 | Script | What it does |
 |---|---|
 | `build-host.mjs` | Bundles a host entry to one self-contained ESM file (`--entry`, `--out`, `--cli`) |
 | `build-client.mjs` | Bundles a browser entry to the `window.__ModuleLoader__` closure-factory artifact |
 | `package-agent.mjs` | Packs the remote agent into `packages/local-plugin/assets/` |
-| `release-plugin.mjs` | Packs the installable plugin tarball; prints its path alone on stdout |
-| `npm-pack.mjs` | Shared `npm pack` invocation used by both packers |
-| `dev-version.mjs` | The `-dev-<stamp>-<random>` version stamp both packers apply |
-| `paths.mjs` | Shared `repoRoot` and manifest reader |
-| `package-manager.mjs` | Resolves a spawnable npm/pnpm (the Windows `.cmd` problem) |
-| `check-workspace-libs.mjs` | Fails when a package's built `lib/` is missing or older than its `src` |
 | `clean.mjs` | Removes `packages/*/lib` (`--dry-run`, `--keep-tracked`) |
-| `select_dsh_version.mjs` | Re-pins every DSH package to one target version (CI) |
+
+`check/` — verification:
+
+| Script | What it does |
+|---|---|
+| `check-workspace-libs.mjs` | Fails when a package's built `lib/` is missing or older than its `src` |
+| `protocol-surface.mjs` | Recomputes the export inventory `docs/protocol.md` publishes (`protocol-surface.test.mjs` is the alarm) |
+
+`release/` — artifacts:
+
+| Script | What it does |
+|---|---|
+| `release-plugin.mjs` | Packs the installable plugin tarball; prints its path alone on stdout |
+| `release-preflight.mjs` | Every check that must pass before publishing |
 | `release-notes.mjs` | Prints the CHANGELOG section for the current version |
-| `test-e2e.mjs` | Packs, then runs Playwright against that exact tarball |
+| `publish-local.mjs` | Publishes to npm and verifies each tarball is downloadable |
+| `screenshots.mjs` | Captures the market screenshots (by hand; needs Chromium) |
+| `draw-icon.py` | Draws `packages/local-plugin/icon-180.png` (by hand; needs Pillow) |
+
+`dev/` — this machine:
+
+| Script | What it does |
+|---|---|
 | `install-local.mjs` | Build, pack, and install into a local profile, including the reserved `desktop` one |
+| `select_dsh_version.mjs` | Re-pins every DSH package to one target version (CI) |
+
+`test/` — integration:
+
+| Script | What it does |
+|---|---|
+| `test-e2e.mjs` | Packs, then runs Playwright against that exact tarball |
 | `test-sandbox.mjs` | Starts an isolated `DSH_HOME` DSH Web for integration tests |
 
+`pnpm test:scripts` runs `node --test "scripts/**/*.test.mjs"`. The quotes matter: letting the shell
+see the asterisk works on POSIX but not under `cmd.exe`, which passes the literal through — so Node
+expands the pattern itself.
+
 Removing build output is not always harmless: a file git still *tracks* under `lib/` would show up as
-a deletion in the next commit. `node scripts/clean.mjs` therefore warns when that is about to happen,
+a deletion in the next commit. `node scripts/build/clean.mjs` therefore warns when that is about to happen,
 `--keep-tracked` deletes only untracked files, and `--dry-run` prints what it would remove.
 
 Per-package build scripts are plain arguments, not POSIX environment prefixes:
 
 ```sh
-node ../../scripts/build-host.mjs --entry src/bin.ts --out lib/cli.js --cli
+node ../../scripts/build/build-host.mjs --entry src/bin.ts --out lib/cli.js --cli
 ```
 
 That form works on Windows too, where `VAR=1 command` is not understood by the shell npm uses.
-`scripts/build-host.mjs` still honours `DSH_WAYPOINT_HOST_ENTRY`, `DSH_WAYPOINT_HOST_OUT` and
+`scripts/build/build-host.mjs` still honours `DSH_WAYPOINT_HOST_ENTRY`, `DSH_WAYPOINT_HOST_OUT` and
 `DSH_WAYPOINT_CLI` for callers that set them; an explicit argument wins.
 
 ## Installing a local build into a profile
 
 ```sh
-node scripts/package-agent.mjs             # remote agent, 1.0.0-dev-<timestamp>-<rand>.tgz
-node scripts/release-plugin.mjs            # 1.0.1-dev-<timestamp>-<rand>.tgz
-node scripts/release-plugin.mjs --release  # 1.0.1.tgz, for publishing
+node scripts/build/package-agent.mjs             # remote agent, 1.0.0-dev-<timestamp>-<rand>.tgz
+node scripts/release/release-plugin.mjs            # 1.0.1-dev-<timestamp>-<rand>.tgz
+node scripts/release/release-plugin.mjs --release  # 1.0.1.tgz, for publishing
 ```
 
 Both packers stamp a unique prerelease version by default, and both accept `--release` to keep the
@@ -135,8 +184,8 @@ There is deliberately no `dsh plugin remove` step. On a profile carrying many pl
 manifest and then hangs inside pnpm (observed: nine minutes, no output, killed by timeout), leaving
 `package.json` half-written. Re-adding a different spec replaces the dependency on its own.
 
-The tarball path is printed on stdout and nothing else, because `scripts/install-local.mjs` and
-`scripts/test-sandbox.mjs` consume it as `TARBALL="$(node scripts/release-plugin.mjs)"`. Progress goes
+The tarball path is printed on stdout and nothing else, because `scripts/dev/install-local.mjs` and
+`scripts/test/test-sandbox.mjs` consume it as `TARBALL="$(node scripts/release/release-plugin.mjs)"`. Progress goes
 to stderr. Both callers also keep their own build output on stderr for the same reason: letting pnpm
 inherit stdout put a 32-line build log ahead of the path a caller was capturing.
 
@@ -147,7 +196,7 @@ The reserved `desktop` profile needs a deliberately different install path:
   parse time; the flag that would permit it (`manageDesktopProfile`) is an in-process argument that no
   command-line option or environment variable sets.
 - It **is** reachable from code. `runCli(options)` is exported and destructures that flag, so
-  `scripts/install-local.mjs` imports it and passes `manageDesktopProfile: true`. The install then runs
+  `scripts/dev/install-local.mjs` imports it and passes `manageDesktopProfile: true`. The install then runs
   through the Host's own `runProfilePnpm`: the file lock on `package.json`, the compatibility
   preflight, `pnpm add`, and the `reconcile` pass that appends the package to `dsh.profile.bundles`.
   Nothing is reimplemented and no lock is bypassed — what the guard defends against is a second process
@@ -183,7 +232,7 @@ Build tooling therefore resolves a real entry point next to the running Node ins
 - pnpm → `<node dir>/node_modules/pnpm/pnpm.exe` on Windows,
   `node <node dir>/node_modules/pnpm/bin/pnpm.cjs` elsewhere
 
-That logic lives in `scripts/package-manager.mjs` for the build scripts (plain JavaScript) and in
+That logic lives in `scripts/lib/package-manager.mjs` for the build scripts (plain JavaScript) and in
 `packages/installer/src/npm.ts` for the installer. Both fall back to the bare command name when no
 entry point is found, so POSIX systems behave exactly as before. Each half has its own test:
-`packages/installer/test/npm.test.ts` and `scripts/package-manager.test.mjs`.
+`packages/installer/test/npm.test.ts` and `scripts/lib/package-manager.test.mjs`.

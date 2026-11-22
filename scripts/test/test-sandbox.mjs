@@ -6,8 +6,8 @@
  * afterwards.
  *
  * Usage:
- *   node scripts/test-sandbox.mjs
- *   PORT=9123 TEST_DSH_HOME=/tmp/foo node scripts/test-sandbox.mjs
+ *   node scripts/test/test-sandbox.mjs
+ *   PORT=9123 TEST_DSH_HOME=/tmp/foo node scripts/test/test-sandbox.mjs
  *
  * This replaces `test-sandbox.sh`. The shell version did four things that do not
  * translate to Windows and were each a separate failure there: `mktemp -d`,
@@ -22,8 +22,8 @@ import { spawn, spawnSync } from 'node:child_process'
 import { createWriteStream, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { pnpmInvocation } from './package-manager.mjs'
-import { repoRoot } from './paths.mjs'
+import { pnpmInvocation } from '../lib/package-manager.mjs'
+import { repoRoot } from '../lib/paths.mjs'
 
 /** How long to wait for the host to print its URL. */
 const START_TIMEOUT_MS = 60_000
@@ -138,7 +138,7 @@ run({ command: pnpm.command, prefixArgs: pnpm.prefixArgs }, ['install'])
 run({ command: pnpm.command, prefixArgs: pnpm.prefixArgs }, ['-r', 'build'])
 
 progress('packing the local plugin')
-const packed = spawnSync(process.execPath, [join(repoRoot, 'scripts', 'release-plugin.mjs')], {
+const packed = spawnSync(process.execPath, [join(repoRoot, 'scripts', 'release', 'release-plugin.mjs')], {
   cwd: repoRoot,
   encoding: 'utf8',
 })

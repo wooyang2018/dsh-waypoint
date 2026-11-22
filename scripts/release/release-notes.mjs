@@ -7,7 +7,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readManifest, repoRoot } from './paths.mjs'
+import { readManifest, repoRoot } from '../lib/paths.mjs'
 
 const version = readManifest(join(repoRoot, 'packages', 'local-plugin')).version
 const lines = readFileSync(join(repoRoot, 'CHANGELOG.md'), 'utf8').split(/\r?\n/u)

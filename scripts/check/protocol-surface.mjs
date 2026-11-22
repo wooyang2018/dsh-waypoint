@@ -16,12 +16,12 @@
  * CONTRACT_BY_CLIENT_SIGNATURE so the recount does not relitigate a judgement
  * the document already made and explained.
  *
- * @module scripts/protocol-surface
+ * @module scripts/check/protocol-surface
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
-import { repoRoot } from './paths.mjs'
+import { repoRoot } from '../lib/paths.mjs'
 
 const PROTOCOL_DIR = join(repoRoot, 'packages', 'protocol')
 const PROTOCOL_SRC = join(PROTOCOL_DIR, 'src')

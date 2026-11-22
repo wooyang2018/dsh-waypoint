@@ -9,13 +9,13 @@
  * Not part of `pnpm test:e2e`: screenshots are a release asset, not a test, and
  * a temporary Chromium hiccup should not fail the suite.
  *
- * Usage: node scripts/screenshots.mjs
+ * Usage: node scripts/release/screenshots.mjs
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { startE2EHost } from '../test/playwright/dsh-fixture.ts'
+import { startE2EHost } from '../../test/playwright/dsh-fixture.ts'
 
-const OUT = join(import.meta.dirname, '..', 'packages', 'local-plugin', 'screenshots')
+const OUT = join(import.meta.dirname, '..', '..', 'packages', 'local-plugin', 'screenshots')
 
 /** Settings → Remote development, the section the plugin registers. */
 const SETTINGS_LABEL = /Remote development|远程开发/

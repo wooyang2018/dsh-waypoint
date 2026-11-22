@@ -9,7 +9,7 @@
  *   `package-agent.mjs` refuses to stamp the bundle, so `pnpm build` failed after
  *   the version bump rather than shipping an agent that lies about itself.
  * - The CHANGELOG heading carried a date (`## 1.1.0 — 2026-11-21`).
- *   `scripts/release-notes.mjs` matches `^## <version>$`, so the Release workflow
+ *   `scripts/release/release-notes.mjs` matches `^## <version>$`, so the Release workflow
  *   stopped at "Extract release notes" with build, typecheck and test green — a
  *   failure that cost a full tag round trip and one wasteful tag deletion.
  * - `publish-local.mjs` retried only the tarball download, not the metadata
@@ -17,14 +17,14 @@
  *
  * All three are cheap to check locally and expensive to discover remotely.
  *
- * @module scripts/release-preflight
+ * @module scripts/release/release-preflight
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { npmInvocation } from './package-manager.mjs'
-import { readManifest, repoRoot } from './paths.mjs'
+import { npmInvocation } from '../lib/package-manager.mjs'
+import { readManifest, repoRoot } from '../lib/paths.mjs'
 
 /**
  * One check: a label, and a thunk that returns an error string or null.
@@ -106,7 +106,7 @@ check('the CHANGELOG section is not empty', () => {
 
 check('the release notes render', () => {
   try {
-    const out = execFileSync(process.execPath, [join(repoRoot, 'scripts', 'release-notes.mjs')], {
+    const out = execFileSync(process.execPath, [join(repoRoot, 'scripts', 'release', 'release-notes.mjs')], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     })

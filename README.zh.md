@@ -90,14 +90,14 @@ dsh-waypoint@1.1.1
 cd /path/to/dsh-waypoint
 pnpm install
 pnpm -r build
-node scripts/install-local.mjs
+node scripts/dev/install-local.mjs
 ```
 
 脚本会构建 workspace，生成一个单插件 tarball，并完成安装——默认装进 `desktop` profile：
 
 ```sh
-node scripts/install-local.mjs              # desktop profile
-node scripts/install-local.mjs --profile web
+node scripts/dev/install-local.mjs              # desktop profile
+node scripts/dev/install-local.mjs --profile web
 ```
 
 `desktop` profile 会在解析参数阶段拒绝 `dsh plugin`，所以脚本改为调用 CLI 自己导出的 `runCli`，并传入
@@ -144,7 +144,7 @@ $DSH_HOME/waypoint/test-visibility.json
 面向 agent 的测试说明在 [AGENTS.md](AGENTS.md)。UI / 集成工作请使用隔离环境：
 
 ```sh
-node scripts/test-sandbox.mjs
+node scripts/test/test-sandbox.mjs
 ```
 
 测试工作区可见性见 [docs/testing.md](docs/testing.md)。

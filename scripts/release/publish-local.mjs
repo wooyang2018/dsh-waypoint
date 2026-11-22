@@ -21,14 +21,14 @@
  * that goes first. Each package is skipped when its exact version is already on
  * the registry, which makes a partially failed run re-runnable.
  *
- * Usage: node scripts/publish-local.mjs [--dry-run] [--publish-only] [--otp <code>]
+ * Usage: node scripts/release/publish-local.mjs [--dry-run] [--publish-only] [--otp <code>]
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { npmInvocation, pnpmInvocation } from './package-manager.mjs'
-import { readManifest, repoRoot } from './paths.mjs'
+import { npmInvocation, pnpmInvocation } from '../lib/package-manager.mjs'
+import { readManifest, repoRoot } from '../lib/paths.mjs'
 
 const dryRun = process.argv.includes('--dry-run')
 const npm = npmInvocation()
@@ -244,7 +244,7 @@ step('checking the working tree can produce a release')
 // accepted the publish), an already-published version, and an existing tag.
 // `--publish-only` skips it because a half-finished run is deliberately re-runnable.
 if (!publishOnly) {
-  const preflight = spawnSync(process.execPath, [join(repoRoot, 'scripts', 'release-preflight.mjs')], {
+  const preflight = spawnSync(process.execPath, [join(repoRoot, 'scripts', 'release', 'release-preflight.mjs')], {
     cwd: repoRoot,
     stdio: 'inherit',
   })
@@ -274,11 +274,11 @@ if (!publishOnly) {
       if (name.endsWith('.tgz')) rmSync(join(directory, name), { force: true })
     }
   }
-  execFileSync(process.execPath, [join(repoRoot, 'scripts', 'package-agent.mjs'), '--release'], {
+  execFileSync(process.execPath, [join(repoRoot, 'scripts', 'build', 'package-agent.mjs'), '--release'], {
     cwd: repoRoot,
     stdio: 'inherit',
   })
-  execFileSync(process.execPath, [join(repoRoot, 'scripts', 'release-plugin.mjs'), '--release'], {
+  execFileSync(process.execPath, [join(repoRoot, 'scripts', 'release', 'release-plugin.mjs'), '--release'], {
     cwd: repoRoot,
     stdio: ['ignore', 'pipe', 'inherit'],
   })

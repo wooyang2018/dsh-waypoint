@@ -174,9 +174,9 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node ../../scripts/package-agent.mjs && node ../../scripts/build-host.mjs && node ../../scripts/build-client.mjs",
+    "build": "tsc -p tsconfig.build.json && node ../../scripts/build/package-agent.mjs && node ../../scripts/build/build-host.mjs && node ../../scripts/build/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
-    "test": "node ../../scripts/build-client.mjs && node --import tsx --test test/*.test.ts"
+    "test": "node ../../scripts/build/build-client.mjs && node --import tsx --test test/*.test.ts"
   },
   "repository": {
     "type": "git",

@@ -39,7 +39,7 @@ jobs:
       - name: Install committed lockfile
         run: pnpm install --frozen-lockfile
       - name: Select compatibility target
-        run: node scripts/select_dsh_version.mjs "$DSH_TARGET"
+        run: node scripts/dev/select_dsh_version.mjs "$DSH_TARGET"
       # Not frozen: this step is expected to resolve versions outside the
       # committed lockfile, which stays pinned to the previous target.
       - name: Install target versions
@@ -69,7 +69,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build installable bundle
-        run: node scripts/release-plugin.mjs
+        run: node scripts/release/release-plugin.mjs
       # The artifact name carries the DSH target, so a run against a newer
       # release is distinguishable from the committed lockfile's tree. Both
       # tarballs are uploaded: the plugin bundles the agent, and the agent is

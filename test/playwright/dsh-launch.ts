@@ -12,7 +12,7 @@
  *     set "ELECTRON_RUN_AS_NODE=1"
  *     "..\..\..\..\DeepSeek Harness.exe" --expose-internals "..\..\..\app.asar\...\cli.js" %*
  *
- * That is the same `{ command, prefixArgs }` shape `scripts/package-manager.mjs`
+ * That is the same `{ command, prefixArgs }` shape `scripts/lib/package-manager.mjs`
  * uses to reach npm and pnpm without their `.cmd` shims.
  *
  * `app.asar` is an archive, so `existsSync` cannot see the CLI entry inside it;

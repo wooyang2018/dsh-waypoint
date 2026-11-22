@@ -17,7 +17,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import { repoRoot } from './paths.mjs'
+import { repoRoot } from '../lib/paths.mjs'
 
 const args = new Set(process.argv.slice(2))
 const dryRun = args.has('--dry-run')
@@ -119,7 +119,7 @@ if (trackedInside.length > 0 && !keepTracked) {
   process.stderr.write(
     'clean: these files are tracked by git and were just deleted from the working tree:\n' +
     trackedInside.map(path => `  ${path}\n`).join('') +
-    'Restore them with `git checkout -- <path>`, or run `node scripts/clean.mjs --keep-tracked`.\n',
+    'Restore them with `git checkout -- <path>`, or run `node scripts/build/clean.mjs --keep-tracked`.\n',
   )
 }
 

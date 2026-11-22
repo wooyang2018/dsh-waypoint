@@ -11,7 +11,9 @@
     ]
   },
   "include": [
-    "*.mjs",
-    "e2e-review/*.mjs"
+    "**/*.mjs"
+  ],
+  "exclude": [
+    "e2e-review/adapters"
   ]
 }

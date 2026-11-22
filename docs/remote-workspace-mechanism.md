@@ -877,6 +877,6 @@ remote agent's version and pid untouched). The one thing neither run observes is
 the handler is covered by `test/link-forwarding.test.ts`, and driving it from a real transcript needs a
 mirrored Session in a live GUI.
 
-To confirm any single claim the smallest reproduction is `node scripts/test-sandbox.mjs`, which builds and
+To confirm any single claim the smallest reproduction is `node scripts/test/test-sandbox.mjs`, which builds and
 installs into an isolated environment, followed by one integration run under the visibility rules in
 [docs/testing.md](testing.md).

@@ -74,7 +74,7 @@ Upgrade the **local** profile to the build under test, so the desktop pushes the
 test. That is the only arrangement where the pushed and tested agents agree.
 
 ```powershell
-pnpm build && node scripts/release-plugin.mjs          # prints the dev tarball path
+pnpm build && node scripts/release/release-plugin.mjs          # prints the dev tarball path
 dsh plugin --profile <profile> add <that path>
 ```
 
@@ -283,14 +283,14 @@ CI runs one job, `verify`, against the current target in the workflow's `DSH_TAR
 
 1. `pnpm install --frozen-lockfile` — the committed lockfile must install cleanly. This is what a fresh
    clone gets, and it is currently pinned to the same `0.2.2-rc.3` release as `DSH_TARGET`.
-2. `node scripts/select_dsh_version.mjs "$DSH_TARGET"` — re-pin every installed DSH package and peer.
+2. `node scripts/dev/select_dsh_version.mjs "$DSH_TARGET"` — re-pin every installed DSH package and peer.
    The script discovers packages through `pnpm list`, so it needs step 1's tree first.
 3. `pnpm install --no-frozen-lockfile` — resolve the re-pinned tree; deliberately outside the lockfile.
 4. Assert the resolved `@deepseek-ai/dsh-session` version equals `DSH_TARGET`, so an override that
    silently failed does not pass the job against the wrong tree.
 5. `pnpm -r build`, then the **root** `pnpm typecheck` and `pnpm test`. The root forms are not
    `pnpm -r`: `-r` skips the root package, which is where `scripts/`'s `checkJs` pass and the
-   `scripts/*.test.mjs` live (the root `pretypecheck` also runs `scripts/check-workspace-libs.mjs`).
+   `scripts/**/*.test.mjs` live (the root `pretypecheck` also runs `scripts/check/check-workspace-libs.mjs`).
    Then the secret scan and the installable bundle.
 6. Upload both tarballs as the `dsh-waypoint-<DSH_TARGET>` artifact: the plugin bundle and the standalone
    remote-agent bundle, kept for 30 days. The target version is in the artifact name, so a run against
