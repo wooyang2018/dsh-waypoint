@@ -10,6 +10,8 @@ import {
 const REMOTE_CWD = '/srv/project'
 const LOCAL_SEQ = 42
 const TURN = 3
+/** The coordinates the mirror now resolves before fetching. */
+const TARGET = { hostId: 'host-1', remoteSessionId: 'remote-1', turn: TURN }
 
 function summary() {
   return {
@@ -94,7 +96,7 @@ describe('remote workspace changes', () => {
     const mirrors = fakeMirrors()
     const hosts = fakeHosts()
     const { restore, cache } = install(service, mirrors, hosts)
-    await prefetchChangesSummary(mirrors as any, hosts as any, cache, 'sess-1', LOCAL_SEQ)
+    await prefetchChangesSummary(hosts as any, cache, 'sess-1', TARGET)
 
     // `summary` is synchronous by contract, which is why the value has to be
     // prefetched before the event is appended.
@@ -126,7 +128,7 @@ describe('remote workspace changes', () => {
     const service = fakeService()
     const hosts = fakeHosts()
     const { restore, cache } = install(service, fakeMirrors(), hosts)
-    await prefetchChangesSummary(fakeMirrors() as any, hosts as any, cache, 'sess-1', LOCAL_SEQ)
+    await prefetchChangesSummary(hosts as any, cache, 'sess-1', TARGET)
 
     const diff = await service.diff('sess-1', LOCAL_SEQ, 0, new AbortController().signal) as any
     assert.equal(diff.kind, 'text')
@@ -138,9 +140,33 @@ describe('remote workspace changes', () => {
   it('skips the prefetch when the agent lacks the capability', async () => {
     const hosts = fakeHosts({ supports: false })
     const cache = new RemoteChangesCache()
-    await prefetchChangesSummary(fakeMirrors() as any, hosts as any, cache, 'sess-1', LOCAL_SEQ)
+    await prefetchChangesSummary(hosts as any, cache, 'sess-1', TARGET)
     assert.equal(cache.get('sess-1', TURN), undefined)
     assert.equal(hosts.summaryCalls.length, 0)
+  })
+
+  it('caches the summary without consulting changesTurns', async () => {
+    // The regression this guards: the prefetch used to resolve the remote
+    // coordinates through `mirrors.changesEvent()`, which reads `changesTurns`.
+    // That map is written by the event append the prefetch has to *precede*, so
+    // the lookup always missed and nothing was ever cached. Passing the
+    // coordinates in removes the dependency entirely.
+    const hosts = fakeHosts()
+    const cache = new RemoteChangesCache()
+    await prefetchChangesSummary(hosts as any, cache, 'sess-1', TARGET)
+    assert.notEqual(cache.get('sess-1', TURN), undefined, 'the summary must be cached')
+    assert.deepEqual(hosts.summaryCalls, [`remote-1:${TURN}`])
+  })
+
+  it('does not fetch a turn that is already cached', async () => {
+    // A snapshot replay can announce the same turn more than once (the recorder
+    // replaces an earlier announcement), so repeat fetches would be wasted
+    // round trips on the path that now awaits them.
+    const hosts = fakeHosts()
+    const cache = new RemoteChangesCache()
+    await prefetchChangesSummary(hosts as any, cache, 'sess-1', TARGET)
+    await prefetchChangesSummary(hosts as any, cache, 'sess-1', TARGET)
+    assert.equal(hosts.summaryCalls.length, 1, 'the second call must short-circuit')
   })
 
   it('swallows a failed prefetch so the event stream keeps flowing', async () => {
@@ -151,9 +177,32 @@ describe('remote workspace changes', () => {
       },
     }
     const cache = new RemoteChangesCache()
-    // Must resolve, not reject: the mirror awaits this mid-stream.
-    await prefetchChangesSummary(fakeMirrors() as any, hosts as any, cache, 'sess-1', LOCAL_SEQ)
+    // Must resolve, not reject: both arrival paths now await this mid-stream.
+    await prefetchChangesSummary(hosts as any, cache, 'sess-1', TARGET)
     assert.equal(cache.get('sess-1', TURN), undefined)
+  })
+
+  it('gives up within the timeout instead of stalling the mirror', async () => {
+    // The mirror awaits this before projecting, so a host that never answers has
+    // to become "no card" rather than a stuck event stream.
+    const hosts = {
+      supportsAgent() { return true },
+      agentFor() {
+        return {
+          changesSummary(_request: unknown, signal?: AbortSignal) {
+            return new Promise((_resolve, reject) => {
+              signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+            })
+          },
+        }
+      },
+    }
+    const cache = new RemoteChangesCache()
+    const started = Date.now()
+    await prefetchChangesSummary(hosts as any, cache, 'sess-1', TARGET)
+    const elapsed = Date.now() - started
+    assert.equal(cache.get('sess-1', TURN), undefined)
+    assert.ok(elapsed < 7_000, `must be bounded by the prefetch timeout, took ${elapsed}ms`)
   })
 
   it('evicts the oldest summary past the cap', () => {

@@ -65,6 +65,70 @@ function appended(session: { snapshotEvents(): Array<{ type: string }> }, baseli
   return session.snapshotEvents().slice(baseline).map(event => event.type)
 }
 
+/**
+ * The changed-files card is read synchronously from a prefetch cache.
+ *
+ * `workspaceChanges.summary(sessionId, seq)` cannot await, so the summary has to
+ * be cached before the announcing event becomes visible. Both arrival paths
+ * therefore have to fetch *first* and project second. The cases below assert
+ * that order rather than the fetch itself, because the earlier defect was purely
+ * one of ordering: the fetch ran, found no `changesTurns` entry, and cached
+ * nothing while every test stayed green.
+ */
+describe('the change summary is cached before its event is visible', () => {
+  /** An announcement, as the remote records it. */
+  const changes = (turn: number, seq: number): RawEvent => ({
+    seq,
+    type: 'workspace/changes',
+    data: { turn, files: [], total: 0, added: 0, deleted: 0 },
+  })
+
+  it('waits for the prefetch before projecting a replayed announcement', async () => {
+    // The card's read is synchronous, so the summary must be cached before the
+    // announcement is visible. Starting the fetch is not enough: the mirror used
+    // to launch it with `void`, so the event was projected while the fetch was
+    // still pending — and, in the real implementation, the fetch then looked up a
+    // `changesTurns` entry the append had not written yet and cached nothing.
+    //
+    // A macrotask is what makes the difference observable. Microtask yields drain
+    // during `await poll()` either way, so they cannot tell the two apart; a timer
+    // can, because an abandoned promise leaves it pending when `poll` returns.
+    const test = await mounted()
+    const order: string[] = []
+    let local: { snapshotEvents(): Array<{ type: string }> } | undefined
+    try {
+      test.service.setChangesPrefetch(async () => {
+        order.push('fetch:start')
+        await new Promise(resolve => setTimeout(resolve, 5))
+        order.push('fetch:done')
+      })
+      local = test.sessions.get(test.record.localSessionId) as unknown as { snapshotEvents(): Array<{ type: string }> }
+      const baseline = local?.snapshotEvents().length ?? 0
+
+      test.setSnapshot(parent.sessionId, snapshotOf([...HEALTHY, changes(2, 3)], false, 4))
+      await test.poll(parent.sessionId)
+
+      assert.deepEqual(
+        order,
+        ['fetch:start', 'fetch:done'],
+        'poll must not return until the prefetch has completed',
+      )
+      assert.equal(
+        local?.snapshotEvents().filter(event => event.type === 'workspace/changes').length,
+        1,
+        'the announcement is projected, exactly once',
+      )
+      assert.ok(
+        appended(local as never, baseline).includes('workspace/changes'),
+        'the projection happened after the fetch',
+      )
+    } finally {
+      await test.service.dispose()
+    }
+  })
+
+  })
+
 describe('a gap in the remote log', () => {
   it('realigns instead of retrying the same position forever', async () => {
     // The remote jumps from seq 3 straight to seq 8: seqs 3..7 never existed

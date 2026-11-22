@@ -108,6 +108,23 @@ interface PendingUser {
   localSeq: number
 }
 
+/**
+ * Where one remote change summary lives, as the mirror knows it.
+ *
+ * Resolved by the mirror and handed to the prefetch hook. Passing this rather
+ * than a local sequence is deliberate: `changesTurns` is written by the very
+ * event append that the prefetch has to precede, so a lookup there always
+ * missed when the fetch ran first.
+ */
+export interface RemoteChangeTarget {
+  /** Host owning the remote Session. */
+  readonly hostId: string
+  /** Remote Session the turn belongs to. */
+  readonly remoteSessionId: string
+  /** Summarized turn. */
+  readonly turn: number
+}
+
 interface MirrorRuntime {
   readonly record: MirrorRecord
   readonly agent: MirrorAgent
@@ -568,7 +585,7 @@ export class RemoteMirrorService {
    * Populating the cache BEFORE the append is what makes the read total: once a
    * client can see the event, its summary is already there.
    */
-  #changesPrefetch: ((sessionId: string, localSeq: number) => Promise<void>) | undefined
+  #changesPrefetch: ((sessionId: string, target: RemoteChangeTarget) => Promise<void>) | undefined
   #pendingApprovals = new Map<string, RemoteApprovalRequest[]>()
   #approvingApprovals = new Set<string>()
   #visibleSessions = new Map<string, number>()
@@ -871,8 +888,38 @@ export class RemoteMirrorService {
    * @param hook - called with the local Session and the sequence the announcing
    *   event will occupy; resolves after the summary is cached or the attempt failed.
    */
-  setChangesPrefetch(hook: (sessionId: string, localSeq: number) => Promise<void>): void {
+  setChangesPrefetch(hook: (sessionId: string, target: RemoteChangeTarget) => Promise<void>): void {
     this.#changesPrefetch = hook
+  }
+
+  /**
+   * Fetch the summary for one announcing event, before it is projected.
+   *
+   * Awaited by both arrival paths (`#replaySnapshot` and `#followStream`) so the
+   * card's synchronous `summary()` read cannot run ahead of the cache. The hook
+   * swallows its own failures and is bounded by a timeout, so the worst case is
+   * a delayed projection, never a lost event.
+   *
+   * The coordinates are resolved here rather than inside the hook: the mirror
+   * holds the remote Session and the turn, while the hook would have had to look
+   * them up in `changesTurns` — which is written by the very append that has not
+   * happened yet.
+   * @param runtime - the mirror projecting the event.
+   * @param event - the event about to be projected.
+   */
+  async #prefetchChanges(runtime: MirrorRuntime, event: RemoteSessionEvent): Promise<void> {
+    if (event.type !== 'workspace/changes') return
+    const hook = this.#changesPrefetch
+    if (hook === undefined) return
+    const turn = (event.data as { turn?: unknown } | undefined)?.turn
+    if (typeof turn !== 'number') return
+    const remoteSessionId = runtime.record.remoteSessionId
+    if (remoteSessionId === undefined) return
+    await hook(runtime.record.localSessionId, {
+      hostId: runtime.record.hostId,
+      remoteSessionId,
+      turn,
+    })
   }
 
   /** Resolve a local workspace anchor to its remote filesystem context. */
@@ -2248,7 +2295,7 @@ export class RemoteMirrorService {
       if (runtime === undefined || runtime.stopped) return undefined
       // Re-add must replay the suffix produced while this workspace was removed,
       // including completed sessions which no longer have a live event stream.
-      this.#replaySnapshot(runtime, snapshot)
+      await this.#replaySnapshot(runtime, snapshot)
       await this.#save()
       if (remote.live) {
         this.#startStream(runtime)
@@ -2530,7 +2577,7 @@ export class RemoteMirrorService {
         await this.#save()
         return
       }
-      this.#replaySnapshot(runtime, snapshot)
+      await this.#replaySnapshot(runtime, snapshot)
       runtime.record.updatedAt = new Date().toISOString()
       if (!snapshot.live && runtime.record.lastSeq >= snapshot.cursor) {
         if (runtime.running) this.#closeAbandonedTurn(runtime)
@@ -2599,7 +2646,7 @@ export class RemoteMirrorService {
     return false
   }
 
-  #replaySnapshot(runtime: MirrorRuntime, snapshot: SessionSnapshot): void {
+  async #replaySnapshot(runtime: MirrorRuntime, snapshot: SessionSnapshot): Promise<void> {
     if (runtime.diverged !== undefined) return
     if (snapshot.truncated && (snapshot.events[0]?.seq ?? 0) > runtime.record.lastSeq) {
       const first = snapshot.events[0]?.seq
@@ -2631,13 +2678,11 @@ export class RemoteMirrorService {
         continue
       }
       try {
-        // A replayed announcement is projected synchronously, so the summary
-        // cannot be awaited here. Start the fetch and let it land: a reader that
-        // arrives first sees no card, which is the same degradation a Host
-        // reports for a summary it no longer serves.
-        if (event.type === 'workspace/changes' && this.#changesPrefetch !== undefined) {
-          void this.#changesPrefetch(runtime.record.localSessionId, (runtime.session as unknown as { seq: number }).seq)
-        }
+        // Fetch first, then project: the card's `summary()` read is synchronous,
+        // so the cache has to be warm before any client can see the event. This
+        // is what makes "the summary is already present once the event is
+        // visible" true rather than merely intended.
+        await this.#prefetchChanges(runtime, event)
         this.#appendEvent(runtime, event)
       } catch (error) {
         // One event the local projection rejects must not freeze every event
@@ -2821,6 +2866,9 @@ export class RemoteMirrorService {
           runtime.lastError = `remote event gap at ${event.seq}, mirror ${runtime.record.lastSeq}`
           return
         }
+        // Same ordering as the replay path: a turn that arrives live must get
+        // its card too, and this path previously skipped the fetch entirely.
+        await this.#prefetchChanges(runtime, event)
         this.#appendEvent(runtime, event)
         runtime.record.lastSeq = event.seq + 1
         runtime.record.updatedAt = new Date().toISOString()

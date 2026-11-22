@@ -37,7 +37,7 @@ import type {
 } from '@deepseek-ai/dsh-workspace-changes/types'
 import type { RemoteWorkspaceChangesSummary, RemoteWorkspaceFileDiff } from '@dsh-waypoint/protocol'
 import type { RemoteHostsService } from '../service.ts'
-import type { RemoteMirrorService } from '../mirror/service.ts'
+import type { RemoteChangeTarget, RemoteMirrorService } from '../mirror/service.ts'
 import { replaceMethods } from './install.ts'
 
 /** Cached summaries; one entry per `(localSessionId, turn)`. */
@@ -134,27 +134,32 @@ function toHostDiff(diff: RemoteWorkspaceFileDiff): WorkspaceFileDiff {
 /**
  * Fetch and cache one turn's summary.
  *
- * Called by the mirror immediately before it appends the announcing event, so
- * the synchronous `summary()` read that follows always finds an entry.
- * Failures are logged and swallowed: a missing card is the honest degradation,
- * and throwing here would break the event stream itself.
+ * Awaited by the mirror *before* it projects the announcing event, so the
+ * synchronous `summary()` read that follows always finds an entry: there is no
+ * window in which the card is visible but empty.
  *
- * @param mirrors - resolves the announcement to its remote Session.
+ * Failures are swallowed rather than thrown. A host that is offline, an agent
+ * older than the capability, or a turn the remote no longer retains all leave
+ * the cache untouched, which is the same "no card" answer a local Session gives
+ * for a summary it no longer serves — never a stuck spinner, and never a broken
+ * event stream.
+ *
  * @param hosts - remote agent clients.
  * @param cache - the shared summary cache.
- * @param localSessionId - the mirrored Session about to receive the event.
- * @param localSeq - the sequence the event will occupy locally.
- * @returns after the cache is populated, or after the attempt failed.
+ * @param localSessionId - the mirrored Session the card belongs to.
+ * @param target - host, remote Session and turn, resolved by the caller.
+ * @returns after the cache is populated, already had the entry, or the attempt failed.
  */
 export async function prefetchChangesSummary(
-  mirrors: RemoteMirrorService,
   hosts: RemoteHostsService,
   cache: RemoteChangesCache,
   localSessionId: string,
-  localSeq: number,
+  target: RemoteChangeTarget,
 ): Promise<void> {
-  const target = mirrors.changesEvent(localSessionId, localSeq)
-  if (target === undefined) return
+  // A replay can carry the same turn more than once (the recorder replaces an
+  // earlier announcement for a turn), and a reconnect can replay a turn already
+  // fetched. Either way one round trip is enough.
+  if (cache.get(localSessionId, target.turn) !== undefined) return
   if (!hosts.supportsAgent(target.hostId, 'workspace.changes')) return
   const controller = new AbortController()
   const timer = setTimeout(() => { controller.abort() }, PREFETCH_TIMEOUT_MS)
@@ -163,9 +168,8 @@ export async function prefetchChangesSummary(
       .changesSummary({ sessionId: target.remoteSessionId, turn: target.turn }, controller.signal)
     cache.set(localSessionId, target.turn, summary)
   } catch {
-    // A host that is offline, replaced by an older agent, or simply has no
-    // record for this turn leaves the card absent, which is what the stock
-    // service reports for a summary it no longer serves.
+    // Leave the cache untouched: a missing card is the honest degradation, and
+    // the caller must not lose the event over a summary it cannot fetch.
   } finally {
     clearTimeout(timer)
   }

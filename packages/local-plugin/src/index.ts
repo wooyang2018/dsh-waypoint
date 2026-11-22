@@ -52,7 +52,7 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
   // Shared between the mirror's prefetch hook and the workspaceChanges
   // replacement, so the summary is already cached when the event lands.
   const changesCache = new RemoteChangesCache()
-  mirrors.setChangesPrefetch((sessionId, seq) => prefetchChangesSummary(mirrors, service, changesCache, sessionId, seq))
+  mirrors.setChangesPrefetch((sessionId, target) => prefetchChangesSummary(service, changesCache, sessionId, target))
   const terminals = new RemoteTerminals(ctx, service, mirrors)
   ctx.effect(
     () => async () => {
