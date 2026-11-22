@@ -356,14 +356,26 @@ What the allowlist buys is protection against *misuse*: the panel only needs to 
 and diffs, so a caller-supplied argv is narrowed to read-only plumbing and a mistake fails before
 spawn instead of having a surprising side effect.
 
-- `args[0]` must be in a read-only subcommand allowlist (`status`, `diff`, `log`, `show`,
-  `rev-parse`, `for-each-ref`, `ls-files`, `merge-base`, `cat-file`, and similar). Anything else is
-  refused. `status` and `diff` can refresh the index, so the agent pins `GIT_OPTIONAL_LOCKS=0` to keep
-  that refresh non-persistent.
+- The argv is parsed as Git parses it: leading global options, then a subcommand. Only
+  `--no-optional-locks` and `-c <key>=<value>` may precede it, and `args[0]` must then be in a
+  read-only subcommand allowlist (`status`, `diff`, `log`, `show`, `rev-parse`, `show-ref`,
+  `for-each-ref`, `ls-files`, `merge-base`, `cat-file`, `config`, `hash-object`, and similar).
+  Anything else is refused. `status` and `diff` can refresh the index, so the agent pins
+  `GIT_OPTIONAL_LOCKS=0` to keep that refresh non-persistent.
+- `-c` is narrowed rather than trusted. Git runs a program for some configuration keys
+  (`filter.*.clean`, `core.fsmonitor`, `core.pager`, aliases, `diff.*.command`), so accepting an
+  arbitrary assignment would be an allowlist bypass needing no exploit. Only `core.quotePath`,
+  `core.hooksPath`, `core.fsmonitor`, and per-driver `filter.<name>.clean|process|required|smudge`
+  are accepted, and only with a value that switches the feature off. The agent's own prefix is
+  placed *after* the caller's options, so its hook and fsmonitor settings always win.
 - A few arguments are refused anywhere in the argv even though no current caller sends them:
   `--ext-diff` and `--textconv` hand argv control to a program the repository configures (which would
   escape the allowlist entirely), and `--output` turns a diff into a file write.
-- `env` is filtered: only `GIT_*` and `LC_ALL` survive, so a caller cannot inject `PATH` or `HOME`.
+- `env` is an allowlist, not a `GIT_*` prefix filter: only `LC_ALL` and a rewritten
+  `GIT_CONFIG_KEY_n`/`VALUE_n`/`COUNT` overlay survive. A prefix filter would let a caller reach
+  `GIT_EXTERNAL_DIFF`, `GIT_SSH_COMMAND` and `GIT_CONFIG_*`, which run programs. The overlay is
+  filtered by the same key rules as `-c` and its count is rewritten to what survived, so a dropped
+  entry cannot make Git fail on a key that is no longer there.
 
 `/workspace-changes/summary` and `/workspace-changes/diff` serve the native **changed-files** card.
 They are addressed by the **remote Session id and turn number**, not by a path: the summary lives in

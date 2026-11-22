@@ -888,6 +888,28 @@ export class RemoteMirrorService {
     return undefined
   }
 
+  /**
+   * Resolve a *remote* absolute path to the workspace that mirrors it.
+   *
+   * The Forge panel canonicalizes the paths Git printed on the remote host
+   * (`--show-toplevel`, `--git-common-dir`). Those strings are in the remote
+   * namespace, so `remoteFileContext` cannot see them: it matches local anchors.
+   * Without this lookup the stock resolver claims them and returns a local path.
+   * @param path - an absolute POSIX path in some host's execution world.
+   * @returns the owning host and workspace roots, when one mirrors this path.
+   */
+  remoteContextForRemotePath(path: string): { hostId: string; remoteRoot: string; anchor: string } | undefined {
+    if (!path.startsWith('/')) return undefined
+    for (const record of Object.values(this.#state.workspaces)) {
+      if (record.remoteRoot === undefined || this.#workspaceRemoved(record)) continue
+      const root = record.remoteRoot.endsWith('/') ? record.remoteRoot : `${record.remoteRoot}/`
+      if (path === record.remoteRoot || path.startsWith(root)) {
+        return { hostId: record.hostId, remoteRoot: record.remoteRoot, anchor: canonicalPath(record.anchor) }
+      }
+    }
+    return undefined
+  }
+
   /** Record the local Session a client currently shows, refreshing its freshness window. */
   reportVisibleSession(sessionId: string | undefined): void {
     const now = Date.now()

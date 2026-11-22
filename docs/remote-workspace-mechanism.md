@@ -471,6 +471,15 @@ remote checkout.
   reports `enforcement: 'partial'` rather than claiming `'full'`, because nothing about the remote
   checkout was verified.
 
+**Both namespaces must be recognized, not just the anchor.** The first inspection converts Git's
+printed paths through `ctx.fs`, so after it runs the panel works in the *remote* namespace: its
+runner's `cwd` is the remote checkout, and each changed file is read as a path relative to it. An
+interception point that only recognized the local anchor therefore stops working one call later —
+`spawn` sees a POSIX `cwd` it does not know and delegates to the local provider, and `resolve` hands
+the panel a local path. `RemoteMirrorService.remoteContextForRemotePath` is the second lookup that
+makes a remote absolute path resolve to its owning workspace; `remote/subprocess.ts`, `remote/fs.ts`
+and `remote/sandbox.ts` all consult it alongside `remoteFileContext`.
+
 #### The change card reads through `ctx.workspaceChanges`
 
 `workspaceChanges.summary(sessionId, seq)` is **synchronous**, and `seq` is the **local** sequence of

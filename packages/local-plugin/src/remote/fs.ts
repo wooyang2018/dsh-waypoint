@@ -126,36 +126,51 @@ export function installRemoteFileSystem(
   /**
    * Map one caller path to a remote target.
    *
-   * `opts.cwd` is tried first: a relative path is only meaningful against a
-   * base, and for a mirrored Session that base is the anchor. An absolute path
-   * is then tried on its own, which covers the panel's `resolve(topLevel, { cwd })`
-   * form where the printed path is already remote-absolute.
+   * Four shapes arrive here and they need different handling:
+   *
+   * 1. A relative path against a base in the *local* namespace — the anchor or a
+   *    subdirectory of it. This is the common case: a Session's cwd is its
+   *    anchor, and everything below it is the same relative path in both
+   *    namespaces.
+   * 2. A relative path against a base in the *remote* namespace. `localDiff`
+   *    reads each changed file with `resolve(path, { cwd: root })`, and after
+   *    `inspectCheckout` that root is the remote checkout; the file path stays
+   *    relative to it.
+   * 3. An absolute path in the local namespace (the anchor itself or below it).
+   * 4. An absolute path in the remote namespace below the workspace root.
+   *    `inspectCheckout` canonicalizes Git's printed `--show-toplevel`,
+   *    `--git-common-dir` and `--git-dir`; they are already remote-absolute and
+   *    lie in neither local namespace, so the stock resolver would claim them
+   *    and `processPath` would hand the panel a local path that does not exist.
+   *
+   * Anything else delegates, which is how a genuinely local Session keeps the
+   * stock behaviour.
    */
   const remoteTargetOf = (path: string, cwd: string | undefined): FsTarget | undefined => {
-    for (const candidate of [path, cwd]) {
-      if (candidate === undefined || candidate === '') continue
-      const context = mirrors.remoteFileContext(candidate)
-      if (context === undefined) continue
-      // Only an absolute path can be mapped without a base; a relative one is
-      // resolved against the anchor the caller already named.
-      const absolute = candidate === path && (path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path))
-      if (absolute) {
-        const relative = relativeToAnchor(context.anchor, path)
-        return encodeTarget(
-          context.hostId,
-          relative === undefined ? path : remotePath.join(context.remoteRoot, relative),
-        )
+    // A relative path is only meaningful against a base, so the base decides
+    // the namespace and the path is joined onto its remote spelling.
+    if (!isAbsolutePath(path) && cwd !== undefined && cwd !== '') {
+      const local = mirrors.remoteFileContext(cwd)
+      if (local !== undefined) {
+        const relative = relativeToAnchor(local.anchor, cwd)
+        const base = relative === undefined ? local.remoteRoot : remotePath.join(local.remoteRoot, relative)
+        return encodeTarget(local.hostId, remotePath.resolve(base, path))
       }
+      const remote = mirrors.remoteContextForRemotePath(cwd)
+      if (remote !== undefined) return encodeTarget(remote.hostId, remotePath.resolve(cwd, path))
+      return undefined
     }
-    // A relative path whose base is a mirrored anchor.
-    if (cwd !== undefined && cwd !== '' && !path.startsWith('/')) {
-      const context = mirrors.remoteFileContext(cwd)
-      if (context !== undefined) {
-        const relative = relativeToAnchor(context.anchor, cwd)
-        const base = relative === undefined ? context.remoteRoot : remotePath.join(context.remoteRoot, relative)
-        return encodeTarget(context.hostId, remotePath.resolve(base, path))
-      }
+    if (!isAbsolutePath(path)) return undefined
+    const local = mirrors.remoteFileContext(path)
+    if (local !== undefined) {
+      const relative = relativeToAnchor(local.anchor, path)
+      return encodeTarget(
+        local.hostId,
+        relative === undefined ? path : remotePath.join(local.remoteRoot, relative),
+      )
     }
+    const remote = mirrors.remoteContextForRemotePath(path)
+    if (remote !== undefined) return encodeTarget(remote.hostId, remotePath.resolve(path))
     return undefined
   }
 
@@ -281,6 +296,18 @@ async function readWindow(
     if (page.eof || bytes.length === 0) break
   }
   return Buffer.concat(chunks)
+}
+
+/**
+ * Whether a caller path is absolute in either namespace.
+ *
+ * A POSIX path names the remote world; a drive-letter or UNC path names the
+ * local one. Anything else is relative and needs `opts.cwd`.
+ * @param path - the caller's path.
+ * @returns whether it can be mapped without a base.
+ */
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\')
 }
 
 /**

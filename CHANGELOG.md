@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.1.1
+
+### Fixed
+
+The Forge panel could not read Git information for any mirrored workspace, and the three defects
+below had to be fixed together for it to work at all.
+
+- **The agent refused every command the panel sent.** `gitIn()` never emits a bare subcommand: it
+  builds `[git, --no-optional-locks, -c core.hooksPath=…, -c core.fsmonitor=false, …args]`, and its
+  diff argv adds `-c core.quotePath=false` before the subcommand. The bridge read `args[0]` as the
+  subcommand, so the very first `rev-parse --show-toplevel` was refused as
+  `git subcommand "--no-optional-locks" is not permitted` and the panel could only render
+  **Git information could not be read**. The argv is now parsed the way Git parses it: leading
+  global options, then the subcommand. `show-ref`, `config` and `hash-object` were also missing from
+  the allowlist and are now allowed, which is what the branch listing, filter overrides and
+  empty-tree comparison need.
+- **`-c` is narrowed rather than trusted.** Accepting it at all is only safe because Git runs a
+  program for some configuration keys — `filter.*.clean`, `core.fsmonitor`, `core.pager`, aliases —
+  so an unvalidated assignment would be an allowlist bypass needing no exploit. Only
+  `core.quotePath`, `core.hooksPath`, `core.fsmonitor` and per-driver
+  `filter.<name>.clean|process|required|smudge` are accepted, and only with a value that switches the
+  feature off. The agent's own prefix is placed after the caller's options, so its hook and
+  fsmonitor settings always win.
+- **The `env` channel had the same hole and is now an allowlist.** A `GIT_*` prefix filter admitted
+  `GIT_EXTERNAL_DIFF`, `GIT_SSH_COMMAND` and `GIT_CONFIG_*`, all of which run programs; it also
+  silently forwarded `GIT_DIR` and `GIT_WORK_TREE`. Only `LC_ALL` and a rewritten
+  `GIT_CONFIG_KEY_n`/`VALUE_n`/`COUNT` overlay survive now, filtered by the same rules as `-c`, with
+  the count rewritten to what survived so a dropped entry cannot fail the command.
+- **Path interception only knew the local anchor.** The first inspection canonicalizes the paths Git
+  printed, so from that point on the panel works in the *remote* namespace: its runner's `cwd` is the
+  remote checkout and each changed file is read relative to it. `subprocess.spawn` did not recognize
+  that `cwd` and fell back to the local provider, `fs.resolve` handed the panel a local path for
+  `--show-toplevel`/`--git-common-dir`/`--git-dir`, and `sandbox.confine` did not treat the remote
+  root as mirrored. `RemoteMirrorService.remoteContextForRemotePath` is the remote-namespace lookup
+  all three now consult alongside `remoteFileContext`.
+
 ## 1.1.0
 
 ### Added

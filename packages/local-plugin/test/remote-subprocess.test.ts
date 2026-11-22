@@ -14,6 +14,12 @@ function fakeMirrors() {
       }
       return undefined
     },
+    remoteContextForRemotePath(path: string) {
+      if (path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)) {
+        return { hostId: 'host-1', remoteRoot: REMOTE_ROOT, anchor: MIRROR_ANCHOR }
+      }
+      return undefined
+    },
   }
 }
 
@@ -111,6 +117,49 @@ describe('remote subprocess routing', () => {
     service.spawn(spec('/home/dev/local-project', ['git', 'status']))
     assert.equal(service.calls.length, 1)
     assert.equal(hosts.calls.length, 0)
+    restore()
+  })
+
+  it('routes a spec whose cwd is already the remote root', async () => {
+    // `inspectCheckout` canonicalizes Git's printed top-level and binds the
+    // runner to that value, so every later command arrives with a remote cwd.
+    // Treating it as local made the panel report "not a checkout".
+    const service = fakeSubprocess()
+    const hosts = fakeHosts()
+    const ctx = { logger: { warn() {} }, get: (name: string) => name === 'subprocess' ? service : undefined } as any
+    const restore = installRemoteSubprocess(ctx, fakeMirrors() as any, hosts as any)
+
+    await service.spawn(spec(REMOTE_ROOT, ['git', 'rev-parse', '--show-toplevel'])).done
+    assert.equal(service.calls.length, 0, 'the local provider must not be used')
+    assert.equal(hosts.calls[0]?.cwd, REMOTE_ROOT, 'the prefix must not be duplicated')
+    assert.deepEqual(hosts.calls[0]?.args, ['rev-parse', '--show-toplevel'])
+    restore()
+  })
+
+  it('maps a remote subdirectory without duplicating the prefix', async () => {
+    const service = fakeSubprocess()
+    const hosts = fakeHosts()
+    const ctx = { logger: { warn() {} }, get: (name: string) => name === 'subprocess' ? service : undefined } as any
+    const restore = installRemoteSubprocess(ctx, fakeMirrors() as any, hosts as any)
+
+    await service.spawn(spec(`${REMOTE_ROOT}/src`, ['git', 'status'])).done
+    assert.equal(hosts.calls[0]?.cwd, `${REMOTE_ROOT}/src`)
+    restore()
+  })
+
+  it('forwards the global options the Forge panel prefixes', async () => {
+    // The panel never sends a bare subcommand: gitIn() prepends
+    // GIT_PREFIX, and its diff argv adds -c core.quotePath=false. The agent
+    // validates those, so they must survive the hop unchanged.
+    const service = fakeSubprocess()
+    const hosts = fakeHosts()
+    const ctx = { logger: { warn() {} }, get: (name: string) => name === 'subprocess' ? service : undefined } as any
+    const restore = installRemoteSubprocess(ctx, fakeMirrors() as any, hosts as any)
+
+    const prefix = ['--no-optional-locks', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']
+    await service.spawn(spec(REMOTE_ROOT, ['git', ...prefix, 'rev-parse', '--show-toplevel'])).done
+    // The executable is dropped, and everything after it is forwarded verbatim.
+    assert.deepEqual(hosts.calls[0]?.args, [...prefix, 'rev-parse', '--show-toplevel'])
     restore()
   })
 

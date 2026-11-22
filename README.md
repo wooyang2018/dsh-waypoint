@@ -29,7 +29,7 @@ This plugin is developed for the **official DSH Desktop application**. Supported
 | Component | Version |
 |---|---|
 | [DSH Desktop / official client](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested) |
-| Plugin | [**1.1.0**](https://www.npmjs.com/package/dsh-waypoint) |
+| Plugin | [**1.1.1**](https://www.npmjs.com/package/dsh-waypoint) |
 | Remote DSH runtime | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested; new installs follow the local DSH version) |
 | Remote Node.js | [**22.19+**](https://nodejs.org/en/download) (one-click nvm + latest LTS install from the host card) |
 | Remote OS | Linux or macOS |
@@ -85,7 +85,7 @@ If npmjs.com still resolves an older `latest` tag for a newly published release,
 current version instead:
 
 ```text
-dsh-waypoint@1.1.0
+dsh-waypoint@1.1.1
 ```
 
 Keep this pinned version in sync with each release.

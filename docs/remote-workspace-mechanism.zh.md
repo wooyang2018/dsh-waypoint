@@ -413,6 +413,13 @@ return await Reflect.apply(prepared.method, prepared.receiver, prepared.args)
   Windows 的 job object 启动器、macOS 的 `sandbox-exec`、bubblewrap——远端根本没有，而且它保护的也是
   错的文件系统。返回值报 `enforcement: 'partial'` 而不是 `'full'`，因为远端检出的文件效果一点没被验证过。
 
+**两个命名空间都要认，只认锚点不够。** 第一次探测会经 `ctx.fs` 转换 Git 打印出来的路径，所以此后
+面板是在**远端**命名空间里工作的：runner 的 `cwd` 是远端检出，每个变更文件也是以它为基准的相对路径。
+只认本地锚点的拦截点因此会在下一次调用就失效——`spawn` 看到一个不认识的 POSIX `cwd` 就交回本地
+provider，`resolve` 则把本地路径交给面板。`RemoteMirrorService.remoteContextForRemotePath` 就是让
+远端绝对路径归位到所属工作区的第二次查询；`remote/subprocess.ts`、`remote/fs.ts` 和
+`remote/sandbox.ts` 都会在 `remoteFileContext` 之外一并查它。
+
 #### 变更卡片通过 `ctx.workspaceChanges` 读
 
 `workspaceChanges.summary(sessionId, seq)` 是**同步**的，且 `seq` 是宣告该变更的 `workspace/changes`

@@ -65,6 +65,36 @@ interface RemoteSpecContext {
   readonly hostId: string
   readonly remoteRoot: string
   readonly anchor: string
+  /**
+   * True when `spec.cwd` is already in the remote namespace.
+   *
+   * The Forge panel inspects the checkout through `inspectCheckout`, which
+   * canonicalizes the string Git printed — a remote absolute path — and then
+   * binds its runner to that directory. So the directory a spawn arrives with
+   * is often the remote root, not the local anchor, even though the two name
+   * the same workspace.
+   */
+  readonly remoteDirectory?: boolean
+}
+
+/**
+ * Resolve a working directory to the mirrored workspace that owns it.
+ *
+ * Both namespaces are accepted because the panel uses both: `cwd` below the
+ * anchor for a Session, and the remote root itself once `inspectCheckout` has
+ * run. Looking up only the anchor would send the second form to the local
+ * provider, which finds no repository at a POSIX path and reports "not a
+ * checkout".
+ * @param mirrors - the mirror registry.
+ * @param cwd - the spawn spec's working directory.
+ * @returns the owning workspace, or undefined when this is a local directory.
+ */
+function contextOf(mirrors: RemoteMirrorService, cwd: string): RemoteSpecContext | undefined {
+  const local = mirrors.remoteFileContext(cwd)
+  if (local !== undefined) return local
+  const remote = mirrors.remoteContextForRemotePath(cwd)
+  if (remote === undefined) return undefined
+  return { ...remote, remoteDirectory: true }
 }
 
 /**
@@ -95,7 +125,7 @@ export function installRemoteSubprocess(
   }
 
   const spawn = (spec: SubprocessSpawnSpec): SubprocessHandle => {
-    const context = mirrors.remoteFileContext(spec.cwd) as RemoteSpecContext | undefined
+    const context = contextOf(mirrors, spec.cwd)
     if (context === undefined) return originalSpawn(spec)
     if (!hosts.supportsAgent(context.hostId, 'git.exec')) {
       throw new LocalError(
@@ -237,17 +267,25 @@ function limitTail(text: string, cap: number): string {
 }
 
 /**
- * Map the local anchor working directory onto its remote spelling.
+ * Map the spawn spec's working directory onto its remote spelling.
  *
- * The panel passes a Session directory, which for a mirrored workspace is the
- * anchor or a subdirectory of it. Everything below the anchor is relative and
- * therefore identical in both namespaces; only the prefix differs.
+ * Two forms arrive, and both name the same workspace:
+ *
+ * - a path below the local anchor (`inspectCheckout`'s first call, and every
+ *   Session-relative query); everything below the anchor is relative and
+ *   therefore identical in both namespaces, so only the prefix differs;
+ * - a path already in the remote namespace, which `inspectCheckout` produced by
+ *   canonicalizing Git's own output and then used for every later command.
+ *
+ * The second form is returned unchanged rather than joined onto the root, which
+ * would duplicate the prefix (`/srv/project/srv/project`).
  * @param context - the mirrored workspace facts.
  * @param cwd - the local working directory from the spawn spec.
  * @returns an absolute POSIX path in the remote execution world.
  */
 function remoteDirectory(context: RemoteSpecContext, cwd: string): string {
   const normalized = cwd.split('\\').join('/')
+  if (context.remoteDirectory === true) return remotePath.resolve(normalized)
   const anchor = context.anchor.split('\\').join('/')
   if (normalized === anchor) return context.remoteRoot
   if (normalized.startsWith(`${anchor}/`)) {

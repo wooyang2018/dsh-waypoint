@@ -15,6 +15,22 @@
  * external diff driver, or touch the network is refused before spawn so a
  * mistake surfaces as a clear error instead of a surprising side effect.
  *
+ * WHY GLOBAL OPTIONS ARE PARSED, NOT ASSUMED AWAY
+ * The panel never calls `git <subcommand>`: `gitIn()` builds
+ * `[git, --no-optional-locks, -c core.hooksPath=…, -c core.fsmonitor=false, …args]`,
+ * and its diff argv adds `-c core.quotePath=false` before the subcommand. An
+ * agent that reads `args[0]` as the subcommand therefore refuses every command
+ * the panel sends — which is what made the Forge panel report "Git information
+ * could not be read" for every mirrored workspace. The leading options are
+ * skipped here instead.
+ *
+ * Skipping them only stays safe because `-c` is itself narrowed: Git runs a
+ * program for a handful of configuration keys (`filter.*.clean`,
+ * `core.fsmonitor`, …), so an unvalidated `-c key=value` would be a direct
+ * escape from this allowlist. Only keys that cannot name a program are
+ * accepted, and the same rule applies to the `GIT_CONFIG_KEY_n` overlay the
+ * panel uses to disable a repository's diff filters.
+ *
  * @module dsh-waypoint-agent/git
  */
 
@@ -33,10 +49,12 @@ const ALLOWED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   'attributes',
   'cat-file',
   'check-ignore',
+  'config',
   'describe',
   'diff',
   'diff-tree',
   'for-each-ref',
+  'hash-object',
   'log',
   'ls-files',
   'merge-base',
@@ -45,9 +63,152 @@ const ALLOWED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   'rev-list',
   'rev-parse',
   'show',
+  'show-ref',
   'status',
   'symbolic-ref',
 ])
+
+/** Global option that takes the next argv entry as its value. */
+const CONFIG_VALUE_OPTION = '-c'
+
+/** Global flags that take no value. */
+const GLOBAL_FLAGS: ReadonlySet<string> = new Set(['--no-optional-locks'])
+
+/**
+ * `core.*` keys a caller may set, compared case-insensitively.
+ *
+ * Git matches a variable name within a section without regard to case, so
+ * `core.hooksPath` and `core.hookspath` are the same setting.
+ */
+const ALLOWED_CORE_KEYS: ReadonlySet<string> = new Set([
+  'core.fsmonitor',
+  'core.hookspath',
+  'core.quotepath',
+])
+
+/**
+ * Per-driver filter keys a caller may set.
+ *
+ * The panel disables a repository's clean/process filters by writing
+ * `filter.<driver>.clean=` (and `.process=`, `.required=false`) as a
+ * command-local override, which is what keeps a diff from running an LFS
+ * helper. The driver name is a subsection, so it stays case-sensitive; the
+ * variable part does not.
+ */
+const ALLOWED_FILTER_KEY = /^filter\.[A-Za-z0-9._-]+\.(clean|process|required|smudge)$/i
+
+/**
+ * Values a program-running key may carry.
+ *
+ * Accepting `-c` at all is only safe because the *value* is bounded: Git runs a
+ * program for exactly these keys, so each may only be assigned a value that
+ * switches the feature off. Anything else is refused before spawn.
+ * @param key - the lowercased configuration key.
+ * @param value - the assigned value.
+ * @returns whether the assignment can only disable, never execute, a feature.
+ */
+function isDisablingValue(key: string, value: string): boolean {
+  if (key === 'core.fsmonitor') return value === 'false' || value === '' || value === '/dev/null'
+  if (key === 'core.hookspath') return value === '' || value === '/dev/null'
+  // Only affects how paths are quoted in output.
+  if (key === 'core.quotepath') return value === 'true' || value === 'false'
+  // A filter key is only ever used to switch the driver off.
+  return value === '' || value === 'false'
+}
+
+/**
+ * Whether a `-c` assignment may be forwarded to Git.
+ *
+ * @param key - configuration key as the caller spelled it.
+ * @param value - assigned value.
+ * @returns whether the assignment is both permitted and non-executing.
+ */
+function configAssignmentAllowed(key: string, value: string): boolean {
+  const lower = key.toLowerCase()
+  if (!ALLOWED_CORE_KEYS.has(lower) && !ALLOWED_FILTER_KEY.test(key)) return false
+  return isDisablingValue(lower, value)
+}
+
+/**
+ * Split a caller argv into its global options and subcommand.
+ *
+ * The validated `-c` assignments are returned rather than dropped: the panel
+ * sends `-c core.quotePath=false` so diff output names files as UTF-8 instead of
+ * C-quoted escapes, and losing it would corrupt every non-ASCII path. They are
+ * placed *before* {@link GIT_PREFIX} at spawn time, so this bridge's own
+ * settings win wherever the two name the same key.
+ * @param args - the caller's argv, without the executable.
+ * @returns the validated configuration options, the subcommand, and its args.
+ * @throws `git/rejected` for a global option this bridge does not accept.
+ */
+function parseSubcommand(args: readonly string[]): {
+  config: readonly string[]
+  subcommand: string
+  rest: readonly string[]
+} {
+  const config: string[] = []
+  let index = 0
+  while (index < args.length) {
+    const argument = args[index] as string
+    if (GLOBAL_FLAGS.has(argument)) {
+      index += 1
+      continue
+    }
+    if (argument === CONFIG_VALUE_OPTION) {
+      const assignment = args[index + 1]
+      if (assignment === undefined) {
+        throw new RemoteProtocolError({
+          code: 'git/rejected',
+          message: 'git option "-c" requires a value',
+          details: { option: argument },
+        })
+      }
+      assertAllowedConfig(assignment)
+      config.push(CONFIG_VALUE_OPTION, assignment)
+      index += 2
+      continue
+    }
+    // `-c<key>=<value>` in a single token.
+    if (argument.startsWith('-c') && argument.length > 2) {
+      assertAllowedConfig(argument.slice(2))
+      config.push(CONFIG_VALUE_OPTION, argument.slice(2))
+      index += 1
+      continue
+    }
+    // Any other option is refused rather than skipped: skipping it here would
+    // still hand it to Git, so this list must stay exhaustive.
+    if (argument.startsWith('-')) {
+      throw new RemoteProtocolError({
+        code: 'git/rejected',
+        message: `git global option "${argument}" is not permitted over the remote agent`,
+        details: { argument },
+      })
+    }
+    return { config, subcommand: argument, rest: args.slice(index + 1) }
+  }
+  throw new RemoteProtocolError({ code: 'git/rejected', message: 'git args must name a subcommand' })
+}
+
+/**
+ * Refuse a configuration assignment that could make Git run a program.
+ *
+ * @param assignment - `<key>=<value>` as the caller wrote it.
+ * @throws `git/rejected` for an unknown key or a non-disabling value.
+ */
+function assertAllowedConfig(assignment: string): void {
+  const separator = assignment.indexOf('=')
+  const key = separator === -1 ? assignment : assignment.slice(0, separator)
+  const value = separator === -1 ? '' : assignment.slice(separator + 1)
+  if (!configAssignmentAllowed(key, value)) {
+    throw new RemoteProtocolError({
+      code: 'git/rejected',
+      message: `git configuration "${key}" is not permitted over the remote agent: `
+        + 'only the keys the panel uses to disable hooks, the filesystem monitor, '
+        + 'and diff filters may be set, and only to a disabling value',
+      details: { key },
+    })
+  }
+}
 
 /**
  * Arguments refused anywhere in the argv.
@@ -102,17 +263,24 @@ export interface RemoteGitPolicy {
   readonly maxOutputBytes?: number
 }
 
-/** Refuse an argv the allowlist does not cover. */
-function assertAllowed(args: readonly string[]): void {
-  const subcommand = args[0]
-  if (subcommand === undefined) {
-    throw new RemoteProtocolError({ code: 'git/rejected', message: 'git args must name a subcommand' })
-  }
-  if (!ALLOWED_SUBCOMMANDS.has(subcommand)) {
+/**
+ * Refuse an argv the allowlist does not cover.
+ *
+ * @param args - the caller's argv, without the executable.
+ * @returns the validated configuration options, the subcommand, and its args.
+ * @throws `git/rejected` for an unacceptable option, subcommand, or argument.
+ */
+function assertAllowed(args: readonly string[]): {
+  config: readonly string[]
+  subcommand: string
+  rest: readonly string[]
+} {
+  const parsed = parseSubcommand(args)
+  if (!ALLOWED_SUBCOMMANDS.has(parsed.subcommand)) {
     throw new RemoteProtocolError({
       code: 'git/rejected',
-      message: `git subcommand "${subcommand}" is not permitted over the remote agent`,
-      details: { subcommand },
+      message: `git subcommand "${parsed.subcommand}" is not permitted over the remote agent`,
+      details: { subcommand: parsed.subcommand },
     })
   }
   for (const argument of args) {
@@ -124,15 +292,59 @@ function assertAllowed(args: readonly string[]): void {
       })
     }
   }
+  return parsed
 }
 
 /**
- * Narrow a caller-supplied environment to the entries Git may legitimately vary.
+ * Environment entries a caller may forward.
  *
- * Forge passes `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`/`GIT_CONFIG_COUNT` to
- * disable diff drivers per call, so those must survive. Everything else is
- * dropped: forwarding `PATH` or `HOME` from the client would let it choose
- * which `git` runs and where Git looks for configuration.
+ * This is an allowlist, not a prefix filter. A `GIT_*` prefix would let a
+ * caller reach `GIT_EXTERNAL_DIFF`, `GIT_SSH_COMMAND`, `GIT_CONFIG_*`,
+ * `GIT_ALTERNATE_OBJECT_DIRECTORIES` and the rest of Git's program-running
+ * surface, which would bypass the argv allowlist entirely
+ * (`GIT_CONFIG_KEY_0=filter.x.clean` runs a program exactly as `-c` does).
+ *
+ * `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`/`GIT_CONFIG_COUNT` are handled
+ * separately by {@link narrowConfigOverlay}, because each key must be checked
+ * individually.
+ */
+const FORWARDED_ENV: ReadonlySet<string> = new Set(['LC_ALL'])
+
+/**
+ * Rewrite the `GIT_CONFIG_*` overlay so only disabling assignments survive.
+ *
+ * Git reads `GIT_CONFIG_COUNT`, then `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`
+ * for `n < count`. The panel uses this channel to switch a repository's diff
+ * filters off. A key outside that set is dropped rather than refused: unlike an
+ * argv entry it is not user-visible, so dropping it degrades the command instead
+ * of failing a panel the user is looking at. `GIT_CONFIG_COUNT` is then
+ * rewritten to the number of assignments actually kept.
+ * @param input - the caller's overlay.
+ * @returns the filtered overlay and the count to report.
+ */
+function narrowConfigOverlay(input: Readonly<Record<string, string>>): {
+  entries: Record<string, string>
+  count: number
+} {
+  const entries: Record<string, string> = {}
+  const declared = Number(input.GIT_CONFIG_COUNT ?? '0')
+  const total = Number.isSafeInteger(declared) && declared > 0 ? Math.min(declared, 256) : 0
+  let count = 0
+  for (let index = 0; index < total; index += 1) {
+    const key = input[`GIT_CONFIG_KEY_${index}`]
+    const value = input[`GIT_CONFIG_VALUE_${index}`]
+    if (key === undefined || value === undefined) continue
+    if (!configAssignmentAllowed(key, value)) continue
+    entries[`GIT_CONFIG_KEY_${count}`] = key
+    entries[`GIT_CONFIG_VALUE_${count}`] = value
+    count += 1
+  }
+  return { entries, count }
+}
+
+/**
+ * Build the child's environment.
+ *
  * @param input - the caller's overlay.
  * @returns a complete environment for the child.
  */
@@ -140,7 +352,12 @@ function narrowEnv(input: Readonly<Record<string, string>> | undefined): Record<
   const env: Record<string, string> = { ...GIT_ENV }
   if (input === undefined) return env
   for (const [key, value] of Object.entries(input)) {
-    if (key.startsWith('GIT_') || key === 'LC_ALL') env[key] = value
+    if (FORWARDED_ENV.has(key)) env[key] = value
+  }
+  const overlay = narrowConfigOverlay(input)
+  if (overlay.count > 0) {
+    env.GIT_CONFIG_COUNT = String(overlay.count)
+    Object.assign(env, overlay.entries)
   }
   return env
 }
@@ -158,7 +375,7 @@ export async function runGit(
   request: RemoteGitRequest,
   signal?: AbortSignal,
 ): Promise<RemoteGitResult> {
-  assertAllowed(request.args)
+  const { config, subcommand, rest } = assertAllowed(request.args)
   const timeoutMs = Math.min(Math.max(1, request.timeoutMs ?? policy.timeoutMs ?? DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS)
   const maxBytes = policy.maxOutputBytes ?? MAX_OUTPUT_BYTES
 
@@ -167,7 +384,10 @@ export async function runGit(
       reject(new RemoteProtocolError({ code: 'request/invalid', message: 'git request was aborted' }))
       return
     }
-    const child = spawn(policy.gitCommand, [...GIT_PREFIX, ...request.args], {
+    // The caller's validated `-c` options come first, then this bridge's own
+    // prefix, then the subcommand and its arguments, so a later `-c` wins where
+    // both name the same key: the agent's hook and fsmonitor settings apply.
+    const child = spawn(policy.gitCommand, [...config, ...GIT_PREFIX, subcommand, ...rest], {
       cwd: request.cwd,
       env: narrowEnv(request.env),
       stdio: ['ignore', 'pipe', 'pipe'],

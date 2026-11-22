@@ -14,6 +14,12 @@ function fakeMirrors() {
       }
       return undefined
     },
+    remoteContextForRemotePath(path: string) {
+      if (path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)) {
+        return { hostId: 'host-1', remoteRoot: REMOTE_ROOT, anchor: ANCHOR }
+      }
+      return undefined
+    },
   }
 }
 
@@ -107,6 +113,58 @@ describe('remote filesystem routing', () => {
     // Forge canonicalizes Git's printed top-level through this call, so the
     // local anchor here would make every later lookup disagree with Git.
     assert.equal(service.processPath(target), `${REMOTE_ROOT}/src/main.ts`)
+    restore()
+  })
+
+  it('canonicalizes a remote absolute path Git printed', async () => {
+    // `inspectCheckout` runs `canonical(parseTopLevel(top.stdout))`, i.e.
+    // `resolve('/remote/root', { cwd: anchor })` then `processPath`. The path is
+    // in neither the anchor nor the cwd, so the stock provider used to claim it
+    // and hand back a local path that does not exist.
+    const service = fakeFs()
+    const hosts = fakeHosts()
+    const restore = install(service, hosts)
+    const printed = `${REMOTE_ROOT}\n`.replace(/\r?\n$/, '')
+    const target = await service.resolve(printed, { cwd: ANCHOR })
+    assert.equal(service.processPath(target), REMOTE_ROOT)
+    restore()
+  })
+
+  it('canonicalizes the remote git directories too', async () => {
+    for (const printed of [REMOTE_ROOT, `${REMOTE_ROOT}/src`, `${REMOTE_ROOT}/.git`]) {
+      const service = fakeFs()
+      const restore = install(service, fakeHosts())
+      const target = await service.resolve(printed, { cwd: ANCHOR })
+      assert.equal(service.processPath(target), printed)
+      restore()
+    }
+  })
+
+  it('leaves a remote path outside every workspace on the stock provider', async () => {
+    const service = fakeFs()
+    const restore = install(service, fakeHosts())
+    const target = await service.resolve('/srv/other/project', { cwd: ANCHOR })
+    assert.equal(service.processPath(target), 'local:/srv/other/project')
+    restore()
+  })
+
+  it('resolves a relative path against a remote base', async () => {
+    // `localDiff` reads each changed file as resolve(relativePath, { cwd: root }),
+    // and after inspectCheckout that root is the remote checkout. Without this
+    // the panel drew every changed file as empty.
+    const service = fakeFs()
+    const hosts = fakeHosts()
+    const restore = install(service, hosts)
+    const target = await service.resolve('server/app.lua', { cwd: REMOTE_ROOT })
+    assert.equal(service.processPath(target), `${REMOTE_ROOT}/server/app.lua`)
+    restore()
+  })
+
+  it('resolves a relative path against a remote subdirectory base', async () => {
+    const service = fakeFs()
+    const restore = install(service, fakeHosts())
+    const target = await service.resolve('app.lua', { cwd: `${REMOTE_ROOT}/server` })
+    assert.equal(service.processPath(target), `${REMOTE_ROOT}/server/app.lua`)
     restore()
   })
 
