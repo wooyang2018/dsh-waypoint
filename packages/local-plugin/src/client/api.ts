@@ -22,7 +22,6 @@ import {
   type MirrorTarget,
   type PublishPortResult,
   type RemoteHostsState,
-  type RemoteNodeState,
   type SessionsResult,
   type ValidatedTarget,
   type WebUrlResult,
@@ -84,10 +83,14 @@ export interface HostsApi {
   readonly publishPort: (hostId: string, remotePort: number) => Promise<PublishPortResult>
   /** Open a published port in the sidebar Browser tab, else in a normal tab. */
   readonly openForwardedUrl: (url: string) => OpenForwardedResult
-  /** Read-only: what Node.js the remote would run today. */
-  readonly nodeStatus: (hostId: string) => Promise<RemoteNodeState>
-  /** Install nvm and the latest Node.js LTS on the remote host. */
-  readonly installNode: (hostId: string) => Promise<RemoteNodeState>
+  /**
+   * Probe the remote's Node.js and install nvm plus the latest LTS when the
+   * probe says it is needed; a satisfied host installs nothing.
+   *
+   * Answers as soon as the run is queued. Progress and the outcome arrive
+   * through `HostView.node`, which the page already polls.
+   */
+  readonly installNode: (hostId: string) => Promise<HostView>
 
   // --- Workspaces (Settings page and the + menu) ---
   readonly workspaces: (hostId: string) => Promise<WorkspacesResult>
@@ -173,7 +176,6 @@ export function createHostsApi(ctx: Context): HostsApi {
     webUrl: hostId => call('host/web-url', { hostId }),
     publishPort: (hostId, remotePort) => call('host/ports/publish', { hostId, remotePort }),
     openForwardedUrl: url => openForwardedPort(url, (ctx as unknown as { sidebarRight?: unknown }).sidebarRight),
-    nodeStatus: hostId => call('host/node', { hostId }),
     installNode: hostId => call('host/node-install', { hostId }),
     modelCatalog: hostId => call('host/model-catalog', { hostId }),
     sessionMirror: localSessionId => call('host/session/mirror', { localSessionId }),

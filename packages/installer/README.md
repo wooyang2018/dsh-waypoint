@@ -16,9 +16,10 @@ The bootstrap script:
 
 1. detects Node.js through the account's own shell (nvm/Volta/fnm/Bun/asdf/mise/Nix/Homebrew), checks
     22.19+, and **never installs one**: a missing or too-old runtime stops with `exit 21`/`exit 22`.
-   The deliberate alternative lives in the plugin, not here: Settings offers **install remote
-   Node.js**, which runs `renderNodeInstallScript()` (nvm `v0.40.1` + `nvm install --lts`, no shell
-   startup file touched). `probeRemoteNode()`/`installRemoteNode()` are the programmatic form;
+   The deliberate alternative lives in the plugin, not here: the host's `⋯` menu offers **install
+   remote Node.js**, which probes first and runs `renderNodeInstallScript()` (nvm `v0.40.1` +
+   `nvm install --lts`, no shell startup file touched) only when the probe says it is needed.
+   `probeRemoteNode()`/`installRemoteNode()` are the programmatic form;
 2. resolves the npm global prefix (`--global-prefix`, else `npm prefix -g`) and installs `pnpm` and the
    pinned `@deepseek-ai/dsh` into it, on every run;
 3. proves the install by running `dsh -V` and comparing it with the requested version;

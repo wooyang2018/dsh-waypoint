@@ -277,8 +277,6 @@ async function dispatch(
       }
       return service.setModelSource(requireStringField(body, 'hostId'), source)
     }
-    case 'host/node':
-      return service.probeNode(requireStringField(payload, 'hostId'))
     case 'host/node-install':
       return service.installNode(requireStringField(payload, 'hostId'))
     case 'host/session/mirror': {

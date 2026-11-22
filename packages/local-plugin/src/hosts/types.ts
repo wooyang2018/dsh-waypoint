@@ -90,6 +90,26 @@ export interface PortForwardRuntime {
   readonly error: string | null
 }
 
+/**
+ * One run of the host card's "install remote Node.js" action.
+ *
+ * The action probes the host first and only installs when the probe says it
+ * must, so `satisfied` is a successful outcome rather than a refusal. A
+ * discriminated union instead of flags: `probing` and `installing` cannot both
+ * be true, and the card renders exactly one sentence for whichever holds.
+ *
+ * Deliberately a view shape and not the installer's probe result: the browser
+ * renders a sentence, so it needs the version and the minimum, never the
+ * downloader or the login shell, and it must not re-decide `satisfied` — that
+ * verdict comes from the same check the bootstrap enforces.
+ */
+export type HostNodeReport =
+  | { readonly step: 'probing' }
+  | { readonly step: 'installing' }
+  | { readonly step: 'satisfied'; readonly version: string | null; readonly minimum: string }
+  | { readonly step: 'installed'; readonly version: string }
+  | { readonly step: 'failed'; readonly errorUi: UiText }
+
 /** Remote DSH runtime version older than the local one. */
 export interface DshUpdate {
   readonly remoteVersion: string
@@ -129,6 +149,15 @@ export interface HostRuntime {
   readonly retry: HostRetry | null
   /** Published loopback forwards, one per remote port currently reachable. */
   readonly forwards: readonly PortForwardRuntime[]
+  /**
+   * The last "install remote Node.js" run, or null when it never ran.
+   *
+   * Kept on the runtime rather than in the browser so the menu item can be a
+   * single fire-and-forget action: the page polls this, which means a slower
+   * install still reports progress after a reload, and the outcome survives the
+   * panel unmounting.
+   */
+  readonly node: HostNodeReport | null
 }
 
 /** Browser/tool-safe host projection. */
@@ -173,6 +202,8 @@ export interface HostView {
   readonly retry: HostRetry | null
   /** Published loopback forwards, one per remote port currently reachable. */
   readonly forwards: readonly PortForwardRuntime[]
+  /** The last "install remote Node.js" run, or null when it never ran. */
+  readonly node: HostNodeReport | null
 }
 
 /** Input accepted by `host/add`. */
@@ -252,6 +283,7 @@ export function idleRuntime(): HostRuntime {
     dshUpdate: null,
     retry: null,
     forwards: [],
+    node: null,
   }
 }
 
@@ -284,6 +316,7 @@ export function toHostView(record: HostRecord, runtime: HostRuntime, defaultSour
     dshUpdate: runtime.dshUpdate,
     retry: runtime.retry,
     forwards: runtime.forwards,
+    node: runtime.node,
   }
 }
 

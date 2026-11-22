@@ -119,7 +119,8 @@ stdin 方式执行渲染出来的 bash 脚本（`packages/installer/src/provisio
 - **不安装 Node.js**。版本管理器（nvm/fnm/Volta）只在登录/交互式 shell 里生效，非交互式 SSH 命令看到的
   `node` 可能完全不同。因此 `nodePathPrelude` 先问账号自己的 shell（`-lic`，缺失时退到 `-lc`），再把
   结果放到 `PATH` 前面（同文件的 `nodePathPrelude`）；实在找不到就以 `exit 21` / `exit 22` 带着证据失败，
-  由宿主卡上的「安装远端 Node.js」按钮承担这个决定。
+  由主机卡 `⋯` 菜单里的「安装远端 Node.js」承担这个决定。这一项点下去就先探针、只在需要时才装，
+  结果作为卡片上的一行状态呈现，和「重装远端 agent」的表现一致。
 - **不迁移安装位置**。全局前缀要么是配置值，要么是 `npm prefix -g` 的答案；没有第三个候选
   （同文件的 `globalPrefixPrelude`）。写不进去就按 npm 的错误失败，而不是悄悄装到别处。
 

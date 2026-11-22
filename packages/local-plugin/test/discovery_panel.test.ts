@@ -295,9 +295,9 @@ describe('SSH config discovery in the Settings panel', () => {
     const labels = renderer.root.findAllByType('button')
       .map(entry => entry.props['aria-label'] ?? entry.children.map(child => typeof child === 'string' ? child : '').join(''))
     // Every entry names an action AND its object, so a row read on its own is
-    // never ambiguous ("Reinstall" — of what?). The Node.js entry says
-    // "manage" because it opens a panel instead of running one operation.
-    for (const key of ['settings.manageNode', 'settings.reprovision', 'settings.remove']) {
+    // never ambiguous ("Reinstall" — of what?). The Node.js entry names the
+    // same action the provisioning errors name, and runs it in one click.
+    for (const key of ['settings.installNode', 'settings.reprovision', 'settings.remove']) {
       assert.ok(labels.includes(key), `${key} must be offered by the host menu`)
     }
     assert.equal(labels.includes('settings.rediscover'), false,

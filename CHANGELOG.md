@@ -25,6 +25,19 @@
 
 ### Changed
 
+- **Installing remote Node.js is one menu click, and the label now says so.** The host card's detail
+  pane carried a **远端 Node.js** button that opened a panel, which meant the action sat behind two
+  disclosures (expand the card, then open the panel) and, in the common case, answered "already
+  satisfied, nothing to install". It is now `⋯` → **安装远端 Node.js** / **Install remote Node.js**,
+  the same shape as **重新安装远端 agent**: the host probes, installs nvm plus the latest LTS only
+  when the probe says the current runtime will not do, and reports the outcome as a status line on
+  the card. The word "manage" described the panel rather than the result, and it disagreed with the
+  provisioning errors, the README and the bootstrap script, all of which already named **安装远端
+  Node.js**; "reinstall" would be wrong in the other direction, because the installer adds a
+  version-managed runtime and never replaces the one the account has. `host/node` (the read-only
+  probe) is gone with the panel that was its only caller — the verdict now travels on the host view
+  as `HostView.node`, so a run that outlives a page reload still reports itself. A failed runtime
+  install leaves a connected host connected instead of moving it to `error`.
 - **The installer writes a profile overlay and passes it to `dsh web`.** The projection is rendered as a
   patch list (`$DSH_HOME/waypoint-agent/model-routes.json`) and added to the systemd unit and the nohup
   launcher as `--patch`. It is JSON — a subset of YAML 1.2, so a valid patch list — because hand-building

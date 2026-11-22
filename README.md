@@ -269,9 +269,10 @@ discovered through the account's own shell, so PATH, nvm, Volta, fnm, Bun, asdf,
 Homebrew all answer. Provisioning does **not** install a runtime on its own: picking a version is your
 decision, and a second one on the machine is how two runtimes end up fighting over one command. A
 missing or too-old Node.js stops the install with a message naming what it found. When you want the
-plugin to do it, the host card offers **install remote Node.js**: it checks the host first, then
-installs nvm and the latest LTS (`nvm install --lts`), and never touches a shell startup file. Windows
-remotes are not supported.
+plugin to do it, the host's `⋯` menu offers **install remote Node.js**: one click, which checks the
+host first, installs nvm and the latest LTS (`nvm install --lts`) only if it is needed, never touches
+a shell startup file, and reports the outcome as a line on the card. Windows remotes are not
+supported.
 
 The remote terminal uses a Python helper (`pty` from the standard library) instead of a native
 `node-pty` build, so **New terminal** needs `python3` on the remote host. Nothing else does: installing,
@@ -389,8 +390,8 @@ The remote agent config remains available for advanced deployments:
 
 | Symptom | Action |
 |---|---|
-| **Installing** never finishes / `Waiting for remote dsh web…` | Check `ssh -o BatchMode=yes my-host true`. Provisioning detects Node.js through your shell (nvm/Volta/fnm) and never installs one itself, so a missing or too-old Node.js ends the install with an explicit message. Use **install remote Node.js** on the host card (nvm + latest LTS), or install [Node.js 22.19+](https://nodejs.org/en/download) there, then **Reinstall** |
-| Install stops saying Node.js was not found, and the card stops retrying | That failure is permanent, so automatic reconnects stop instead of looping. Click **install remote Node.js** (probes first, then nvm + latest LTS without touching shell files), then **Reinstall** — or install Node.js 22.19+ yourself under an interactive shell for that account, confirm `bash -lic 'command -v node'` prints a path, and reinstall |
+| **Installing** never finishes / `Waiting for remote dsh web…` | Check `ssh -o BatchMode=yes my-host true`. Provisioning detects Node.js through your shell (nvm/Volta/fnm) and never installs one itself, so a missing or too-old Node.js ends the install with an explicit message. Use `⋯` → **install remote Node.js** (nvm + latest LTS), or install [Node.js 22.19+](https://nodejs.org/en/download) there, then **Reinstall** |
+| Install stops saying Node.js was not found, and the card stops retrying | That failure is permanent, so automatic reconnects stop instead of looping. Use `⋯` → **install remote Node.js** (probes first, then nvm + latest LTS without touching shell files), then **Reinstall** — or install Node.js 22.19+ yourself under an interactive shell for that account, confirm `bash -lic 'command -v node'` prints a path, and reinstall |
 | `does not accept POST` | Remote agent is old; click **Reinstall** |
 | No remote workspace in sidebar | Use **Workspaces +**, or Settings → Remote development → Workspaces |
 | Native session has no reply | Check the host row's **Local proxy / Remote direct / Remote default** state; configure remote credentials or switch to the local key proxy |

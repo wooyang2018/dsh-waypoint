@@ -40,13 +40,17 @@ describe('plugin localization', () => {
   it('names an action and its object in the host menu', () => {
     // The overflow menu is read without the host row's context, so a bare verb
     // ("Reinstall", "Remove") leaves the object implicit. Each entry states it.
-    for (const key of ['settings.reprovision', 'settings.remove', 'settings.manageNode'] as const) {
+    for (const key of ['settings.reprovision', 'settings.remove', 'settings.installNode'] as const) {
       assert.doesNotMatch(zh[key], /^(重新安装|删除|远端 Node\.js)$/u, `zh ${key} still names no object`)
       assert.doesNotMatch(en[key], /^(Reinstall|Remove|Remote Node\.js)$/u, `en ${key} still names no object`)
     }
     // The retired recovery action must stay gone from both dictionaries.
     assert.equal('settings.rediscover' in zh, false, 'zh must not keep the retired rediscover key')
     assert.equal('settings.rediscover' in en, false, 'en must not keep the retired rediscover key')
+    // "Manage" described a panel that no longer exists, so the label had to go
+    // back to naming the result of clicking.
+    assert.equal('settings.manageNode' in zh, false, 'zh must not keep the retired manage label')
+    assert.equal('settings.manageNode' in en, false, 'en must not keep the retired manage label')
   })
 
   it('localizes errors by stable UI key without leaking the raw host message', () => {
@@ -92,24 +96,37 @@ describe('plugin localization', () => {
     }
   })
 
-  it('renders every Node.js panel sentence in both languages', () => {    for (const key of [
-      'node.title',
+  it('renders every Node.js run sentence in both languages', () => {
+    // The run has no panel: the menu entry starts it and one line on the card
+    // reports it, so every sentence here is that line in one of its states.
+    for (const key of [
       'node.checking',
       'node.satisfied',
-      'node.needsInstall',
-      'node.missing',
-      'node.plan',
-      'node.install',
       'node.installing',
       'node.installed',
-      'node.needsReinstall',
-      'node.reinstallNow',
-      'node.unsupported',
-      'node.close',
-      'node.retry',
     ] as const) {
       assert.ok(zh[key].length > 0, `zh ${key} is empty`)
       assert.ok(en[key].length > 0, `en ${key} is empty`)
+    }
+    // A successful install leaves the running agent on the previous runtime, so
+    // its sentence has to name both the version it installed and the action
+    // that applies it.
+    for (const key of ['node.installed'] as const) {
+      assert.match(zh[key], /\{version\}/u, `zh ${key} must name the installed version`)
+      assert.match(en[key], /\{version\}/u, `en ${key} must name the installed version`)
+      assert.match(zh[key], /重装远端 agent/u, `zh ${key} does not name the next action`)
+      assert.match(en[key], /Reinstall remote agent/u, `en ${key} does not name the next action`)
+    }
+    // The satisfied sentence is a result, not a refusal, and it must carry both
+    // numbers the operator judges it by.
+    for (const key of ['node.satisfied'] as const) {
+      assert.match(zh[key], /\{version\}.*\{minimum\}/u, `zh ${key} must show both versions`)
+      assert.match(en[key], /\{version\}.*\{minimum\}/u, `en ${key} must show both versions`)
+    }
+    // The panel-only sentences went with the panel.
+    for (const key of ['node.title', 'node.plan', 'node.install', 'node.needsInstall', 'node.missing', 'node.needsReinstall', 'node.reinstallNow', 'node.close', 'node.retry'] as const) {
+      assert.equal(key in zh, false, `zh must not keep the retired ${key}`)
+      assert.equal(key in en, false, `en must not keep the retired ${key}`)
     }
   })
 

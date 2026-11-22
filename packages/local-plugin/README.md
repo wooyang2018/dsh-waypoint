@@ -37,7 +37,9 @@ range is permissive for installation only; it is not a support guarantee.
 - Sidebar **+** menu to create a workspace locally (native flow) or on a connected remote host.
 - Agent-backed remote workspace file listing/preview over the SSH tunnel.
 - Remote Node.js discovery through the account's shell (nvm, Volta, fnm, Bun, asdf, mise, Nix,
-  Homebrew). Detection only: the plugin never installs a runtime, and refuses to proceed without one.
+  Homebrew). Provisioning never installs a runtime and refuses to proceed without one; the `⋯` menu's
+  **install remote Node.js** probes first and installs nvm plus the latest LTS only when needed,
+  reporting the outcome on the card.
 - Chinese / English client copy follows the DSH locale service.
 - Remote agent PTY terminals for mirror Sessions over the SSH tunnel; local Sessions keep the local terminal.
 - Remote approval questions bridged into the normal local approval UI.

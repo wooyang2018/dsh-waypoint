@@ -460,12 +460,12 @@ ${nodePathPrelude()}
 # last line is the only one an operator reliably sees in a truncated log.
 if ! command -v node >/dev/null 2>&1; then
   echo "dsh-waypoint: Node.js was not found through this account's shell (shell: \${LOGIN_SHELL:-unknown})." >&2
-  echo "dsh-waypoint: an nvm Node.js would have been found; use Settings > install remote Node.js, or install Node.js ${minimumNodeVersion}+ yourself." >&2
+  echo "dsh-waypoint: an nvm Node.js would have been found; use the host's menu > install remote Node.js, or install Node.js ${minimumNodeVersion}+ yourself." >&2
   exit 21
 fi
 if ! ${minimumNodeCheckScript()}; then
   echo "dsh-waypoint: Node.js ${minimumNodeVersion}+ is required (found $(node --version) at $(command -v node))" >&2
-  echo "dsh-waypoint: use Settings > install remote Node.js, or upgrade it yourself." >&2
+  echo "dsh-waypoint: use the host's menu > install remote Node.js, or upgrade it yourself." >&2
   exit 22
 fi
 if ! command -v npm >/dev/null 2>&1; then

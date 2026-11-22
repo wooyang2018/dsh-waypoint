@@ -39,8 +39,6 @@ export const HOST_DETAILS = [
   'tunnel',
   'checkingAgent',
   'reconcilingModel',
-  'nodeProbing',
-  'nodeInstalling',
 ] as const
 
 export type HostDetail = (typeof HOST_DETAILS)[number]

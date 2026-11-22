@@ -54,11 +54,14 @@ import {
   type PortForwardRuntime,
   type SshDiscoveryResult,
 } from './hosts/types.ts'
-import { RemoteProvisioner, agentVersionDiffers, bundledAgentVersion, isPermanentInstallFailure } from './remote/provisioner.ts'
-import { MINIMUM_NODE_VERSION, installRemoteNode, nodeVersionSatisfied, probeRemoteNode } from '@dsh-waypoint/installer'
-import { toRemoteNodeState } from './remote/node-state.ts'
-import type { RemoteNodeState } from './host-api/contract.ts'
-import { uiForErrorCode } from './messages.ts'
+import { RemoteProvisioner, agentVersionDiffers, bundledAgentVersion, installerUi, isPermanentInstallFailure } from './remote/provisioner.ts'
+import {
+  MINIMUM_NODE_VERSION,
+  installRemoteNode,
+  probeRemoteNode,
+  type RemoteNodeStatus,
+} from '@dsh-waypoint/installer'
+import { uiForErrorCode, type UiTextKey } from './messages.ts'
 import { scanSshConfig } from './ssh/config.ts'
 import { mergeAliasGroups } from './ssh/alias-groups.ts'
 import { discoverAgent } from './ssh/probe.ts'
@@ -227,6 +230,13 @@ export class RemoteHostsService {
    * the host in the meantime expects, and no persisted schema has to change.
    */
   readonly #installBlocked = new Map<string, LocalError>()
+  /**
+   * Hosts with a Node.js run in flight.
+   *
+   * The action returns immediately, so without this a second menu click would
+   * start a second `nvm install --lts` against the same account.
+   */
+  readonly #nodeRuns = new Set<string>()
   readonly #manualDisconnect = new Set<string>()
   readonly #upgrades = new Set<string>()
   #disposed = false
@@ -553,58 +563,111 @@ export class RemoteHostsService {
   }
 
   /**
-   * Report what Node.js the remote would run today.
-   *
-   * Read-only by construction: this is what the confirm panel shows before the
-   * user decides, so it must never change the host.
-   */
-  async probeNode(id: string): Promise<RemoteNodeState> {
-    this.#assertAlive()
-    const record = this.#requireRecord(id)
-    const target = parseSshTarget(record.sshTarget)
-    const status = await probeRemoteNode(target, {
-      binary: this.config.sshBinary,
-      strictHostKeyChecking: this.config.strictHostKeyChecking,
-      timeoutMs: this.config.probeTimeoutMs,
-      verbose: false,
-    })
-    return toRemoteNodeState(status)
-  }
-
-  /**
-   * Install nvm and the latest Node.js LTS, then report the result.
+   * Probe the remote's Node.js, and install nvm plus the latest LTS only when
+   * the probe says the current runtime will not do.
    *
    * Deliberately not part of provisioning: installing a runtime is the
    * operator's decision, and the provisioning path stays a pure "fail and say
    * why" so an unattended reconnect never changes what a host runs.
+   *
+   * Returns as soon as the run is queued, like {@link upgrade}: a cold install
+   * downloads nvm and a Node.js tarball, which is far longer than a click should
+   * hold a request open. Progress and the outcome land on
+   * {@link HostRuntime.node}, which the Settings page polls.
+   *
+   * A host that already satisfies the minimum reports `satisfied` and installs
+   * nothing — the probe is what makes this button safe to press on any host.
    */
-  async installNode(id: string): Promise<RemoteNodeState> {
+  async installNode(id: string): Promise<HostView> {
     this.#assertAlive()
+    this.#requireRecord(id)
+    if (this.#nodeRuns.has(id)) return this.view(id)
+    this.#nodeRuns.add(id)
+    void this.#runNodeInstall(id).catch(error => {
+      // The run reports its own failures on the host; this only records the
+      // unexpected kind, which must not reject a Settings action.
+      this.ctx.logger.warn('dsh-waypoint: remote Node.js run for %s failed: %s', id, String(error))
+    }).finally(() => {
+      this.#nodeRuns.delete(id)
+    })
+    return this.view(id)
+  }
+
+  async #runNodeInstall(id: string): Promise<void> {
     const record = this.#requireRecord(id)
     const target = parseSshTarget(record.sshTarget)
-    this.#setRuntime(id, { ...this.#runtimeFor(id), detail: 'nodeInstalling' })
+    const sshOptions = {
+      binary: this.config.sshBinary,
+      strictHostKeyChecking: this.config.strictHostKeyChecking,
+      verbose: false,
+    }
+    this.#setRuntime(id, { ...this.#runtimeFor(id), node: { step: 'probing' } })
+    let status: RemoteNodeStatus
     try {
-      const result = await installRemoteNode(target, {
-        binary: this.config.sshBinary,
-        strictHostKeyChecking: this.config.strictHostKeyChecking,
-        timeoutMs: this.config.provisionTimeoutMs,
-        verbose: false,
+      status = await probeRemoteNode(target, { ...sshOptions, timeoutMs: this.config.probeTimeoutMs })
+    } catch (error) {
+      this.#failNodeRun(id, error, 'error.sshProbeFailed')
+      return
+    }
+    // The verdict comes from the installer's shared check, never from a
+    // comparison written here: the bootstrap enforces the same rule.
+    if (status.satisfied) {
+      this.#setRuntime(id, {
+        ...this.#runtimeFor(id),
+        node: {
+          step: 'satisfied',
+          version: status.version.trim() === '' ? null : status.version.trim(),
+          minimum: MINIMUM_NODE_VERSION,
+        },
       })
+      return
+    }
+    if (!status.supported) {
+      // Nothing to download from: the platform or the absent downloader is the
+      // whole answer, so say that instead of starting a run that must fail.
+      this.#setRuntime(id, {
+        ...this.#runtimeFor(id),
+        node: { step: 'failed', errorUi: { key: 'error.nodeUnsupported' } },
+      })
+      return
+    }
+    this.#setRuntime(id, { ...this.#runtimeFor(id), node: { step: 'installing' } })
+    try {
+      const result = await installRemoteNode(target, { ...sshOptions, timeoutMs: this.config.provisionTimeoutMs })
       // Whatever blocked provisioning was the old runtime; it is gone now.
       this.#installBlocked.delete(id)
       this.#attempts.delete(id)
       this.ctx.logger.info('dsh-waypoint: remote Node.js for %s is now %s', id, result.version)
-      return {
-        supported: true,
-        version: result.version,
-        satisfied: nodeVersionSatisfied(result.version),
-        minimum: MINIMUM_NODE_VERSION,
-        nvmInstalled: true,
-        installedVersion: result.version,
-      }
-    } finally {
-      this.#setRuntime(id, { ...this.#runtimeFor(id), detail: null })
+      this.#setRuntime(id, {
+        ...this.#runtimeFor(id),
+        node: { step: 'installed', version: result.version },
+      })
+    } catch (error) {
+      this.#failNodeRun(id, error, 'error.nodeInstallFailed')
     }
+  }
+
+  /**
+   * Record a failed Node.js run on the host.
+   *
+   * Deliberately not `#markError`: that puts the host itself into `error` and
+   * suppresses reconnects, but a failed runtime install leaves a connected host
+   * connected and merely says "this did not work".
+   */
+  #failNodeRun(id: string, error: unknown, fallback: UiTextKey): void {
+    this.ctx.logger.warn('dsh-waypoint: remote Node.js run for %s failed: %s', id, String(error))
+    // The nvm install script reports platform, downloader and verify failures
+    // through its own codes, which carry better sentences than a generic one.
+    // A probe failure (SSH, timeout) carries none, so the caller's fallback wins
+    // rather than the installer's "check the install log".
+    const installerCode = (error as { installerCode?: unknown } | null)?.installerCode
+    const ui = typeof installerCode === 'string' && installerCode.startsWith('node/')
+      ? installerUi(error)
+      : undefined
+    this.#setRuntime(id, {
+      ...this.#runtimeFor(id),
+      node: { step: 'failed', errorUi: ui ?? { key: fallback } },
+    })
   }
 
   /** Restart the remote DSH service and reconnect without reinstalling. */

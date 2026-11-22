@@ -123,8 +123,10 @@ Two deliberate "we do not" decisions explain the design better than the "we do" 
   interactive shells, so the `node` a non-interactive SSH command sees can be entirely different. So
   `nodePathPrelude` asks the account's own shell first (`-lic`, falling back to `-lc`) and puts the
   result at the front of `PATH` (`nodePathPrelude` in the same file); when nothing is found it fails
-  with `exit 21` / `exit 22` plus the evidence, and the host card's **install remote Node.js** action
-  owns that decision.
+  with `exit 21` / `exit 22` plus the evidence, and the **install remote Node.js** entry in the host's
+  `⋯` menu owns that decision. That entry probes first and only installs what the probe says is
+  missing, then reports the outcome as a status line on the card — the same shape as **reinstall
+  remote agent**.
 - **We do not relocate the install.** The global prefix is either the configured value or whatever
   `npm prefix -g` answers; there is no third candidate (`globalPrefixPrelude` in the same file). If it
   is not writable the install fails with npm's own error instead of quietly installing somewhere else.

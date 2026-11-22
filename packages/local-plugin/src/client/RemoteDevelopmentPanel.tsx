@@ -10,9 +10,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogResult, RemoteWorkspace } from '@dsh-waypoint/protocol'
-import type { DiscoveredSshHost, HostView, PortForwardRuntime, SshDiscoveryResult } from '../hosts/types.ts'
+import type { DiscoveredSshHost, HostNodeReport, HostView, PortForwardRuntime, SshDiscoveryResult } from '../hosts/types.ts'
 import type { HostDetail } from '../messages.ts'
-import type { RemoteHostsState, RemoteNodeState } from '../host-api/contract.ts'
+import type { RemoteHostsState } from '../host-api/contract.ts'
 import type { HostsApi } from './api.ts'
 import { formatUiText, localizedError } from './errors.ts'
 import type { CopyKey, Translate } from './locale.ts'
@@ -37,23 +37,6 @@ function folderName(path: string): string {
 interface PanelProps {
   readonly api: HostsApi
   readonly t: Translate
-}
-
-/**
- * One step of the "install remote Node.js" panel.
- *
- * A discriminated-ish union rather than several booleans: the steps are
- * mutually exclusive, and "probing and installing at the same time" is a state
- * the UI must not be able to represent.
- */
-interface NodePanelState {
-  readonly hostId: string
-  readonly hostLabel: string
-  readonly step: 'probing' | 'satisfied' | 'needsInstall' | 'installing' | 'installed' | 'failed'
-  /** Probe/install result, present from `satisfied` onwards. */
-  readonly status?: RemoteNodeState
-  /** Install failure, rendered through its stable UI key. */
-  readonly error?: unknown
 }
 
 /**
@@ -115,6 +98,17 @@ function phaseLabel(t: Translate, phase: HostView['phase']): string {
   return t(`phase.${phase}` as CopyKey)
 }
 
+/**
+ * Whether a Node.js run is still in flight for this host.
+ *
+ * The menu entry is disabled while it is: a second run would start a second
+ * `nvm install --lts` against the same account, and the host refuses the
+ * duplicate anyway. The card reads the same field, so the two cannot disagree.
+ */
+function isNodeRunning(report: HostNodeReport | null): boolean {
+  return report?.step === 'probing' || report?.step === 'installing'
+}
+
 function detailLabel(t: Translate, detail: HostDetail): string {
   return t(`detail.${detail}` as CopyKey)
 }
@@ -136,113 +130,50 @@ function fill(t: Translate, key: CopyKey, params: Record<string, string> = {}): 
 const POLL_MS = 2_500
 
 /**
- * The "install remote Node.js" panel.
+ * One line stating where the last "install remote Node.js" run stands.
  *
- * Provisioning deliberately never installs a runtime, so the failure that says
- * "no Node.js" has to lead somewhere actionable. This is that somewhere: it
- * states what the host actually has, states what would be installed, and only
- * then runs the install. Every branch is a sentence, never a raw error string.
+ * The action has no panel: the menu entry starts it and this line reports it,
+ * which is how "Reinstall remote agent" and "Restart remote DSH" already work.
+ * The run itself probes first and installs only what is missing, so the honest
+ * success state is "nothing was changed" as often as it is "installed".
  */
-function NodePanel({ state, t, busy, onInstall, onReinstall, onClose }: {
-  readonly state: NodePanelState
+function NodeReport({ report, t }: {
+  readonly report: HostNodeReport
   readonly t: Translate
-  readonly busy: string | null
-  readonly onInstall: () => void
-  readonly onReinstall: () => void
-  readonly onClose: () => void
 }): JSX.Element {
-  const close = (
-    <button type="button" className="dshwp-button dshwp-button-small" onClick={onClose}>
-      {t('node.close')}
-    </button>
-  )
-  switch (state.step) {
+  switch (report.step) {
     case 'probing':
-      return <span className="dshwp-detail" role="status">{t('node.checking')}</span>
-    case 'satisfied':
       return (
-        <span className="dshwp-node-panel" role="status">
-          <span>
-            {fill(t, 'node.satisfied', {
-              version: state.status?.version ?? '—',
-              minimum: state.status?.minimum ?? '',
-            })}
-          </span>
-          {close}
-        </span>
+        <p className="dshwp-detail" role="status">
+          <span className="dshwp-icon-spin" aria-hidden="true">⋯</span> {t('node.checking')}
+        </p>
       )
-    case 'needsInstall': {
-      const version = state.status?.version ?? null
-      const minimum = state.status?.minimum ?? ''
-      return (
-        <span className="dshwp-node-panel" role="alertdialog" aria-label={t('node.title')}>
-          <span>
-            {version === null
-              ? fill(t, 'node.missing', { minimum })
-              : fill(t, 'node.needsInstall', { current: version, minimum })}
-          </span>
-          <span className="dshwp-hint">{t('node.plan')}</span>
-          <span className="dshwp-node-actions">
-            <button
-              type="button"
-              className="dshwp-button dshwp-button-small dshwp-button-primary"
-              disabled={busy !== null || state.status?.supported === false}
-              onClick={onInstall}
-            >
-              {t('node.install')}
-            </button>
-            {close}
-          </span>
-          {state.status?.supported === false && (
-            <span className="dshwp-warn">{t('node.unsupported')}</span>
-          )}
-        </span>
-      )
-    }
     case 'installing':
       return (
-        <span className="dshwp-detail" role="status">
+        <p className="dshwp-detail" role="status">
           <span className="dshwp-icon-spin" aria-hidden="true">⋯</span> {t('node.installing')}
-        </span>
+        </p>
+      )
+    case 'satisfied':
+      return (
+        <p className="dshwp-detail" role="status">
+          {fill(t, 'node.satisfied', {
+            version: report.version ?? '—',
+            minimum: report.minimum,
+          })}
+        </p>
       )
     case 'installed':
       return (
-        <span className="dshwp-node-panel" role="status">
-          <span>
-            {fill(t, 'node.installed', {
-              version: state.status?.installedVersion ?? state.status?.version ?? '',
-            })}
-          </span>
-          <span className="dshwp-hint">{t('node.needsReinstall')}</span>
-          <span className="dshwp-node-actions">
-            <button
-              type="button"
-              className="dshwp-button dshwp-button-small dshwp-button-primary"
-              disabled={busy !== null}
-              onClick={onReinstall}
-            >
-              {t('node.reinstallNow')}
-            </button>
-            {close}
-          </span>
-        </span>
+        <p className="dshwp-detail" role="status">
+          {fill(t, 'node.installed', { version: report.version })}
+        </p>
       )
     case 'failed':
       return (
-        <span className="dshwp-node-panel" role="alert">
-          <span className="dshwp-host-error">{localizedError(t, state.error, t('error.nodeInstallFailed'))}</span>
-          <span className="dshwp-node-actions">
-            <button
-              type="button"
-              className="dshwp-button dshwp-button-small"
-              disabled={busy !== null}
-              onClick={onInstall}
-            >
-              {t('node.retry')}
-            </button>
-            {close}
-          </span>
-        </span>
+        <p className="dshwp-host-error" role="alert">
+          {formatUiText(t, report.errorUi)}
+        </p>
       )
   }
 }
@@ -255,8 +186,6 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
   const [expandedHost, setExpandedHost] = useState<string | null>(null)
   /** Host awaiting an inline delete confirmation, or null. */
   const [pendingRemove, setPendingRemove] = useState<string | null>(null)
-  /** Open "install remote Node.js" panel: which host, and where it stands. */
-  const [nodePanel, setNodePanel] = useState<NodePanelState | null>(null)
   const [workspaces, setWorkspaces] = useState<Record<string, RemoteWorkspace[] | undefined>>({})
   /** Hosts whose last listing request failed; rendered as a failure, not as "none". */
   const [workspaceFailures, setWorkspaceFailures] = useState<Record<string, boolean>>({})
@@ -341,42 +270,6 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
 
   async function refresh(): Promise<void> {
     setState(await api.state())
-  }
-
-  /**
-   * Open the Node.js panel and probe the remote before offering anything.
-   *
-   * The probe decides which of three sentences the panel shows, so nothing is
-   * promised before the host has actually answered. Opening the panel is also
-   * what the provisioning failure points at, hence the "install" action below
-   * starts here rather than at the install call.
-   */
-  async function openNodePanel(host: HostView): Promise<void> {
-    setNodePanel({ hostId: host.id, hostLabel: host.label, step: 'probing' })
-    try {
-      const status = await api.nodeStatus(host.id)
-      setNodePanel(current => current?.hostId !== host.id
-        ? current
-        : {
-          hostId: host.id,
-          hostLabel: host.label,
-          step: status.satisfied ? 'satisfied' : 'needsInstall',
-          status,
-        })
-    } catch (error) {
-      setNodePanel({ hostId: host.id, hostLabel: host.label, step: 'failed', error })
-    }
-  }
-
-  /** Install nvm and the latest Node.js LTS on the open host. */
-  async function installNode(hostId: string, hostLabel: string): Promise<void> {
-    setNodePanel({ hostId, hostLabel, step: 'installing' })
-    try {
-      const status = await api.installNode(hostId)
-      setNodePanel({ hostId, hostLabel, step: 'installed', status })
-    } catch (error) {
-      setNodePanel({ hostId, hostLabel, step: 'failed', error })
-    }
   }
 
   async function run(key: string, task: () => Promise<void>): Promise<void> {
@@ -646,12 +539,18 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
         // A deliberate, one-off change to what the host runs: it is offered as
         // an action rather than performed during provisioning, so an
         // unattended reconnect can never swap a runtime underneath an operator.
-        // "Manage" because this opens a panel (probe / install / close) rather
-        // than performing one atomic operation.
+        // The host probes first and installs only when the probe says so, which
+        // is why this can be one click with no confirmation step of its own.
         id: 'node',
-        label: t('settings.manageNode'),
-        disabled: busyNow || host.phase === 'installing',
-        run: () => { void openNodePanel(host) },
+        label: t('settings.installNode'),
+        disabled: busyNow || host.phase === 'installing' || isNodeRunning(host.node),
+        run: () => {
+          // The outcome is a line on the card, so open it: the action returns as
+          // soon as the run is queued, and a collapsed card would report
+          // nothing at all until the user happened to look.
+          setExpandedHost(host.id)
+          void run(`node:${host.id}`, async () => { await api.installNode(host.id) })
+        },
       },
       {
         id: 'provision',
@@ -836,34 +735,6 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                     </div>
 
                     <div className="dshwp-field">
-                      <span className="dshwp-field-label">{t('node.title')}</span>
-                      <span className="dshwp-field-value">
-                        {nodePanel?.hostId === host.id
-                          ? <NodePanel
-                              state={nodePanel}
-                              t={t}
-                              busy={busy}
-                              onInstall={() => { void installNode(host.id, host.label) }}
-                              onReinstall={() => {
-                                setNodePanel(null)
-                                void run(`provision:${host.id}`, async () => { await api.provision(host.id) })
-                              }}
-                              onClose={() => setNodePanel(null)}
-                            />
-                          : (
-                            <button
-                              type="button"
-                              className="dshwp-button dshwp-button-small"
-                              disabled={busy !== null || host.phase === 'installing'}
-                              onClick={() => { void openNodePanel(host) }}
-                            >
-                              {t('node.title')}
-                            </button>
-                          )}
-                      </span>
-                    </div>
-
-                    <div className="dshwp-field">
                       <span className="dshwp-field-label">{t('settings.localTunnel')}</span>
                       <span className="dshwp-field-value">
                         <code className="dshwp-endpoint">{host.localPort ?? '—'} → {host.remoteAgentPort ?? '—'}</code>
@@ -916,6 +787,14 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                         {host.errorUi === null ? t('error.unknown') : formatUiText(t, host.errorUi)}
                       </p>
                     )}
+                    {/* The run has no panel of its own, so its outcome is a
+                        line on the card — the same place "Reinstall remote
+                        agent" reports what it did. The action expands the card
+                        when it starts, so this line is on screen by the time
+                        the first sentence appears. `!= null` rather than `!==
+                        null`: a host view from a build that predates the field
+                        simply has no run to report. */}
+                    {host.node != null && <NodeReport report={host.node} t={t} />}
 
                     {catalogs[host.id] !== undefined && (
                       <div className="dshwp-models">

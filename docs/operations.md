@@ -78,17 +78,24 @@ is the kind of change an operator should make deliberately, and a silently chose
 what leaves two runtimes fighting over one command. A missing or too-old runtime ends provisioning
 with `exit 21`/`exit 22` and a message naming the shell it asked and the version it found.
 
-That failure leads somewhere instead of dead-ending: the expanded host card offers **远端 Node.js →
-安装** (also in the `⋯` menu). The button is the deliberate version of the same decision:
+That failure leads somewhere instead of dead-ending: the host's `⋯` menu offers **Install remote
+Node.js**, which is the same action the failure message and the bootstrap script name. It is one
+click with no panel — the outcome is a status line on the expanded card, exactly like **Reinstall
+remote agent**:
 
 1. it **probes first** and reports what the host actually has — a host that already satisfies the
-   minimum gets "已满足" and nothing is downloaded;
-2. otherwise it states the plan before running: nvm is installed under this account, then
-   `nvm install --lts` installs the current LTS;
-3. `PROFILE=/dev/null` is passed to nvm's installer, so **no shell startup file is modified**; the
-   card prints the `nvm` snippet for you to add yourself if you want it in an interactive shell;
-4. the finished card offers **重新安装远端 agent**, because the running DSH still uses the previous
-   runtime until provisioning reruns.
+   minimum gets "已满足…未做任何改动" and nothing is downloaded;
+2. otherwise it runs the install: nvm is installed under this account, then `nvm install --lts`
+   installs the current LTS. The line on the card says which version went in;
+3. `PROFILE=/dev/null` is passed to nvm's installer, so **no shell startup file is modified**; making
+   `nvm` available in your own interactive shell stays your choice, with the snippet the install log
+   prints;
+4. applying it needs **重装远端 agent**, because the running DSH still uses the previous runtime —
+   the success sentence says so instead of offering a second button.
+
+The label is deliberately "install", not "reinstall" or "manage": the installer adds a
+version-managed runtime and never replaces the one the account already has, and the entry names the
+result of clicking rather than the fact that it used to open a panel.
 
 Details worth knowing:
 
@@ -416,10 +423,10 @@ upgrade.
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| `等待远端 dsh web 就绪…` | The remote DSH web host did not write its state file. | Check `systemctl --user status dsh-waypoint-agent` and `~/.dsh/waypoint-agent/web.log`. Node.js is discovered through the account's shell and never installed by provisioning; the card's **远端 Node.js → 安装** action installs nvm plus the latest LTS when you want it. Reinstall if the bootstrap failed |
-| Install stops saying Node.js was not found, and the card stops retrying | Provisioning never installs a runtime, and a permanent cause no longer loops | Click **安装** under **远端 Node.js** (nvm + latest LTS, no shell files touched), then **重新安装**. Or install Node.js 22.19+ yourself in that account and reinstall |
-| `安装` fails with an unsupported-platform message | The remote is Windows, or its CPU architecture has no official Node.js build | Install Node.js 22.19+ on the remote manually; only Linux and macOS can be provisioned automatically |
-| `安装` fails saying it needs git, curl, or wget | None of the three exists on the remote | Install one of them (curl is usually enough) and retry the button |
+| `等待远端 dsh web 就绪…` | The remote DSH web host did not write its state file. | Check `systemctl --user status dsh-waypoint-agent` and `~/.dsh/waypoint-agent/web.log`. Node.js is discovered through the account's shell and never installed by provisioning; the card's `⋯` → **Install remote Node.js** action installs nvm plus the latest LTS when you want it. Reinstall if the bootstrap failed |
+| Install stops saying Node.js was not found, and the card stops retrying | Provisioning never installs a runtime, and a permanent cause no longer loops | Use `⋯` → **Install remote Node.js** (probes first, then nvm + latest LTS, no shell files touched), then **重新安装**. Or install Node.js 22.19+ yourself in that account and reinstall |
+| The Node.js install fails with an unsupported-platform message | The remote is Windows, or its CPU architecture has no official Node.js build | Install Node.js 22.19+ on the remote manually; only Linux and macOS can be provisioned automatically |
+| The Node.js install fails saying it needs git, curl, or wget | None of the three exists on the remote | Install one of them (curl is usually enough) and run the action again |
 | The remote still reports the old Node.js after installing | The running DSH was started with the previous runtime | Click **重新安装** on the card; the bootstrap now prefers the nvm Node.js over an older system one |
 | Install never finishes | SSH auth is interactive or remote lacks Node/npm | `ssh -o BatchMode=yes host true`; run `doctor`; inspect the card |
 | `remote agent state file was not found` | Auto-provision disabled or remote start failed | Click **重新安装**; inspect `$DSH_HOME/waypoint-agent/web.log` |

@@ -206,26 +206,6 @@
   overflow-wrap: anywhere;
 }
 
-/* Inline "install remote Node.js" panel, shown in place of its trigger button.
-   It sits inside a field's value cell, so it stacks rather than floats: a
-   popup would need positioning, focus trapping and an outside-click handler
-   for a decision that only ever concerns the host card it appears in. */
-.dshwp-node-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  border: 1px solid var(--dshwp-border);
-  border-radius: 6px;
-  background: var(--dshwp-softer);
-}
-
-.dshwp-node-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
 /* Square icon button used by the host row's action cluster. */
 .dshwp-icon-btn {
   display: inline-flex;

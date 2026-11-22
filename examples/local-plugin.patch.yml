@@ -33,8 +33,8 @@
     # remoteDshVersion: 0.2.2-rc.3  # pin a remote DSH version; omit to follow the local DSH version
     remotePnpmVersion: 11.21.0
     # Node.js is detected through the account's own shell and never installed by
-    # provisioning. Settings offers "远端 Node.js → 安装" (nvm + latest LTS) for
-    # a host that has none or an outdated one.
+    # provisioning. The host's "..." menu offers "Install remote Node.js" (nvm +
+    # latest LTS, probing first) for a host that has none or an outdated one.
     remoteInstallProxy: ''
     remoteInstallNoProxy: 127.0.0.1,localhost
     remoteStart: systemd

@@ -7,13 +7,17 @@ import type { SshDiscoveryResult } from '../src/hosts/types.ts'
 import { loadClientBundle } from './client_bundle_fixture.ts'
 
 /**
- * The Node.js panel inside the Settings page.
+ * The "install remote Node.js" action in the host menu.
  *
- * These tests exist because the panel is the *only* place a runtime gets
- * installed: the provisioning path deliberately refuses to do it, so a panel
- * that silently offered "install" for a host which is already fine, or that
- * claimed success without asking the remote, would be the whole feature
- * failing quietly.
+ * These tests exist because the action is the *only* place a runtime gets
+ * installed: the provisioning path deliberately refuses to do it, so a menu
+ * entry that installed on a host which already satisfies the minimum, or a
+ * failure that said nothing, would be the whole feature failing quietly.
+ *
+ * The action is one click with no panel — the outcome is a line on the expanded
+ * card, read from the host state the page already polls. That is why these
+ * cases model the host's answer as `HostView.node` rather than as a returned
+ * value: the run outlives the request.
  */
 
 /** Minimal browser surface the panel touches while rendering. */
@@ -67,7 +71,7 @@ function discovery(): SshDiscoveryResult {
   return { scannedAt: '2026-11-16T12:00:00.000Z', configFiles: [], hosts: [], skipped: [], error: null }
 }
 
-/** One connected host, expanded by default through the row click. */
+/** One host, bearing the last Node.js run the host reported. */
 function host(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'host-node',
@@ -95,6 +99,8 @@ function host(overrides: Record<string, unknown> = {}): Record<string, unknown> 
     modelSource: 'direct',
     dshUpdate: null,
     retry: null,
+    forwards: [],
+    node: null,
     ...overrides,
   }
 }
@@ -106,10 +112,14 @@ async function settle(renderer: ReactTestRenderer, done: (text: string) => boole
   }
 }
 
-async function render(api: Record<string, unknown>): Promise<ReactTestRenderer> {
+async function render(api: Record<string, unknown>, hosts?: readonly Record<string, unknown>[]): Promise<ReactTestRenderer> {
   const component = await panel()
   const full = {
-    state: async () => ({ hosts: [host()], mirroredWorkspaceIds: [], mirroredWorkspaces: [] }),
+    state: async () => ({
+      hosts: hosts === undefined ? [host()] : [...hosts],
+      mirroredWorkspaceIds: [],
+      mirroredWorkspaces: [],
+    }),
     discover: async () => discovery(),
     workspaces: async () => ({ workspaces: [] }),
     ...api,
@@ -124,161 +134,124 @@ function buttons(renderer: ReactTestRenderer) {
   return renderer.root.findAllByType('button')
 }
 
-function clickByText(renderer: ReactTestRenderer, text: string): void {
-  const button = buttons(renderer).find(candidate => candidate.children.some(child => String(child) === text))
-  assert.ok(button, `no button labelled ${text}`)
-  act(() => { button!.props.onClick() })
+/** The overflow menu trigger of the only host on the page. */
+function menuTrigger(renderer: ReactTestRenderer) {
+  const trigger = buttons(renderer).find(entry => entry.props['aria-haspopup'] === 'menu')
+  assert.ok(trigger, 'the host row must carry an overflow menu')
+  return trigger!
 }
 
-/** Expand the host card, which is where the Node.js control lives. */
-async function expand(renderer: ReactTestRenderer): Promise<void> {
-  const row = renderer.root.findAll(node =>
-    String(node.props?.className ?? '') === 'dshwp-host-row')
-  assert.ok(row.length > 0, 'the host row did not render')
+/** Open the host menu and return its entry labels. */
+async function openMenu(renderer: ReactTestRenderer): Promise<string[]> {
   await act(async () => {
-    row[0]!.props.onClick()
+    menuTrigger(renderer).props.onClick({ preventDefault() {}, stopPropagation() {} })
   })
-  await settle(renderer, text => text.includes('node.title'))
+  return buttons(renderer)
+    .filter(entry => entry.props.role === 'menuitem')
+    .map(entry => entry.children.map(child => typeof child === 'string' ? child : '').join(''))
+}
+
+/** Click one menu entry by its visible label. */
+async function clickMenuEntry(renderer: ReactTestRenderer, label: string): Promise<void> {
+  const entry = buttons(renderer)
+    .filter(button => button.props.role === 'menuitem')
+    .find(button => button.children.some(child => String(child) === label))
+  assert.ok(entry, `no menu entry labelled ${label}`)
+  await act(async () => { entry!.props.onClick() })
 }
 
 function textOf(renderer: ReactTestRenderer): string {
   return JSON.stringify(renderer.toJSON() ?? '')
 }
 
-describe('remote Node.js panel', () => {
-  it('offers the action on the expanded host card', async () => {
-    const renderer = await render({ nodeStatus: async () => never() })
-    await expand(renderer)
-    assert.ok(textOf(renderer).includes('node.title'), 'the card must offer the install action')
+describe('remote Node.js action', () => {
+  it('is a one-click menu entry, not a control in the card detail', async () => {
+    const renderer = await render({})
+    // Collapsed: nothing about Node.js is on screen, because the card is shut.
+    assert.equal(textOf(renderer).includes('settings.installNode'), false)
+    const menu = await openMenu(renderer)
+    assert.ok(menu.includes('settings.installNode'), 'the host menu must offer the action')
   })
 
-  it('does not offer to install when the remote already satisfies the minimum', async () => {
-    let probes = 0
-    const renderer = await render({
-      nodeStatus: async () => {
-        probes += 1
-        return { supported: true, version: 'v22.19.0', satisfied: true, minimum: '22.19.0', nvmInstalled: true }
-      },
-    })
-    await expand(renderer)
-    clickByText(renderer, 'node.title')
+  it('names the same action the provisioning errors name', async () => {
+    // The error copy tells the operator to click a specific label; if the menu
+    // worded it differently, that instruction would point at nothing.
+    const renderer = await render({})
+    const menu = await openMenu(renderer)
+    assert.ok(menu.includes('settings.installNode'))
+    // "Manage" described the old panel rather than the result of clicking.
+    assert.equal(menu.includes('settings.manageNode'), false)
+  })
+
+  it('reports a satisfied host without installing anything', async () => {
+    let installed = 0
+    const renderer = await render(
+      { installNode: async () => { installed += 1; return {} } },
+      [host({ node: { step: 'satisfied', version: 'v22.20.0', minimum: '22.19.0' } })],
+    )
+    await openMenu(renderer)
+    await clickMenuEntry(renderer, 'settings.installNode')
     await settle(renderer, text => text.includes('node.satisfied'))
 
-    assert.equal(probes, 1, 'the panel must ask the remote before saying anything')
+    assert.equal(installed, 1, 'the action reaches the host once per click')
     const text = textOf(renderer)
     assert.ok(text.includes('node.satisfied'))
-    // Nothing to install means no install button: offering one would invite a
-    // needless download on a host that is already fine.
-    assert.equal(
-      buttons(renderer).some(button => button.children.some(child => String(child) === 'node.install')),
-      false,
-    )
+    // The card opened itself, so the sentence is visible without a second click.
+    assert.ok(text.includes('dshwp-host-detail'), 'the action must expand the card it reports on')
   })
 
-  it('explains what is missing before installing', async () => {
-    let installed = 0
-    const renderer = await render({
-      nodeStatus: async () => ({
-        supported: true,
-        version: 'v20.11.1',
-        satisfied: false,
-        minimum: '22.19.0',
-        nvmInstalled: false,
-      }),
-      installNode: async () => {
-        installed += 1
-        return { supported: true, version: 'v22.20.0', satisfied: true, minimum: '22.19.0', nvmInstalled: true, installedVersion: 'v22.20.0' }
-      },
-    })
-    await expand(renderer)
-    clickByText(renderer, 'node.title')
-    await settle(renderer, text => text.includes('node.needsInstall'))
-
-    const text = textOf(renderer)
-    assert.ok(text.includes('node.needsInstall'))
-    // The plan is stated before the button is pressed, not after.
-    assert.ok(text.includes('node.plan'))
-    assert.equal(installed, 0, 'opening the panel must not install anything')
-  })
-
-  it('reports the installed version and asks for a reinstall', async () => {
-    const renderer = await render({
-      nodeStatus: async () => ({
-        supported: true,
-        version: null,
-        satisfied: false,
-        minimum: '22.19.0',
-        nvmInstalled: false,
-      }),
-      installNode: async () => ({
-        supported: true,
-        version: 'v22.20.0',
-        satisfied: true,
-        minimum: '22.19.0',
-        nvmInstalled: true,
-        installedVersion: 'v22.20.0',
-      }),
-    })
-    await expand(renderer)
-    clickByText(renderer, 'node.title')
-    await settle(renderer, text => text.includes('node.missing'))
-    clickByText(renderer, 'node.install')
+  it('reports a completed install as a status line on the card', async () => {
+    const renderer = await render({}, [
+      host({ node: { step: 'installed', version: 'v22.20.0' } }),
+    ])
+    await openMenu(renderer)
+    await clickMenuEntry(renderer, 'settings.installNode')
     await settle(renderer, text => text.includes('node.installed'))
 
     const text = textOf(renderer)
     assert.ok(text.includes('node.installed'))
-    // The agent still runs the old runtime until provisioning reruns.
-    assert.ok(text.includes('node.needsReinstall'))
-    assert.ok(buttons(renderer).some(button =>
-      button.children.some(child => String(child) === 'node.reinstallNow')))
+    // The sentence is a status line, not an error: the running agent still uses
+    // the previous runtime, and `i18n.test.ts` pins that it names the reinstall
+    // that applies the new one. This harness renders keys, so the version
+    // substitution itself is asserted there rather than here.
+    assert.ok(text.includes('"role":"status"'), 'the outcome must be announced as status')
   })
 
-  it('refuses to offer an install on an unsupported remote', async () => {
-    const renderer = await render({
-      nodeStatus: async () => ({
-        supported: false,
-        version: null,
-        satisfied: false,
-        minimum: '22.19.0',
-        nvmInstalled: false,
-      }),
-    })
-    await expand(renderer)
-    clickByText(renderer, 'node.title')
-    await settle(renderer, text => text.includes('node.unsupported'))
-
-    const install = buttons(renderer)
-      .find(button => button.children.some(child => String(child) === 'node.install'))
-    assert.ok(install, 'the button stays visible so the reason is attached to it')
-    assert.equal(install!.props.disabled, true, 'an unsupported host must not install')
+  it('disables the entry while a run is in flight', async () => {
+    for (const step of ['probing', 'installing'] as const) {
+      const renderer = await render({}, [host({ node: { step } })])
+      await openMenu(renderer)
+      const entry = buttons(renderer)
+        .filter(button => button.props.role === 'menuitem')
+        .find(button => button.children.some(child => String(child) === 'settings.installNode'))
+      assert.ok(entry, 'the action stays visible so its state is attached to it')
+      assert.equal(entry!.props.disabled, true, `${step} must not accept a second run`)
+    }
   })
 
-  it('keeps a failed install on screen instead of closing', async () => {
-    const renderer = await render({
-      nodeStatus: async () => ({
-        supported: true,
-        version: null,
-        satisfied: false,
-        minimum: '22.19.0',
-        nvmInstalled: false,
-      }),
-      installNode: async () => { throw new Error('ssh: connection refused') },
-    })
-    await expand(renderer)
-    clickByText(renderer, 'node.title')
-    await settle(renderer, text => text.includes('node.missing'))
-    clickByText(renderer, 'node.install')
-    await settle(renderer, text => text.includes('node.retry'))
+  it('keeps a failed run on the card instead of leaking the host message', async () => {
+    const renderer = await render({}, [
+      host({ node: { step: 'failed', errorUi: { key: 'error.nodeInstallFailed' } } }),
+    ])
+    await openMenu(renderer)
+    await clickMenuEntry(renderer, 'settings.installNode')
+    await settle(renderer, text => text.includes('error.nodeInstallFailed'))
 
     const text = textOf(renderer)
-    // The raw host message must not leak: only the localized sentence shows.
-    assert.equal(text.includes('connection refused'), false)
-    assert.ok(buttons(renderer).some(button =>
-      button.children.some(child => String(child) === 'node.retry')))
+    // Only the localized sentence shows: raw host text is for the logs.
+    assert.equal(text.includes('ssh: connection refused'), false)
+    assert.ok(text.includes('error.nodeInstallFailed'))
+    // A failed runtime install leaves a connected host connected.
+    assert.ok(text.includes('dshwp-host-detail'))
+  })
+
+  it('renders the unsupported-platform answer as a sentence, not a silent no-op', async () => {
+    const renderer = await render({}, [
+      host({ node: { step: 'failed', errorUi: { key: 'error.nodeUnsupported' } } }),
+    ])
+    await openMenu(renderer)
+    await clickMenuEntry(renderer, 'settings.installNode')
+    await settle(renderer, text => text.includes('error.nodeUnsupported'))
+    assert.ok(textOf(renderer).includes('error.nodeUnsupported'))
   })
 })
-
-/** A promise that never settles, for paths that must not resolve during a test. */
-function never(): Promise<never> {
-  return new Promise<never>(() => {})
-}
