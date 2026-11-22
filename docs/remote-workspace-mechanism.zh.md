@@ -404,7 +404,7 @@ return await Reflect.apply(prepared.method, prepared.receiver, prepared.args)
 面板自身的逻辑——分支探测、fork point 解析、diff、变更文件列表——就能原样跑在远端检出上。
 
 - `remote/subprocess.ts` 把 `cwd` 属于镜像工作区的 spec 转给 agent 的 Git 桥。它**刻意不是**通用远端
-  exec：`argv[0]` 不是 `git` 会同步拒绝，agent 再把子命令收窄到只读白名单。两道拒绝的存在，是为了
+  exec：`argv[0]` 不是 `git` 会同步拒绝，agent 再按 Host 各服务真正会发的子命令校验。这道校验的存在，是为了
   让面板能读一个仓库，而不至于让这里变成第二个 shell。
 - `remote/fs.ts` 为自己铸造的 target（`wp-remote:` 键）提供 `resolve`、`processPath`、`stat`、
   `lstat`、`readText`、`readBytes`、`readByteRange` 和 `listDir`。**写操作不接管**：镜像 Session 的

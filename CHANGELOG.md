@@ -16,18 +16,18 @@ below had to be fixed together for it to work at all.
   global options, then the subcommand. `show-ref`, `config` and `hash-object` were also missing from
   the allowlist and are now allowed, which is what the branch listing, filter overrides and
   empty-tree comparison need.
-- **`-c` is narrowed rather than trusted.** Accepting it at all is only safe because Git runs a
-  program for some configuration keys — `filter.*.clean`, `core.fsmonitor`, `core.pager`, aliases —
-  so an unvalidated assignment would be an allowlist bypass needing no exploit. Only
-  `core.quotePath`, `core.hooksPath`, `core.fsmonitor` and per-driver
-  `filter.<name>.clean|process|required|smudge` are accepted, and only with a value that switches the
-  feature off. The agent's own prefix is placed after the caller's options, so its hook and
-  fsmonitor settings always win.
-- **The `env` channel had the same hole and is now an allowlist.** A `GIT_*` prefix filter admitted
-  `GIT_EXTERNAL_DIFF`, `GIT_SSH_COMMAND` and `GIT_CONFIG_*`, all of which run programs; it also
-  silently forwarded `GIT_DIR` and `GIT_WORK_TREE`. Only `LC_ALL` and a rewritten
-  `GIT_CONFIG_KEY_n`/`VALUE_n`/`COUNT` overlay survive now, filtered by the same rules as `-c`, with
-  the count rewritten to what survived so a dropped entry cannot fail the command.
+- **Global options are forwarded, not just tolerated.** `-c`, `--config-env`, `--work-tree` and
+  `--git-dir` now reach Git, because they carry real semantics: dropping `core.quotePath=false`
+  corrupts every non-ASCII path in a diff, and dropping `--work-tree` aims a worktree `reset` at the
+  wrong checkout. The agent's own `-c` for hooks and the filesystem monitor comes after the caller's,
+  so its settings still win.
+- **The allowlist no longer pretends to be a security boundary.** It gained `check-ref-format`,
+  `worktree`, `reset` and `add`, so the worktree service and change recorder work on a mirrored
+  workspace instead of throwing. Narrowing argv never contained anything: the agent already exposes a
+  full PTY, and a repository's own `.git/config` runs programs through an ordinary `git diff`
+  (verified on a real host — a `.gitattributes` rule plus `filter.<name>.clean` executes), so the
+  gate is about clear errors, not safety. `env` likewise drops only client-local path variables
+  (`PATH`, `HOME`, `TMPDIR`, …) that cannot mean anything on a Linux remote, and forwards the rest.
 - **Path interception only knew the local anchor.** The first inspection canonicalizes the paths Git
   printed, so from that point on the panel works in the *remote* namespace: its runner's `cwd` is the
   remote checkout and each changed file is read relative to it. `subprocess.spawn` did not recognize

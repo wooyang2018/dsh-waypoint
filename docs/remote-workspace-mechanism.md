@@ -459,7 +459,7 @@ remote checkout.
 
 - `remote/subprocess.ts` routes a spec whose `cwd` belongs to a mirrored workspace to the agent's
   Git bridge. It is deliberately **not** a general remote exec: a non-`git` `argv[0]` is refused
-  synchronously, and the agent narrows the subcommand further to a read-only allowlist. Both refusals
+  synchronously, and the agent checks the subcommand against what the Host services actually send.
   exist so the panel can read a repository without this becoming a second shell.
 - `remote/fs.ts` serves `resolve`, `processPath`, `stat`, `lstat`, `readText`, `readBytes`,
   `readByteRange` and `listDir` for targets it minted itself (a `wp-remote:` key). Writes are left

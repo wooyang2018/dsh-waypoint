@@ -352,30 +352,32 @@ stdout/stderr, an exit code, and a `truncated` flag the caller maps onto its `lo
 
 **It is not a general remote exec, and it is not a privilege boundary.** The agent already exposes a
 full PTY on this host, so a caller that wanted to run arbitrary commands does not need this route.
-What the allowlist buys is protection against *misuse*: the panel only needs to read refs, the index
-and diffs, so a caller-supplied argv is narrowed to read-only plumbing and a mistake fails before
-spawn instead of having a surprising side effect.
+What the allowlist buys is protection against *misuse* — not containment. It covers the read-only
+plumbing the Forge panel needs plus the writes the worktree service and change recorder need, so a
+mistake fails before spawn instead of having a surprising side effect. See the bullets below for why
+it cannot be a privilege boundary.
 
-- The argv is parsed as Git parses it: leading global options, then a subcommand. Only
-  `--no-optional-locks` and `-c <key>=<value>` may precede it, and `args[0]` must then be in a
-  read-only subcommand allowlist (`status`, `diff`, `log`, `show`, `rev-parse`, `show-ref`,
-  `for-each-ref`, `ls-files`, `merge-base`, `cat-file`, `config`, `hash-object`, and similar).
-  Anything else is refused. `status` and `diff` can refresh the index, so the agent pins
-  `GIT_OPTIONAL_LOCKS=0` to keep that refresh non-persistent.
-- `-c` is narrowed rather than trusted. Git runs a program for some configuration keys
-  (`filter.*.clean`, `core.fsmonitor`, `core.pager`, aliases, `diff.*.command`), so accepting an
-  arbitrary assignment would be an allowlist bypass needing no exploit. Only `core.quotePath`,
-  `core.hooksPath`, `core.fsmonitor`, and per-driver `filter.<name>.clean|process|required|smudge`
-  are accepted, and only with a value that switches the feature off. The agent's own prefix is
-  placed *after* the caller's options, so its hook and fsmonitor settings always win.
-- A few arguments are refused anywhere in the argv even though no current caller sends them:
-  `--ext-diff` and `--textconv` hand argv control to a program the repository configures (which would
-  escape the allowlist entirely), and `--output` turns a diff into a file write.
-- `env` is an allowlist, not a `GIT_*` prefix filter: only `LC_ALL` and a rewritten
-  `GIT_CONFIG_KEY_n`/`VALUE_n`/`COUNT` overlay survive. A prefix filter would let a caller reach
-  `GIT_EXTERNAL_DIFF`, `GIT_SSH_COMMAND` and `GIT_CONFIG_*`, which run programs. The overlay is
-  filtered by the same key rules as `-c` and its count is rewritten to what survived, so a dropped
-  entry cannot make Git fail on a key that is no longer there.
+- The argv is parsed as Git parses it: leading global options, then a subcommand. `-c`,
+  `--config-env`, `--work-tree`, `--git-dir` and `--no-optional-locks` may precede it and are
+  then forwarded, because they carry real semantics — `core.quotePath=false` keeps a diff's paths
+  as UTF-8 instead of C-quoted escapes, and `--work-tree` names the checkout a worktree `reset`
+  applies to. `args[0]` must be in the subcommand allowlist, which covers the read-only plumbing
+  (`status`, `diff`, `log`, `show`, `rev-parse`, `show-ref`, `for-each-ref`, `ls-files`,
+  `merge-base`, `cat-file`, `config`, `hash-object`, `check-ref-format`, …) plus the writes the
+  worktree service and change recorder need (`worktree`, `reset`, `add`). `status` and `diff` can
+  refresh the index, so the agent pins `GIT_OPTIONAL_LOCKS=0` to keep that refresh non-persistent.
+- The allowlist is **not a security control** and is documented as such. The agent already offers a
+  full PTY on the same host, and a repository's own `.git/config` can run a program through an
+  ordinary `git diff` (a `.gitattributes` rule plus `filter.<name>.clean`), so narrowing argv buys no
+  containment. It exists to turn a mistake into a clear error instead of a surprising side effect,
+  which is why everything the Host's services actually send is accepted.
+- `-c` and `GIT_*` are therefore forwarded rather than narrowed. Only `--ext-diff`, `--textconv` and
+  `--output` are refused anywhere in the argv, because each turns a diff into something other than a
+  read of content; no Host service sends them.
+- `env` drops only entries that describe the *client's* machine (`PATH`, `HOME`, `TMPDIR`,
+  `USERPROFILE`, …), for a functional reason: a Windows path is meaningless to a Linux shell and
+  would stop Git finding its own helpers. Everything else survives, including the `GIT_CONFIG_KEY_n`
+  overlay the Forge panel uses to disable a repository's diff filters.
 
 `/workspace-changes/summary` and `/workspace-changes/diff` serve the native **changed-files** card.
 They are addressed by the **remote Session id and turn number**, not by a path: the summary lives in
