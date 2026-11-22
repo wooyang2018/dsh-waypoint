@@ -320,7 +320,12 @@ describe('bootstrap rendering', () => {
       assert.match(script, /npm install --global --prefix "\$DSH_PREFIX".*"@deepseek-ai\/dsh@\$DSH_VERSION"/)
       assert.match(script, /installing @deepseek-ai\/dsh@\$DSH_VERSION globally into \$DSH_PREFIX/)
       assert.match(script, /if ! npm install --global --prefix "\$DSH_PREFIX"[^\n]*"@deepseek-ai\/dsh@\$DSH_VERSION"; then/)
-      assert.match(script, /point remoteGlobalPrefix at a directory you own/)
+      // The advisory must name the failure it can actually see. A writable
+      // prefix still fails when npm cannot clear the previous install, so
+      // blaming ownership alone sent a reader to check permissions that
+      // were already correct.
+      assert.match(script, /ENOTEMPTY  a previous @deepseek-ai\/dsh under \$DSH_PREFIX\/lib\/node_modules could not be cleared/)
+      assert.match(script, /npm writes <prefix>\/lib\/node_modules and <prefix>\/bin/)
       // No per-install-dir npm tree, and no second prefix.
       assert.doesNotMatch(script, /npm install --prefix "\$INSTALL_DIR"/)
       assert.doesNotMatch(script, /DSH_PREFIX=.*\.local/)

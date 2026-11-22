@@ -283,7 +283,8 @@ if [ -z "$DSH_PNPM" ]; then
   echo "dsh-waypoint: installing pnpm@${pnpmVersion} globally into $DSH_PREFIX"
   if ! npm install --global --prefix "$DSH_PREFIX" --no-audit --no-fund "pnpm@${pnpmVersion}"; then
     echo "dsh-waypoint: npm could not install pnpm into $DSH_PREFIX" >&2
-    echo "dsh-waypoint: point remoteGlobalPrefix at a directory you own (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
+    echo "dsh-waypoint: npm writes <prefix>/lib/node_modules and <prefix>/bin, so $DSH_PREFIX must be writable by this account" >&2
+    echo "dsh-waypoint: if it is writable, npm probably refused to replace an existing file there; see the npm error above, or set remoteGlobalPrefix to an empty directory this account owns" >&2
     # The common cause on hosts that ship corepack: <prefix>/bin/pnpm is a symlink
     # into corepack, and npm refuses to replace it ("EEXIST: file already exists")
     # without --force. dsh is never attempted, so this must not report itself as a
@@ -494,7 +495,14 @@ ${pnpmResolutionPrelude(options.pnpmVersion)}
 echo "dsh-waypoint: installing @deepseek-ai/dsh@$DSH_VERSION globally into $DSH_PREFIX"
 if ! npm install --global --prefix "$DSH_PREFIX" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"; then
   echo "dsh-waypoint: npm could not install @deepseek-ai/dsh into $DSH_PREFIX" >&2
-  echo "dsh-waypoint: point remoteGlobalPrefix at a directory you own (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
+  # A writable prefix can still fail here, and the usual reason is not permissions:
+  # npm removes the previous install before writing the new one, and stops with
+  # ENOTEMPTY when a directory it is removing still has contents (observed on a
+  # real host, where the prefix belonged to the account and was fully writable).
+  # Naming the path lets the reader tell that apart from a genuine denial.
+  echo "dsh-waypoint: npm names the cause in the error above; the two that are not permissions:" >&2
+  echo "dsh-waypoint:   ENOTEMPTY  a previous @deepseek-ai/dsh under $DSH_PREFIX/lib/node_modules could not be cleared - remove that directory and retry" >&2
+  echo "dsh-waypoint:   anything else  set remoteGlobalPrefix to an empty directory this account owns (npm writes <prefix>/lib/node_modules and <prefix>/bin)" >&2
   exit 24
 fi
 
@@ -570,7 +578,7 @@ echo "dsh-waypoint: adding plugin to profile $PROFILE"
 # fails later" into a named cause with a named version.
 if ! $DSH_PNPM --version >/dev/null 2>&1; then
   echo "dsh-waypoint: pnpm ($DSH_PNPM) is not usable; refusing to run dsh plugin add" >&2
-  echo "dsh-waypoint: install pnpm@$DSH_PNPM_VERSION or point remoteGlobalPrefix at a directory you own" >&2
+  echo "dsh-waypoint: install pnpm@$DSH_PNPM_VERSION into $DSH_PREFIX, or make $DSH_PNPM runnable (it resolved earlier in this run)" >&2
   exit 25
 fi
 # The upload path carries this run's timestamp, so the dependency spec differs
