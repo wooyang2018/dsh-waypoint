@@ -253,7 +253,7 @@ export function installRemoteFileSystem(
   const readBytes = async (target: FsTarget, signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array> => {
     const decoded = decodeTarget(target)
     if (decoded === undefined) return await original.readBytes(target, signal, maxBytes)
-    const info = await agentFor(hosts, decoded.hostId, 'file.stat').fileStat(decoded.remotePath, signal)
+    const info = await reading(() => agentFor(hosts, decoded.hostId, 'file.stat').fileStat(decoded.remotePath, signal), decoded.remotePath)
     if (info.bytes !== undefined && info.bytes > maxBytes) {
       throw new FsError(
         `remote file exceeds ${maxBytes} bytes: ${decoded.remotePath}`,

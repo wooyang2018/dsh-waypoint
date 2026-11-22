@@ -23,7 +23,7 @@ function fakeMirrors() {
   }
 }
 
-function fakeHosts(text = 'line one\nline two', bytes = Buffer.from('hello')) {
+function fakeHosts(text = 'line one\nline two', bytes = Buffer.from('hello'), missing = new Set<string>()) {
   const calls: Array<{ op: string; path: string; offset?: number }> = []
   const hosts = {
     calls,
@@ -32,6 +32,10 @@ function fakeHosts(text = 'line one\nline two', bytes = Buffer.from('hello')) {
       return {
         fileStat(path: string) {
           calls.push({ op: 'stat', path })
+          if (missing.has(path)) {
+            // Exactly what the agent answers for an absent path.
+            return Promise.reject(Object.assign(new Error(`not found: ${path}`), { code: 'workspace-file/not-found' }))
+          }
           return Promise.resolve({ absolutePath: path, version: 'v1', bytes: bytes.length })
         },
         fileRead(path: string, offset = 1, limit = 200) {
@@ -218,6 +222,42 @@ describe('remote filesystem routing', () => {
     // Writes are deliberately not routed: a mirrored Session's file tools run
     // on the remote host, so a second local write path would compete with them.
     assert.equal(service.writeText, before)
+    restore()
+  })
+
+it('reports an absent remote file as FS_NOT_FOUND', async () => {
+    // The Forge panel probes an optional `.gitattributes` inside try/catch and
+    // tolerates only FsError + FS_NOT_FOUND. The agent answers with the protocol
+    // code `workspace-file/not-found`; rethrowing it unchanged failed the whole
+    // diff for any repository without that file.
+    const service = fakeFs()
+    const hosts = fakeHosts('x', Buffer.from('hello'), new Set([`${REMOTE_ROOT}/.gitattributes`]))
+    const restore = install(service, hosts)
+    const target = await service.resolve('.gitattributes', { cwd: ANCHOR })
+    await assert.rejects(
+      () => service.readBytes(target, undefined, 1024),
+      (error: any) => error.code === 'FS_NOT_FOUND',
+    )
+    restore()
+  })
+
+  it('still propagates a failure that is not "not found"', async () => {
+    const service = fakeFs()
+    const hosts = {
+      supportsAgent: () => true,
+      agentFor: () => ({
+        fileStat: () => Promise.reject(Object.assign(new Error('permission denied'), { code: 'file/permission-denied' })),
+        fileRead: async () => ({ lines: 0, text: '', eof: true }),
+        fileBytes: async () => ({ data: '', eof: true }),
+        fileList: async () => ({ entries: [] }),
+      }),
+    }
+    const restore = install(service, hosts as any)
+    const target = await service.resolve('a.txt', { cwd: ANCHOR })
+    await assert.rejects(
+      () => service.readBytes(target, undefined, 1024),
+      (error: any) => error.code !== 'FS_NOT_FOUND',
+    )
     restore()
   })
 
