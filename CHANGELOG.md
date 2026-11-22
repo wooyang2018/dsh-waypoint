@@ -79,6 +79,16 @@
 
 ### Fixed
 
+- **The changed-files card was empty for every mirrored turn.** Two independent defects, both found
+  by driving the real mirror code against a live remote checkout. The prefetch that fills the card's
+  synchronous cache ran *before* the append that records `localSeq -> turn`, so it looked up a
+  mapping that did not exist yet, resolved synchronously, and cached nothing; and the live event
+  stream never prefetched at all, so a turn produced after the mirror attached could not get a card
+  even in principle. The fetch now takes the remote coordinates from the caller, and both arrival
+  paths await it before projecting — which is what makes "the summary is already present once the
+  event is visible" true rather than merely intended. A turn already in the cache is not re-fetched,
+  so a replay costs one round trip per turn, and a host that never answers delays the event up to
+  `PREFETCH_TIMEOUT_MS` and then degrades to no card rather than to a lost event.
 The Forge panel could not read Git information for any mirrored workspace, and the three defects
 below had to be fixed together for it to work at all.
 

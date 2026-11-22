@@ -425,9 +425,18 @@ provider，`resolve` 则把本地路径交给面板。`RemoteMirrorService.remot
 `workspaceChanges.summary(sessionId, seq)` 是**同步**的，且 `seq` 是宣告该变更的 `workspace/changes`
 事件的**本地**序号。而记录本身活在远端进程里。于是：
 
-1. mirror 在映射还新鲜时记下 `本地 seq → turn`（`changesTurns`），否则后续读取连寻址都做不到。
-2. 在 append 宣告事件**之前**，mirror 先 `await prefetchChangesSummary` 取回摘要并缓存。先取再发，
-   才使同步读取是全的：客户端一旦能看见事件，摘要必然已经在。
+1. 宣告事件到达时，mirror 自己解析出**远端**坐标——host、远端 Session、turn——并在投影该事件
+   **之前** `await prefetchChangesSummary`。先取再发，才使同步读取是全的：客户端一旦能看见事件，
+   摘要必然已经在。
+2. 随后投影该事件时记下 `本地 seq → turn`（`changesTurns`），这是后续读取能够寻址的前提。
+
+顺序不是巧合。`summary()` 是同步的，缓存若在事件可见**之后**才填好，卡片会先渲染成空且永不回填。
+坐标由调用方传入而不是在预取内部反查，正是因为 `changesTurns` 由必须排在**第二**的投影写入：
+先取再在预取里查映射的实现，永远查不到东西。快照重放与实时事件流两条路径都 `await` 同一个辅助
+方法，所以无论 turn 是重启后重放出来的，还是连接期间新产生的，都能拿到卡片。
+
+等待的代价是每个宣告 turn 最多一次往返，受 `PREFETCH_TIMEOUT_MS` 约束；远端始终不响应时，该事件
+只会延后并降级为无卡片，绝不会丢事件。
 3. `remote/workspace-changes.ts` 用这份缓存回答 `summary`，用一次往返回答 `diff`。
 
 未命中返回 `undefined`，**绝不抛错**，因为那正是原生「本 Host 不再提供该摘要」的答案：Host 把它变成

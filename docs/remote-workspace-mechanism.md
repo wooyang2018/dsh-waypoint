@@ -485,12 +485,23 @@ and `remote/sandbox.ts` all consult it alongside `remoteFileContext`.
 `workspaceChanges.summary(sessionId, seq)` is **synchronous**, and `seq` is the **local** sequence of
 the announcing `workspace/changes` event. The record, however, lives in the remote process. So:
 
-1. The mirror records `localSeq → turn` while it still has the mapping (`changesTurns`), so a later
-   read can be addressed at all.
-2. Immediately **before** appending the announcing event, the mirror awaits
-   `prefetchChangesSummary`, which fetches the summary and caches it. Fetching first is what makes the
-   synchronous read total: once a client can see the event, its summary is already present.
+1. When an announcement arrives, the mirror resolves the *remote* coordinates itself — host, remote
+   Session, turn — and awaits `prefetchChangesSummary` **before** projecting the event. Fetching first
+   is what makes the synchronous read total: once a client can see the event, its summary is already
+   present.
+2. Projecting the event then records `localSeq → turn` in `changesTurns`, which is what lets a later
+   read address the card at all.
 3. `remote/workspace-changes.ts` answers `summary` from that cache and `diff` with a round trip.
+
+The order matters and is not incidental. `summary()` is synchronous, so a cache that is filled *after*
+the event is visible produces a card that renders empty and never fills in. The coordinates are passed
+in rather than looked up precisely because `changesTurns` is written by the projection that has to come
+*second*: an implementation that fetches first and looks the mapping up inside the fetch always finds
+nothing. Both arrival paths — snapshot replay and the live event stream — await the same helper, so a
+turn gets its card whether it was replayed after a restart or produced while attached.
+
+Waiting costs at most one round trip per announcing turn, capped by `PREFETCH_TIMEOUT_MS`; a host that
+never answers delays that event and then degrades to no card, never to a lost event.
 
 A miss returns `undefined` — never a throw — because that is the stock "this Host does not serve that
 summary" answer, which the Host turns into a 404 and the card renders as no card.
