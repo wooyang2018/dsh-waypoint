@@ -200,14 +200,30 @@ export class ModelCredentialProxy {
     this.#isTokenValid = options.isTokenValid
   }
 
-  /** Start on an ephemeral loopback port. */
+  /**
+   * Start on an ephemeral loopback port.
+   *
+   * The plugin never needs a fixed port: the reverse tunnel is built from this
+   * returned address. A fixed port exists only for tests that drive the hop
+   * from the remote side, where the `-R` spec must name the local end.
+   */
   async start(): Promise<CredentialProxyAddress> {
+    return this.startOn(0)
+  }
+
+  /**
+   * Start on a specific loopback port, or `0` to let the OS choose.
+   *
+   * @param port Local port to bind; `0` asks for an ephemeral one.
+   * @returns The bound address.
+   */
+  async startOn(port: number): Promise<CredentialProxyAddress> {
     if (this.#server !== undefined) throw new Error('credential proxy already started')
     const server = createHttpServer((req, res) => this.#forward(req, res))
     this.#server = server
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
-      server.listen(0, this.#host, () => resolve())
+      server.listen(port, this.#host, () => resolve())
     })
     const address = server.address() as AddressInfo
     return { port: address.port, baseUrl: `http://${this.#host}:${address.port}` }
