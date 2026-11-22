@@ -189,10 +189,34 @@ export function installRemoteFileSystem(
     return original.processPath(target)
   }
 
+  /**
+   * Run one agent read, reporting an absent remote path as `FS_NOT_FOUND`.
+   *
+   * The agent answers a missing path with `workspace-file/not-found`, but Host
+   * consumers branch on the *Filesystem* error code: the Forge panel reads an
+   * optional `.gitattributes` inside `try/catch` and tolerates only
+   * `FsError` + `FS_NOT_FOUND`. A raw protocol error therefore made a
+   * repository without that file fail its entire diff.
+   * @param read - the agent call.
+   * @param remotePath - the path being read, for the message.
+   * @returns the agent's result.
+   * @throws `FsError` with `FS_NOT_FOUND` when the remote path is absent.
+   */
+  const reading = async <T>(read: () => Promise<T>, remotePath: string): Promise<T> => {
+    try {
+      return await read()
+    } catch (error) {
+      if (isRemoteNotFound(error)) {
+        throw new FsError(`not found on the remote host: ${remotePath}`, 'FS_NOT_FOUND', { cause: error })
+      }
+      throw error
+    }
+  }
+
   const stat = async (target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined> => {
     const decoded = decodeTarget(target)
     if (decoded === undefined) return await original.stat(target, signal)
-    const result = await agentFor(hosts, decoded.hostId, 'file.stat').fileStat(decoded.remotePath, signal)
+    const result = await reading(() => agentFor(hosts, decoded.hostId, 'file.stat').fileStat(decoded.remotePath, signal), decoded.remotePath)
     return { version: FsVersion(result.version), type: 'file', ...result.bytes === undefined ? {} : { size: result.bytes } }
   }
 
@@ -200,7 +224,7 @@ export function installRemoteFileSystem(
     const target = remoteTargetOf(path, opts?.cwd)
     if (target === undefined) return await original.lstat(path, opts, signal)
     const decoded = decodeTarget(target) as DecodedTarget
-    const result = await agentFor(hosts, decoded.hostId, 'file.stat').fileStat(decoded.remotePath, signal)
+    const result = await reading(() => agentFor(hosts, decoded.hostId, 'file.stat').fileStat(decoded.remotePath, signal), decoded.remotePath)
     return {
       version: FsVersion(result.version),
       type: 'file',
@@ -236,7 +260,7 @@ export function installRemoteFileSystem(
         'FS_TOO_LARGE',
       )
     }
-    return await readWindow(hosts, decoded, 0, Math.min(maxBytes, AGENT_PAGE_BYTES, info.bytes ?? maxBytes), signal)
+    return await reading(() => readWindow(hosts, decoded, 0, Math.min(maxBytes, AGENT_PAGE_BYTES, info.bytes ?? maxBytes), signal), decoded.remotePath)
   }
 
   const readByteRange = async (
@@ -322,6 +346,21 @@ function relativeToAnchor(anchor: string, path: string): string | undefined {
   if (normalized === normalizedAnchor) return ''
   if (!normalized.startsWith(`${normalizedAnchor}/`)) return undefined
   return normalized.slice(normalizedAnchor.length + 1)
+}
+
+/**
+ * Whether an agent failure means the remote path does not exist.
+ *
+ * The protocol reports this as `workspace-file/not-found`; the Filesystem
+ * contract reports it as `FS_NOT_FOUND`. Consumers only understand the latter,
+ * so the two are bridged here.
+ * @param error - the value the agent call rejected with.
+ * @returns whether the remote path was absent.
+ */
+function isRemoteNotFound(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const code = (error as { code?: unknown }).code
+  return code === 'workspace-file/not-found' || code === 'FS_NOT_FOUND'
 }
 
 /** Resolve an agent client or fail with a visible "Reinstall" instruction. */
