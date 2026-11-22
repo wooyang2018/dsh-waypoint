@@ -177,8 +177,25 @@ what makes a fixed patch actually reach the remote profile.
 
 Remote provisioning installs the uploaded tarball and never a registry package. A registry install
 resolves by version, so when the published `0.2.12` differs from the local build while sharing its
-version number, the profile already satisfies the request and nothing is replaced. The upload path
-carries a timestamp, which makes each run's dependency spec distinct and forces the replacement.
+version number, the profile already satisfies the request and nothing is replaced. The uploaded
+package keeps a fresh development version, which makes each run's dependency spec distinct and forces
+the replacement.
+
+The **upload path is durable**, not temporary: `<remoteDshHome>/waypoint-agent/agent-package.tgz`,
+beside `agent.json`. pnpm records that path as a `file:` spec in the profile's `pnpm-lock.yaml`, and the
+record outlives the install, so a reclaimable location breaks every later provision — pnpm resolves the
+old spec first and fails with ENOENT on a file that can never come back, before it looks at the package
+the run just uploaded. One fixed name means one file that is always present; each provisioning
+overwrites it. The directory is created by the same remote command that reports its absolute path, since
+`dshHome` may be `~/.dsh` and only the remote shell can expand it.
+
+A profile provisioned by an older build still records a `/tmp/dsh-waypoint-agent-*.tgz` path. Clear it
+once, in the remote profile directory, then reprovision from the host card:
+
+```sh
+node -e "const f='package.json',m=require('./'+f);delete m.dependencies['dsh-waypoint-agent'];require('fs').writeFileSync(f,JSON.stringify(m,null,2)+'\n')"
+rm -f pnpm-lock.yaml
+```
 
 There is deliberately no `dsh plugin remove` step. On a profile carrying many plugins it edits the
 manifest and then hangs inside pnpm (observed: nine minutes, no output, killed by timeout), leaving
