@@ -44,6 +44,8 @@ export interface ProvisionRemoteOptions {
   readonly modelBaseUrl?: string
   /** Placeholder key for the credential proxy; never the real key. */
   readonly modelApiKey?: string
+  /** Profile overlay publishing the local provider list on the remote host. */
+  readonly modelRoutes?: string
   readonly timeoutMs?: number
   readonly verbose?: boolean
   /** Human-readable bootstrap lines, used by the Settings progress card. */
@@ -86,6 +88,7 @@ export async function provisionRemoteAgent(options: ProvisionRemoteOptions): Pro
     agentTarball: remoteTarball,
     ...options.modelBaseUrl === undefined ? {} : { modelBaseUrl: options.modelBaseUrl },
     ...options.modelApiKey === undefined ? {} : { modelApiKey: options.modelApiKey },
+    ...options.modelRoutes === undefined ? {} : { modelRoutes: options.modelRoutes },
     ...options.proxyUrl === undefined ? {} : { proxyUrl: options.proxyUrl },
     ...options.noProxy === undefined ? {} : { noProxy: options.noProxy },
   })

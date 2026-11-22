@@ -76,28 +76,17 @@ describe('plugin localization', () => {
     }
   })
 
-  it('renders the Ports card copy in both languages', () => {
-    // The card reads these through `t('ports.x')` literals, but `ports.mismatch`
-    // and `ports.remoteLabel` go through `fill`, which takes a `CopyKey`; a
-    // missing placeholder would render an empty port number rather than fail.
-    for (const key of [
-      'ports.title',
-      'ports.hint',
-      'ports.local',
-      'ports.add',
-      'ports.adding',
-      'ports.remotePlaceholder',
-      'ports.localPlaceholder',
-      'ports.empty',
-      'ports.needHost',
-      'ports.open',
-      'ports.copy',
-      'ports.remove',
-    ] as const) {
+  it('renders the auto-forwarded row in both languages', () => {
+    // The Settings card that used to carry the `ports.*` family is gone; what
+    // remains is the read-only line under a host that says which ports are
+    // published. `ports.mismatch` still goes through `fill`, which takes a
+    // `CopyKey`; a missing placeholder would render an empty port number rather
+    // than fail.
+    for (const key of ['settings.autoForwarded'] as const) {
       assert.ok(zh[key].length > 0, `zh ${key} is empty`)
       assert.ok(en[key].length > 0, `en ${key} is empty`)
     }
-    for (const key of ['ports.mismatch', 'ports.remoteLabel'] as const) {
+    for (const key of ['ports.mismatch'] as const) {
       assert.match(zh[key], /\{\w+\}/u, `zh ${key} must keep a placeholder`)
       assert.match(en[key], /\{\w+\}/u, `en ${key} must keep a placeholder`)
     }

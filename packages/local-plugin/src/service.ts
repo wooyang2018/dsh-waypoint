@@ -11,6 +11,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import {
   PROTOCOL_VERSION,
   RemoteAgentClient,
@@ -33,7 +34,9 @@ import {
   type WebUrlResult,
 } from '@dsh-waypoint/protocol'
 import type { ResolvedConfig } from './config.ts'
-import { ModelCredentialProxy, type CredentialProxyAddress } from './credentials/proxy.ts'
+import { ModelCredentialProxy, type CredentialProxyAddress, type ProxyRoute } from './credentials/proxy.ts'
+import { readLocalModelConfig } from './model/collect.ts'
+import { defaultSelectionFor, mirroredRouteIds, projectProviders, renderModelOverlay, type MirroredProvider } from './model/providers.ts'
 import { LocalError, asLocalError } from './errors.ts'
 import { hostIdFor } from './hosts/id.ts'
 import { HostStore } from './hosts/store.ts'
@@ -48,7 +51,6 @@ import {
   type HostRuntime,
   type HostView,
   type ModelSource,
-  type PortForwardRequest,
   type PortForwardRuntime,
   type SshDiscoveryResult,
 } from './hosts/types.ts'
@@ -62,7 +64,7 @@ import { mergeAliasGroups } from './ssh/alias-groups.ts'
 import { discoverAgent } from './ssh/probe.ts'
 import { restartRemoteAgent } from './remote/restart.ts'
 import { parseSshTarget, validateHostLabel, type ParsedSshTarget } from './ssh/target.ts'
-import { PortForwardTunnel, forwardProblem, planLocalPort, portIsFree, type ForwardSpec } from './ssh/forward.ts'
+import { PortForwardTunnel, MAX_FORWARDS, forwardProblem, planLocalPort, portIsFree } from './ssh/forward.ts'
 import { Tunnel, allocateLocalPort } from './ssh/tunnel.ts'
 import { dshUpdateFor, resolveLocalDshVersion } from './version.ts'
 
@@ -145,50 +147,31 @@ interface Connected {
   readonly client: RemoteAgentClient
 }
 
+/**
+ * One mirrored provider, resolved far enough to both publish and route.
+ *
+ * The route table and the overlay are built from this same list, which is what
+ * keeps a published id and a routable id the same set.
+ */
+interface MirroredRoute {
+  readonly provider: MirroredProvider
+  readonly upstreamBaseUrl: string
+  readonly apiKey: string
+}
+
+/** Read a provider profile object without asserting its shape. */
+function asProfile(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
 /** Constructor inputs beyond config. */
 export interface RemoteHostsServiceOptions {
   /** Resolve the local provider key at connect time; never cached in the view. */
   readonly resolveModelKey?: () => Promise<string | undefined>
   /** Override the hosting DSH version; tests inject it instead of the runtime. */
   readonly localDshVersion?: string
-}
-
-/**
- * Turn the desired ports into bindable local ports.
- *
- * Split out from `#syncForwards` so the rule is testable without an ssh child,
- * and so it has exactly one implementation: `planLocalPort` in
- * `src/ssh/forward.ts` decides a single port, and this decides how a SET of them
- * coexists (no two forwards may claim the same local port).
- */
-async function planForwards(wanted: readonly PortForwardRequest[]): Promise<{
-  readonly specs: readonly ForwardSpec[]
-  /** Remote port → bound local port; filled by the caller once ssh is listening. */
-  readonly bound: Map<number, number>
-  /** Remote port → the reason it could not be planned. */
-  readonly failures: Map<number, string>
-}> {
-  const specs: ForwardSpec[] = []
-  const failures = new Map<number, string>()
-  const used = new Set<number>()
-  for (const forward of wanted) {
-    const requested = forward.localPort ?? undefined
-    try {
-      // A port already claimed by an earlier forward in this set is not "free",
-      // even though the bind probe would say it is: nothing is listening yet.
-      const candidate = await planLocalPort(
-        forward.remotePort,
-        requested,
-        port => (used.has(port) ? Promise.resolve(false) : portIsFree(port)),
-        allocateLocalPort,
-      )
-      used.add(candidate)
-      specs.push({ localPort: candidate, remotePort: forward.remotePort })
-    } catch (error) {
-      failures.set(forward.remotePort, error instanceof Error ? error.message : String(error))
-    }
-  }
-  return { specs, bound: new Map<number, number>(), failures }
 }
 
 /** One host registry service. */
@@ -216,13 +199,19 @@ export class RemoteHostsService {
   readonly #runtime = new Map<string, HostRuntime>()
   readonly #tunnels = new Map<string, Tunnel>()
   /**
-   * One forward-carrying ssh child per host.
+   * Forward-carrying ssh children, one per published port per host.
    *
    * Deliberately apart from {@link #tunnels}: the agent tunnel carries the event
-   * streams the mirror follows, so re-spawning it to add a dev-server port would
-   * blip every mirrored session. A forward child can be restarted freely.
+   * streams the mirror follows, so re-spawning it to publish a dev-server port
+   * would blip every mirrored session.
+   *
+   * One child per port rather than one per host, because a single `ssh` cannot
+   * gain a `-L` while it runs: carrying the set on one child meant publishing a
+   * second port restarted the first, and any page already reading through it
+   * dropped. Publishing is now initiated by a click during ordinary use, which
+   * makes that restart a visible failure rather than a rare one.
    */
-  readonly #forwards = new Map<string, PortForwardTunnel>()
+  readonly #forwards = new Map<string, Map<number, PortForwardTunnel>>()
   readonly #clients = new Map<string, RemoteAgentClient>()
   readonly #connectPromises = new Map<string, Promise<HostView>>()
   readonly #healthTimers = new Map<string, NodeJS.Timeout>()
@@ -458,7 +447,7 @@ export class RemoteHostsService {
     })
     try {
       await this.#provisioner.ensureInstalled(target, {
-        ...this.#modelEnvironment(proxy, proxyToken, direct),
+        ...await this.#modelProvisionOptions(id, proxy, proxyToken, direct),
         onProgress: detail => this.#setRuntime(id, { ...this.#runtimeFor(id), detail }),
       })
     } catch (error) {
@@ -536,7 +525,7 @@ export class RemoteHostsService {
         modelDirect: direct !== undefined,
       })
       await this.#provisioner.ensureInstalled(target, {
-        ...this.#modelEnvironment(proxy, proxyToken, direct),
+        ...await this.#modelProvisionOptions(id, proxy, proxyToken, direct),
         dshVersion: localVersion,
         upgrade: true,
         onProgress: detail => this.#setRuntime(id, { ...this.#runtimeFor(id), detail }),
@@ -898,61 +887,88 @@ export class RemoteHostsService {
    *
    * This is what makes a remote dev server reachable from the right-sidebar
    * browser: the page itself is rendered on this machine, so a URL there
-   * resolves here. The same port number is preferred (a dev server's own
-   * absolute URLs keep working), an ephemeral port is the fallback, and the
-   * bound port is written back to the record so a reconnect returns to it.
+   * resolves here. The click interceptor in `client/link-forwarding.ts` is the
+   * only caller.
    *
-   * @returns every forward's new runtime state, listening or failed.
+   * Three properties are deliberate:
+   *
+   * - **Idempotent.** Clicking the same link twice must not restart the child
+   *   the open page is reading from, so a live row is returned untouched.
+   * - **Memory only.** The published set is not persisted: it is rebuilt by the
+   *   click that needs it, and a restart leaves no row behind for a user who no
+   *   longer remembers asking.
+   * - **One child per port.** The previous implementation carried the whole set
+   *   on one `ssh` (adding a `-L` to a running ssh is not a thing), which meant
+   *   publishing a second port tore down the first and blipped any page already
+   *   open. With click-driven publishing that happens during ordinary use.
+   *
+   * @returns the row for this port, `listening` or `error`. A failed bind is
+   * reported rather than thrown: the caller decides what to do, and a click
+   * must not become an unhandled rejection.
    */
-  async addForward(id: string, request: { readonly remotePort: number; readonly localPort?: number | null }): Promise<readonly PortForwardRuntime[]> {
+  async publishPort(id: string, remotePort: number): Promise<PortForwardRuntime> {
     this.#assertAlive()
     if (!this.config.portForwarding) {
       throw new LocalError('port/invalid', 'port forwarding is disabled by configuration', {
         ui: { key: 'error.portInvalid' },
       })
     }
-    const record = this.#requireRecord(id)
-    const problem = forwardProblem(request.remotePort, request.localPort)
+    this.#requireRecord(id)
+    const problem = forwardProblem(remotePort, undefined)
     if (problem !== undefined) throw new LocalError('port/invalid', problem, { ui: { key: 'error.portInvalid' } })
     if (this.#connected(id) === undefined) {
       throw new LocalError('host/not-connected', `host ${id} is not connected; connect it first`)
     }
-    const existing = record.forwards ?? []
-    if (existing.some(forward => forward.remotePort === request.remotePort)) {
-      throw new LocalError('port/invalid', `remote port ${String(request.remotePort)} is already forwarded`, {
-        ui: { key: 'error.portInvalid' },
-      })
-    }
-    const forwards: readonly PortForwardRequest[] = [
-      ...existing,
-      {
-        remotePort: request.remotePort,
-        ...request.localPort === undefined || request.localPort === null ? {} : { localPort: request.localPort },
-      },
-    ]
-    await this.#saveRecord(id, { forwards })
-    await this.#syncForwards(id)
-    return this.#runtimeFor(id).forwards
-  }
 
-  /**
-   * Stop publishing one remote port.
-   *
-   * The record is the desired set, so removal deletes the entry and re-syncs;
-   * the caller sees the remaining rows rather than guessing what is still up.
-   */
-  async removeForward(id: string, remotePort: number): Promise<readonly PortForwardRuntime[]> {
-    this.#assertAlive()
-    const record = this.#requireRecord(id)
-    const existing = record.forwards ?? []
-    if (!existing.some(forward => forward.remotePort === remotePort)) {
-      throw new LocalError('port/invalid', `remote port ${String(remotePort)} is not forwarded`, {
+    const children = this.#forwards.get(id)
+    const existing = this.#runtimeFor(id).forwards.find(forward => forward.remotePort === remotePort)
+    if (existing?.phase === 'listening' && children?.has(remotePort) === true) return existing
+
+    const live = children?.size ?? 0
+    if (!children?.has(remotePort) && live >= MAX_FORWARDS) {
+      throw new LocalError('port/invalid', `at most ${String(MAX_FORWARDS)} ports can be published per host`, {
         ui: { key: 'error.portInvalid' },
       })
     }
-    await this.#saveRecord(id, { forwards: existing.filter(forward => forward.remotePort !== remotePort) })
-    await this.#syncForwards(id)
-    return this.#runtimeFor(id).forwards
+    // A previous child for this port is dead or failed: replace it rather than
+    // keep an error row the next click can never clear.
+    await this.#stopForward(id, remotePort)
+
+    let localPort: number
+    try {
+      localPort = await planLocalPort(
+        remotePort,
+        undefined,
+        port => portIsFree(port),
+        allocateLocalPort,
+      )
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      this.#setForwardRow(id, idleForward(remotePort, reason))
+      return this.#forwardRow(id, remotePort)
+    }
+
+    const record = this.#requireRecord(id)
+    try {
+      const tunnel = await PortForwardTunnel.start({
+        sshBinary: this.config.sshBinary,
+        target: parseSshTarget(record.sshTarget),
+        forwards: [{ localPort, remotePort }],
+        connectTimeoutMs: this.config.connectTimeoutMs,
+        strictHostKeyChecking: this.config.strictHostKeyChecking,
+        onExit: info => this.#onForwardExit(id, remotePort, info),
+      })
+      const bound = tunnel.localPorts[0] ?? localPort
+      const map = this.#forwards.get(id) ?? new Map<number, PortForwardTunnel>()
+      map.set(remotePort, tunnel)
+      this.#forwards.set(id, map)
+      this.#setForwardRow(id, listeningForward(remotePort, bound))
+    } catch (error) {
+      // A busy or refused local port is an ordinary answer here, not a host
+      // failure: the row carries the reason and the host stays connected.
+      this.#setForwardRow(id, idleForward(remotePort, error instanceof Error ? error.message : String(error)))
+    }
+    return this.#forwardRow(id, remotePort)
   }
 
   /** Current forward state for one host. */
@@ -961,102 +977,67 @@ export class RemoteHostsService {
     return this.#runtimeFor(id).forwards
   }
 
-  /**
-   * Bring the forward child in line with the record's desired set.
-   *
-   * The whole set rides one ssh child, so any change restarts it: adding a `-L`
-   * to a running ssh is not a thing. Every entry is re-planned on each sync,
-   * which is also what makes a reconnect return to a usable port instead of
-   * failing on a port the previous child still held.
-   */
-  async #syncForwards(id: string): Promise<void> {
-    const record = this.#records.get(id)
-    const wanted: readonly PortForwardRequest[] = record?.forwards ?? []
-    await this.#stopForwards(id)
-    if (record === undefined || wanted.length === 0) {
-      this.#setRuntime(id, { ...this.#runtimeFor(id), forwards: [] })
-      return
-    }
-    if (!this.config.portForwarding || this.#connected(id) === undefined) {
-      this.#setRuntime(id, {
-        ...this.#runtimeFor(id),
-        forwards: wanted.map(forward => idleForward(forward.remotePort)),
-      })
-      return
-    }
-    const target = parseSshTarget(record.sshTarget)
-    const plan = await planForwards(wanted)
-    if (plan.specs.length > 0) {
-      try {
-        const tunnel = await PortForwardTunnel.start({
-          sshBinary: this.config.sshBinary,
-          target,
-          forwards: plan.specs,
-          connectTimeoutMs: this.config.connectTimeoutMs,
-          strictHostKeyChecking: this.config.strictHostKeyChecking,
-          onExit: info => this.#onForwardExit(id, info),
-        })
-        this.#forwards.set(id, tunnel)
-        for (const [index, spec] of plan.specs.entries()) {
-          plan.bound.set(spec.remotePort, tunnel.localPorts[index] ?? spec.localPort)
-        }
-        // Remember the bound port so the next connect returns to it instead of
-        // wandering to a new ephemeral one on every restart.
-        let changed = false
-        const next = wanted.map(forward => {
-          const localPort = plan.bound.get(forward.remotePort)
-          if (localPort === undefined || forward.localPort === localPort) return forward
-          changed = true
-          return { remotePort: forward.remotePort, localPort }
-        })
-        if (changed) await this.#saveRecord(id, { forwards: next })
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        for (const spec of plan.specs) plan.bound.delete(spec.remotePort)
-        for (const spec of plan.specs) plan.failures.set(spec.remotePort, message)
-      }
-    }
-    this.#setRuntime(id, {
-      ...this.#runtimeFor(id),
-      forwards: wanted.map(forward => {
-        const localPort = plan.bound.get(forward.remotePort)
-        const failure = plan.failures.get(forward.remotePort)
-        if (localPort !== undefined && failure === undefined) return listeningForward(forward.remotePort, localPort)
-        return idleForward(forward.remotePort, failure ?? null)
-      }),
-    })
+  /** The row for one remote port, or a synthesized idle row if it vanished. */
+  #forwardRow(id: string, remotePort: number): PortForwardRuntime {
+    return this.#runtimeFor(id).forwards.find(forward => forward.remotePort === remotePort)
+      ?? idleForward(remotePort)
   }
 
-  /** Stop the forward child for one host, keeping its desired set. */
-  async #stopForwards(id: string): Promise<void> {
-    const tunnel = this.#forwards.get(id)
-    this.#forwards.delete(id)
+  /** Replace one port's row, leaving the host's other rows alone. */
+  #setForwardRow(id: string, row: PortForwardRuntime): void {
+    const current = this.#runtimeFor(id)
+    const others = current.forwards.filter(forward => forward.remotePort !== row.remotePort)
+    this.#setRuntime(id, { ...current, forwards: [...others, row].sort((a, b) => a.remotePort - b.remotePort) })
+  }
+
+  /** Stop the forward child for one port, leaving the rest of the host's up. */
+  async #stopForward(id: string, remotePort: number): Promise<void> {
+    const map = this.#forwards.get(id)
+    const tunnel = map?.get(remotePort)
+    if (map === undefined) return
+    map.delete(remotePort)
+    if (map.size === 0) this.#forwards.delete(id)
     await tunnel?.stop()
+  }
+
+  /** Stop every forward child for one host and clear its rows. */
+  async #stopForwards(id: string): Promise<void> {
+    const map = this.#forwards.get(id)
+    this.#forwards.delete(id)
+    if (map !== undefined && map.size > 0) {
+      await Promise.all([...map.values()].map(tunnel => tunnel.stop()))
+    }
+    if (!this.#records.has(id) || this.#disposed) return
+    this.#setRuntime(id, { ...this.#runtimeFor(id), forwards: [] })
   }
 
   /**
    * A forward child exited on its own.
    *
-   * The agent tunnel is unaffected, so the host stays connected: only the port
-   * rows turn into errors. A forward failing must never look like a lost host.
+   * The agent tunnel is unaffected, so the host stays connected: only this one
+   * port's row turns into an error. A forward failing must never look like a
+   * lost host.
    */
-  #onForwardExit(id: string, info: { code: number | null; signal: NodeJS.Signals | null; stderr: string }): void {
-    this.#forwards.delete(id)
+  #onForwardExit(
+    id: string,
+    remotePort: number,
+    info: { code: number | null; signal: NodeJS.Signals | null; stderr: string },
+  ): void {
+    const map = this.#forwards.get(id)
+    map?.delete(remotePort)
+    if (map !== undefined && map.size === 0) this.#forwards.delete(id)
     if (this.#disposed) return
     const detail = info.stderr.trim()
     this.ctx.logger.warn(
-      'dsh-waypoint: port forwards for %s exited (code %s, signal %s)%s',
+      'dsh-waypoint: port forward %s for %s exited (code %s, signal %s)%s',
+      String(remotePort),
       id,
       String(info.code),
       String(info.signal),
       detail === '' ? '' : `: ${detail.split('\n')[0]}`,
     )
-    const current = this.#runtimeFor(id)
     const reason = detail === '' ? 'port forward process exited' : detail.split('\n')[0] ?? 'port forward process exited'
-    this.#setRuntime(id, {
-      ...current,
-      forwards: current.forwards.map(forward => idleForward(forward.remotePort, reason)),
-    })
+    this.#setForwardRow(id, idleForward(remotePort, reason))
   }
 
   /**
@@ -1232,7 +1213,7 @@ export class RemoteHostsService {
         })
         try {
           await this.#provisioner.ensureInstalled(target, {
-            ...this.#modelEnvironment(proxy, proxyToken, direct),
+            ...await this.#modelProvisionOptions(id, proxy, proxyToken, direct),
             onProgress: detail => this.#setRuntime(id, { ...this.#runtimeFor(id), detail }),
           })
           this.#installBlocked.delete(id)
@@ -1320,13 +1301,9 @@ export class RemoteHostsService {
       // A connected host is in step with this build; a later local update must
       // be able to reconcile it again.
       this.#agentReconciled.delete(id)
-      // Dev-server ports survive a reconnect, so they are re-opened here rather
-      // than waiting for an explicit action. A forward that cannot bind must not
-      // fail the connection it rides on, so the call is fire-and-forget with its
-      // own failure recorded per row.
-      void this.#syncForwards(id).catch(error => {
-        this.ctx.logger.warn('dsh-waypoint: could not restore port forwards for %s: %s', id, String(error))
-      })
+      // Published ports are re-created by the next click, not restored here:
+      // the set is memory-only, and a reconnect cannot know which of them a
+      // user still wants.
       return this.view(id)
     } catch (error) {
       await tunnel?.stop()
@@ -1392,7 +1369,12 @@ export class RemoteHostsService {
   async #reconcileModelEnvironment(
     id: string,
     target: ParsedSshTarget,
-    health: { readonly modelBaseUrl?: string | null; readonly modelKeyConfigured?: boolean; readonly modelKeyFingerprint?: string | null },
+    health: {
+      readonly modelBaseUrl?: string | null
+      readonly modelKeyConfigured?: boolean
+      readonly modelKeyFingerprint?: string | null
+      readonly modelRouteIds?: readonly string[]
+    },
     proxy: CredentialProxyAddress | undefined,
     proxyToken: string | undefined,
     direct: { readonly baseUrl: string; readonly apiKey: string } | undefined,
@@ -1404,10 +1386,15 @@ export class RemoteHostsService {
     if (desired === undefined) return false
     const current = health.modelBaseUrl?.replace(/\/+$/u, '') ?? null
     const expectedKey = proxy === undefined ? direct?.apiKey : proxyToken
-    const matches = current === desired.replace(/\/+$/u, '')
+    const envMatches = current === desired.replace(/\/+$/u, '')
       && expectedKey !== undefined
       && health.modelKeyFingerprint === fingerprintKey(expectedKey)
-    if (matches) {
+    // The overlay is the other half: a host whose environment matches but whose
+    // provider list does not is exactly the state a refused or ignored
+    // `--patch` leaves behind. An empty or absent report means "not reported",
+    // which the older-agent case produces, so it never forces a reinstall.
+    const routesMatch = await this.#modelRoutesMatch(id, health.modelRouteIds)
+    if (envMatches && routesMatch) {
       this.#modelReconciled.delete(id)
       return false
     }
@@ -1431,7 +1418,7 @@ export class RemoteHostsService {
     await tunnel.stop()
     try {
       await this.#provisioner.ensureInstalled(target, {
-        ...this.#modelEnvironment(proxy, proxyToken, direct),
+        ...await this.#modelProvisionOptions(id, proxy, proxyToken, direct),
         onProgress: detail => this.#setRuntime(id, { ...this.#runtimeFor(id), detail }),
       })
     } catch (error) {
@@ -1439,6 +1426,33 @@ export class RemoteHostsService {
       throw error
     }
     return true
+  }
+
+  /**
+   * Whether the remote's reported provider routes match what was published.
+   *
+   * Both directions matter: a provider that vanished from the remote means the
+   * overlay did not apply, and one that appeared without being published means
+   * something else wrote that row. Either way the catalog a mirrored Session
+   * reads is not the one this profile promised.
+   *
+   * Absent and empty reports mean "this agent does not report routes" — the
+   * older-agent case — and never trigger a reinstall, so an agent that predates
+   * the field keeps working exactly as before.
+   */
+  async #modelRoutesMatch(id: string, reported: readonly string[] | undefined): Promise<boolean> {
+    if (reported === undefined || reported.length === 0) return true
+    const expected = await this.#modelRoutesFor(this.#requireRecord(id)).catch(() => undefined)
+    if (expected === undefined) {
+      // Nothing was published, so the remote should show no mirrored ids. Any
+      // extra route is its own configured provider, which is none of our
+      // business in this mode.
+      return true
+    }
+    const wanted = mirroredRouteIds(expected)
+    if (wanted.length === 0) return true
+    const actual = new Set(reported)
+    return wanted.every(id => actual.has(id))
   }
 
   /**
@@ -1504,6 +1518,122 @@ export class RemoteHostsService {
     return {}
   }
 
+  /**
+   * The model half of a provisioning call: environment plus provider overlay.
+   *
+   * Every provisioning path passes through here so the overlay cannot be
+   * written by one entry point and forgotten by another — a host reinstalled
+   * from Settings must end up with the same catalog as one reconnected by the
+   * health loop.
+   */
+  async #modelProvisionOptions(
+    id: string,
+    proxy: CredentialProxyAddress | undefined,
+    proxyToken: string | undefined,
+    direct: { readonly baseUrl: string; readonly apiKey: string } | undefined,
+  ): Promise<{
+    modelBaseUrl?: string
+    modelApiKey?: string
+    modelRoutes?: string
+  }> {
+    const routes = await this.#modelRoutesFor(this.#requireRecord(id)).catch(error => {
+      // A provider list that cannot be read must not block the connection: the
+      // host keeps the DeepSeek-only catalog it would have had before.
+      this.ctx.logger.warn('dsh-waypoint: could not build the provider overlay for %s: %s', id, String(error))
+      return undefined
+    })
+    return {
+      ...this.#modelEnvironment(proxy, proxyToken, direct),
+      ...routes === undefined ? {} : { modelRoutes: routes },
+    }
+  }
+
+  /**
+   * The providers this machine can actually serve on a proxy host.
+   *
+   * This is the single place that decides the published set, so the route table
+   * and the overlay cannot disagree. A provider whose credential does not
+   * resolve here is absent from **both**: publishing it would offer a model
+   * whose every request answers `404`, and routing it would need a key that
+   * does not exist — falling back to the default key would send that provider's
+   * traffic to another vendor's account.
+   *
+   * @param hostId - host the projection is for; used for diagnostics only.
+   * @returns publishable providers with their resolved key and upstream, which
+   * is exactly what both the route table and the overlay need.
+   */
+  async #mirroredProviders(hostId: string): Promise<readonly MirroredRoute[]> {
+    const local = readLocalModelConfig(this.ctx)
+    if (Object.keys(local.providers).length === 0) return []
+    const projection = projectProviders(local.providers, {
+      proxyBaseUrl: `http://127.0.0.1:${this.config.credentialProxyRemotePort}`,
+      credentialRef: this.config.modelCredentialRef,
+      ...this.config.mirrorProviderIds.length === 0 ? {} : { only: this.config.mirrorProviderIds },
+    })
+    for (const skipped of projection.skipped) {
+      if (skipped.reason === 'not-selected') continue
+      // A skipped provider is not a failed connection; it is one model the
+      // remote will not offer. Saying so once is what keeps a typo in a
+      // provider profile from looking like a broken tunnel.
+      this.ctx.logger.warn(
+        'dsh-waypoint: not publishing model provider %s to %s: %s',
+        skipped.id,
+        hostId,
+        skipped.reason,
+      )
+    }
+    const mirrored: MirroredRoute[] = []
+    for (const provider of projection.providers) {
+      // The projection rewrote `apiKeyEnv` to the placeholder; the key this route
+      // needs is the one the LOCAL profile named, and the upstream is the LOCAL
+      // endpoint. Read both from the original profile, not the projection.
+      const original = asProfile(local.providers[provider.id])
+      const localRef = typeof original?.apiKeyEnv === 'string' ? original.apiKeyEnv.trim() : ''
+      const upstream = typeof original?.baseURL === 'string' ? original.baseURL.trim() : ''
+      if (localRef === '' || upstream === '') continue
+      let key: string | undefined
+      try {
+        key = (await this.ctx.credentials.resolve(credentialRef(localRef)))?.value
+      } catch (error) {
+        this.ctx.logger.warn(
+          'dsh-waypoint: could not resolve %s for provider %s: %s',
+          localRef,
+          provider.id,
+          String(error),
+        )
+        continue
+      }
+      if (key === undefined || key.trim() === '') {
+        this.ctx.logger.warn(
+          'dsh-waypoint: provider %s names %s, which is not configured here; not publishing or routing it',
+          provider.id,
+          localRef,
+        )
+        continue
+      }
+      mirrored.push({ provider, upstreamBaseUrl: upstream, apiKey: key })
+    }
+    return mirrored
+  }
+
+  /**
+   * Project this machine's providers onto one proxy-mode host.
+   *
+   * Only proxy mode has anything to project: a direct host calls its own
+   * endpoint with its own key and should keep the catalog it already has.
+   *
+   * @returns the overlay text, or undefined when nothing should be published.
+   */
+  async #modelRoutesFor(record: HostRecord): Promise<string | undefined> {
+    if (!this.config.mirrorLocalProviders) return undefined
+    if (this.#modelSourceFor(record) !== 'proxy') return undefined
+    const mirrored = await this.#mirroredProviders(record.id)
+    if (mirrored.length === 0) return undefined
+    const local = readLocalModelConfig(this.ctx)
+    const providers = mirrored.map(entry => entry.provider)
+    return renderModelOverlay(providers, defaultSelectionFor(providers, local.default))
+  }
+
   async #ensureProxyToken(id: string): Promise<string> {
     const record = this.#requireRecord(id)
     if (typeof record.proxyToken === 'string' && record.proxyToken.length >= 16) return record.proxyToken
@@ -1529,6 +1659,11 @@ export class RemoteHostsService {
    * It is not gated on the profile default any more: any host whose own source
    * is `proxy` needs it, so it starts lazily for whichever host asks first and
    * then serves every host through their per-host tokens.
+   *
+   * Beyond the DeepSeek catch-all, the table carries one route per mirrored
+   * local provider, each holding only that provider's own key. One proxy
+   * instance therefore serves a host whose list is the local list, without a
+   * second listener and without any request body ever being re-interpreted.
    */
   async #ensureModelProxy(): Promise<CredentialProxyAddress | undefined> {
     if (this.#proxyAddress !== undefined) return this.#proxyAddress
@@ -1544,9 +1679,9 @@ export class RemoteHostsService {
       return undefined
     }
     try {
+      const routes = await this.#proxyRoutes(key)
       const proxy = new ModelCredentialProxy({
-        apiKey: key,
-        upstreamBaseUrl: this.config.credentialProxyUpstream,
+        routes,
         isTokenValid: token => this.#isProxyToken(token),
       })
       const address = await proxy.start()
@@ -1557,6 +1692,29 @@ export class RemoteHostsService {
       this.ctx.logger.warn('dsh-waypoint: could not start credential proxy: %s', String(error))
       return undefined
     }
+  }
+
+  /**
+   * Build the proxy's route table: the DeepSeek catch-all plus every mirrored
+   * local provider.
+   *
+   * A provider whose credential cannot be resolved is not routed at all. Adding
+   * it with a fallback key would forward that provider's traffic to another
+   * vendor's account, which is the one failure this table must never allow.
+   */
+  async #proxyRoutes(defaultKey: string): Promise<readonly ProxyRoute[]> {
+    const routes: ProxyRoute[] = [{
+      id: '',
+      upstreamBaseUrl: this.config.credentialProxyUpstream,
+      apiKey: defaultKey,
+    }]
+    if (!this.config.mirrorLocalProviders) return routes
+    // The same set the overlay publishes, so every id a remote can select has a
+    // route waiting for it and no route exists for an id it cannot select.
+    for (const entry of await this.#mirroredProviders('proxy')) {
+      routes.push({ id: entry.provider.id, upstreamBaseUrl: entry.upstreamBaseUrl, apiKey: entry.apiKey })
+    }
+    return routes
   }
 
   async #discover(target: ParsedSshTarget) {
@@ -1694,14 +1852,11 @@ export class RemoteHostsService {
     const tunnel = this.#tunnels.get(id)
     this.#tunnels.delete(id)
     this.#clients.delete(id)
-    // The forward child rides the same ssh account, so it dies with the host
-    // connection: leaving it behind would keep a local port bound for a host
-    // the user just disconnected.
+    // The forward children ride the same ssh account, so they die with the host
+    // connection: leaving one behind would keep a local port bound for a host
+    // the user just disconnected. `#stopForwards` also clears the rows, so the
+    // panel stops advertising a page nothing can load.
     await this.#stopForwards(id)
-    this.#setRuntime(id, {
-      ...this.#runtimeFor(id),
-      forwards: this.#runtimeFor(id).forwards.map(forward => idleForward(forward.remotePort)),
-    })
     await tunnel?.stop()
   }
 

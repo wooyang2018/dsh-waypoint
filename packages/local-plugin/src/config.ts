@@ -60,6 +60,23 @@ export interface Config {
   readonly credentialProxyRemotePort?: number
   /** Credential reference resolved in the local DSH process. */
   readonly modelCredentialRef?: string
+  /**
+   * Publish this machine's model providers on a proxied remote host.
+   *
+   * In local key proxy mode every model request already returns here, so the
+   * remote should offer the models that can answer it rather than only the
+   * DeepSeek route its environment names. Set false to leave the remote's own
+   * provider catalog in place.
+   */
+  readonly mirrorLocalProviders?: boolean
+  /**
+   * Provider ids to publish; empty mirrors every usable local provider.
+   *
+   * Applies only where {@link mirrorLocalProviders} does. A provider with no
+   * resolvable credential reference cannot be mirrored at all and is skipped
+   * with a diagnostic rather than failing the connection.
+   */
+  readonly mirrorProviderIds?: string[]
   /** Mirror remote sessions into the local conversation UI. */
   readonly mirrorSessions?: boolean
   /** Publish remote loopback ports on local loopback for the sidebar browser. */
@@ -99,6 +116,8 @@ export const Config: z<Config> = z.object({
   credentialProxyUpstream: z.string().default('https://api.deepseek.com/anthropic'),
   credentialProxyRemotePort: z.number().min(1).max(65_535).default(47_821),
   modelCredentialRef: z.string().default('DEEPSEEK_API_KEY'),
+  mirrorLocalProviders: z.boolean().default(true),
+  mirrorProviderIds: z.array(z.string()).default([]),
   mirrorSessions: z.boolean().default(true),
   portForwarding: z.boolean().default(true),
   mirrorPollMs: z.number().min(500).max(30_000).default(1_500),
@@ -141,6 +160,8 @@ export interface ResolvedConfig {
   readonly credentialProxyUpstream: string
   readonly credentialProxyRemotePort: number
   readonly modelCredentialRef: string
+  readonly mirrorLocalProviders: boolean
+  readonly mirrorProviderIds: readonly string[]
   readonly mirrorSessions: boolean
   /** Publish remote loopback ports on local loopback for the sidebar browser. */
   readonly portForwarding: boolean
@@ -236,6 +257,8 @@ export function resolveConfig(config: Config = {}, env: NodeJS.ProcessEnv = proc
     credentialProxyUpstream: config.credentialProxyUpstream ?? 'https://api.deepseek.com/anthropic',
     credentialProxyRemotePort: config.credentialProxyRemotePort ?? 47_821,
     modelCredentialRef: config.modelCredentialRef ?? 'DEEPSEEK_API_KEY',
+    mirrorLocalProviders: config.mirrorLocalProviders ?? true,
+    mirrorProviderIds: [...config.mirrorProviderIds ?? []],
     mirrorSessions: config.mirrorSessions ?? true,
     portForwarding: config.portForwarding ?? true,
     mirrorPollMs: config.mirrorPollMs ?? 1_500,

@@ -7,7 +7,7 @@ Remote development that appears as ordinary local sessions.
 This plugin targets the official **DSH Desktop** application. Supported versions:
 
 - [DSH Desktop](https://github.com/deepseek-ai/deepseek-harness) [`0.2.2-rc.3`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)
-- Plugin [`1.1.1`](https://www.npmjs.com/package/dsh-waypoint)
+- Plugin [`1.2.0`](https://www.npmjs.com/package/dsh-waypoint)
 - Remote DSH [`0.2.2-rc.3`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested; new installs follow the local DSH version)
 - Remote [Node.js `22.19+`](https://nodejs.org/en/download) on Linux/macOS
 - Remote `python3` for **New terminal** only (the remote PTY is a standard-library `pty` helper, not a
@@ -61,7 +61,7 @@ If npmjs.com resolves an older `latest` tag for a newly published release, insta
 version instead:
 
 ```text
-dsh-waypoint@1.1.1
+dsh-waypoint@1.2.0
 ```
 
 Keep this pinned version in sync with each release.

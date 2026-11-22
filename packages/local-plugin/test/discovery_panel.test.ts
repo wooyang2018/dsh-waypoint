@@ -325,9 +325,10 @@ describe('SSH config discovery in the Settings panel', () => {
     const headings = renderer.root
       .findAllByType('h3')
       .map(node => node.children.map(child => String(child)).join(''))
-    // The hosts you keep come first, then the ports they publish; the scanned
-    // list is setup, not routine, so it stays last.
-    assert.deepEqual(headings, ['settings.hosts', 'ports.title', 'settings.discovered.title'])
+    // The hosts you keep come first, then the scanned list: setup, not routine,
+    // stays last. There is no ports card any more; publishing a dev-server port
+    // is initiated by clicking a loopback link in a mirrored Session.
+    assert.deepEqual(headings, ['settings.hosts', 'settings.discovered.title'])
   })
 
   it('draws the row icons as SVG rather than font glyphs', async () => {

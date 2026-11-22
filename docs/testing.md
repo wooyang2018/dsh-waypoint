@@ -91,18 +91,25 @@ verification you run will be of the old code.
 
 The forwarding path has three layers of coverage, cheapest first.
 
-1. **`packages/local-plugin/test/forward-args.test.ts`** — the `ssh -L` argv. Both ends are `127.0.0.1`,
-   no caller can inject a remote host, privileged/duplicate/oversized sets are refused, and the planner
-   prefers the remote number, falls back to an ephemeral one, and reports an explicitly requested busy
-   port instead of silently moving it.
-2. **`packages/local-plugin/test/forward-transport.test.ts`** — real bytes. A stand-in for the ssh child
-   forwards TCP to an in-process dev server; the test asserts the page arrives **and** that a WebSocket
-   upgrade completes with the remote frame, which is the transport HMR uses. It also asserts that stopping
-   a forward releases its local port, and that `PortForwardTunnel.start` rejects when ssh cannot reach its
-   target rather than resolving into a dead forward.
-3. **A real remote host** — the only layer that exercises `ssh -L` itself.
+1. **`packages/local-plugin/test/loopback-url.test.ts`** — which addresses count. Every accept/refuse row
+   is pinned, including the two that look like bugs: a scheme-less `localhost:5173` (WHATWG parses it as
+   scheme `localhost:` with an empty host, so the pattern runs before the parser), and a non-loopback host
+   (forwarding it would promise a hop ssh cannot make).
+2. **`packages/local-plugin/test/link-forwarding.test.ts`** — the click. A cached mirror target hijacks the
+   click, publishes, and opens the rewritten address. A **cold** cache is not a dropped click: the handler
+   holds the event, asks the Host, and either forwards or replays the navigation it suppressed. A local
+   Session, a non-loopback link, a link back into the DSH page, and a failed mirror lookup all end in the
+   native navigation; a refused bind suppresses navigation but opens nothing. A Session promoted from local
+   to mirrored starts forwarding once the poll refreshes its target.
+3. **`packages/local-plugin/test/forward-args.test.ts`** and **`forward-transport.test.ts`** — the `ssh -L`
+   argv (both ends `127.0.0.1`, no caller can inject a remote host) and real bytes (HTTP plus a WebSocket
+   upgrade through a stand-in forward, and a released local port on stop).
+4. **`packages/local-plugin/test-e2e/remote-forward.e2e.ts`** — the only layer that exercises `ssh -L`
+   against a real host, and the only one that can prove the multi-port property.
 
-For the third layer, use an isolated home so no production profile is touched:
+For layer 4, no profile is touched at all: the script builds its own isolated `stateDir` under the OS temp
+directory and sets `autoProvision: false`, so it cannot reinstall the remote agent or rewrite the remote
+model environment. To keep the same guarantee in a manual profile-based run, use an isolated home:
 
 ```sh
 export DSH_HOME="$(mktemp -d)"
@@ -120,33 +127,55 @@ Write the profile patch before connecting anything:
     reconnect: false
 ```
 
-`autoProvision: false` is not optional here. Both reconcile paths return immediately when it is off, so
-the run cannot reinstall the remote agent or rewrite the remote model environment. Record the remote
-agent's `agentVersion` and `pid` from `<remoteDshHome>/waypoint-agent/agent.json` before the run and
-compare afterwards: a changed pid means something restarted it, which is a finding rather than a detail.
-(On a host where two `dsh web` processes write the same `agent.json`, the agent restarts on its own; the
-README's troubleshooting table names that condition.)
+Record the remote agent's `agentVersion` and `pid` from `<remoteDshHome>/waypoint-agent/agent.json`
+before the run and compare afterwards: a changed pid means something restarted it, which is a finding
+rather than a detail. (On a host where two `dsh web` processes write the same `agent.json`, the agent
+restarts on its own; the README's troubleshooting table names that condition.)
 
 Copy `hosts.json` from the profile under test into `$DSH_HOME/waypoint/`, start a dev server on the
-remote loopback, then:
+remote loopback, then drive the route the click uses:
 
 ```sh
-# 1. publish it through the authenticated route the Settings card uses
+# 1. publish it through the authenticated route the click uses
 curl -s "http://127.0.0.1:<port>/api/dsh-waypoint" -H 'content-type: application/json' \
-  -b "$COOKIE" -d '{"endpoint":"host/ports/add","payload":{"hostId":"<id>","remotePort":27123}}'
+  -b "$COOKIE" -d '{"endpoint":"host/ports/publish","payload":{"hostId":"<id>","remotePort":27123}}'
 # 2. the page arrives here
 curl -s http://127.0.0.1:27123/
 # 3. HMR's transport survives: a 101 plus the remote frame
 node .e2e/ws-check.mjs 27123
 ```
 
-Then walk the four state transitions in the Settings card: occupying the preferred local port moves the
-forward to an ephemeral port; an explicitly named busy port answers `port/invalid` and leaves that row in
-`Failed`; **Disconnect** releases the local port and greys the row; **Connect** restores the bound port
-from the record. Finally open the forwarded URL in the sidebar Browser tab.
+## Real-host forward check (layer 4)
 
-Do the disconnect step with `ss`/`netstat` open. A row can read `Not started` while a stale `ssh` child
-still holds the port, and that difference is invisible in the UI.
+This one is scripted, so it does not need a profile at all:
+
+```sh
+node --import tsx packages/local-plugin/test-e2e/remote-forward.e2e.ts <ssh-target>
+```
+
+It builds its own isolated `stateDir` under the OS temp directory with `autoProvision: false`, so it
+cannot touch a production `waypoint` state or reinstall the remote agent, and it removes the host and the
+fixture when it finishes. It runs a single-socket Python dev server (HTTP plus a WebSocket handshake on
+the same port, because binding two servers to one port is impossible and the whole point is that a
+forward carries raw TCP) on two remote loopback ports, and asserts:
+
+- the page arrives from this machine, with a deep path intact;
+- the upgrade yields a `101` **and** its frame;
+- exactly one `ssh` child per port, counted from the local process table rather than from the service's
+  own map;
+- **publishing a second port leaves the first page serving** — the property that motivated one child per
+  port, and the one the old single-child design failed;
+- republishing is idempotent: same row, no second child, open page intact;
+- a busy preferred local port relocates and still serves;
+- `hosts.json` gains no `forwards` key;
+- `disconnect` releases every local port and clears the rows.
+
+Passing on two real Linux x64 SSH hosts: 26 checks each.
+
+The one thing no layer covers is the browser-side click, because that needs a mirrored Session in a live
+GUI. `test/link-forwarding.test.ts` covers the handler; to confirm it end to end, click a
+`http://localhost:<port>/` link in a mirrored Session and check that the page loads in the Browser tab on
+that **first** click, and that the host's expanded row in Settings shows the mapping.
 
 ## Review and changes surfaces against a real host
 

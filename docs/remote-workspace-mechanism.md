@@ -613,16 +613,21 @@ fork — the approach this repository tried for terminals and then removed, for 
 So a remote dev server fails for a simpler reason than "the renderer is local": `http://localhost:5173`
 typed into that browser resolves on the **user's** machine. The fix is the same one the **Open remote Web
 UI** action already uses — publish the remote loopback port on local loopback, and let the unmodified
-browser load it.
+browser load it. What changed is who asks for it: not a Settings card, but a click on the address in the
+transcript.
 
 ### The forward
 
-`PortForwardTunnel` (`src/ssh/forward.ts`) is one `ssh -N` child per host carrying **all** of that host's
-forwards as additional `-L` arguments:
+`PortForwardTunnel` (`src/ssh/forward.ts`) is one `ssh -N` child **per published port**:
 
 ```text
 -L 127.0.0.1:<local>:127.0.0.1:<remote>
 ```
+
+One child per port rather than one per host is the change this feature needed. A running `ssh` cannot
+gain a `-L`, so carrying a whole set on one child meant publishing a second port restarted the first and
+dropped any page already reading through it. That was tolerable when publishing was a deliberate visit to
+a Settings card; it is not tolerable when it is a click during ordinary use.
 
 Two properties are load-bearing and neither is configurable:
 
@@ -633,51 +638,77 @@ Two properties are load-bearing and neither is configurable:
   composes `http://127.0.0.1:<port>/`, and the client never builds this string itself.
 
 It is a **separate child from the agent tunnel** (`Tunnel`, §3.4) on purpose: the agent tunnel carries the
-event streams the mirror follows, so restarting it to add a `-L` would blip every mirrored session. The
-forward child can be restarted freely, and is, whenever the desired set changes.
+event streams the mirror follows, so restarting it to add a `-L` would blip every mirrored session.
 
-### Desired versus actual
+### Memory-only, one row per port
 
-`HostRecord.forwards` is the **desired** set and it is durable — a dev server is still at the same port
-after a DSH restart. `HostRuntime.forwards`/`HostView.forwards` is the **actual** state, one row per
-requested port with `idle` / `listening` / `error`. The field is optional, so records written before this
-feature keep loading and `HOST_STORE_VERSION` stays `1`; `isForwardRequestList` in `src/hosts/store.ts`
-rejects a malformed entry rather than repairing it, because a forward that quietly changed its port would
-publish a different service than the one requested.
+`HostRuntime.forwards`/`HostView.forwards` is the only state, one row per published port with
+`listening` or `error`. There is no durable counterpart: `HostRecord` carries no `forwards` field, and a
+registry written by an older build keeps loading because the field is now ignored rather than validated
+(`HOST_STORE_VERSION` stays `1`). The reasoning is that a click is the only way a port gets published, so
+a restart cannot know which of them the user still wants — persisting the set would produce rows nobody
+asked for and no UI left to remove.
 
-`#syncForwards` (`src/service.ts`) re-plans every entry on each sync, which is what makes a reconnect
-return to a working port instead of colliding with one the previous child still held. The planner
-(`planForwards`) prefers the remote number and falls back to an ephemeral one — but **an explicitly
-requested local port that is taken is an error, not a relocation**, because publishing the page at an
-address the user did not ask for is worse than saying the port is busy. `ExitOnForwardFailure=yes` turns
-any occupied port into an immediate child exit, which is how the planner's decision becomes observable.
+`publishPort` (`src/service.ts`) is the whole surface. It is **idempotent**: a port whose child is alive
+returns its existing row untouched, which is what keeps a second click on the same link from restarting
+the child the open page is reading. A row in `error` is replaced rather than kept, so the next click can
+clear it. The local port comes from `planLocalPort`, which prefers the remote number and falls back to an
+ephemeral one; there is no explicit-local-port path any more, because the only caller has no way to name
+one.
 
-A forward failure is deliberately **not** a host failure: only that row turns `error`, the host stays
-`connected`, and `PortForwardTunnel`'s exit handler records the reason per row rather than moving the host
-out of `connected`. The agent tunnel is a sibling, not a dependency.
+Every way this can fail is a **row**, not an exception: a busy local port, a privileged port, or ssh
+refusing the `-L` sets that port's row to `error` with the reason. A forward failure is deliberately not
+a host failure — the host stays `connected` and `PortForwardTunnel`'s exit handler records the reason for
+that port alone. The agent tunnel is a sibling, not a dependency.
 
 ### What reaches the browser
 
-`host/ports`, `host/ports/add` and `host/ports/remove` (`src/host-api/handler.ts`) answer with the rows
-plus pre-resolved URLs, so the Settings card and the agent tools both consume one shape. The card's **Open
-in sidebar** button calls `openForwardedPort` (`src/client/open-browser.ts`), which asks
-`ctx.sidebarRight.openTab('browser', { params: { url } })` — the same call the guide and chat links make —
-and falls back to `window.open` when that throws, because the stock `ui-sidebar-browser` row is disabled in
-Web profiles. The sidebar face is duck-typed instead of imported, the way `client/routing.ts` treats
-`ctx.uiWorkspace`, so this plugin does not take a dependency on another DSH package for one call.
+`host/ports/publish` (`src/host-api/handler.ts`) answers with one `forward` row, so a click learns the
+bound port without asking a second question. There is no list or remove verb: the published set is
+memory-only and is rebuilt by the click that needs it.
 
-Three agent tools share the same service: `remote_port_forward`, `remote_ports_list` and
-`remote_port_forward_remove`. They are **not** in `HOST_WRITE_TOOLS`: that gate exists because connecting a
-host can copy the local model key, while a forward copies no credential and exposes nothing beyond one
-loopback listener.
+The click path lives in `src/client/link-forwarding.ts`:
+
+1. A capture-phase `document` click listener finds `a[href]` and asks `parseLoopbackUrl`
+   (`src/client/loopback-url.ts`) whether the address is a loopback dev server.
+2. It reads the current Session's mirror target from a **cache**, and the cache is refreshed every
+   second from `host/session/mirror` (which answers `null` for an ordinary local Session). The cache
+   exists because `preventDefault()` only counts while the event is dispatching, while the Host lookup is
+   a network round trip. A **cold** cache is not a reason to drop the click: the handler calls
+   `preventDefault()` first, asks the Host, and then either forwards or replays the navigation it
+   suppressed (`nativeNavigation`). Deferring the decision instead would make the first click navigate
+   natively and only the second one forward — the manual retry this feature exists to remove. The cache
+   is also **not** one-shot: a Session can start local and be promoted to a mirror, so a stale `null` is
+   overwritten on the next poll rather than pinned for the life of the page.
+3. It calls `publishPort` and then `openForwardedPort` (`src/client/open-browser.ts`), which is the same
+   sidebar-then-`window.open` carrier the **Open remote Web UI** action uses.
+
+`rewriteToLocal` preserves the scheme, path, query and fragment, and always spells the host
+`127.0.0.1`. The scheme is preserved because a forward carries raw TCP: an `https:` dev server keeps its
+TLS. The host spelling is fixed because `localhost` resolves to `::1` first on Windows, where the IPv4-only
+bind would refuse it.
+
+One parsing detail is worth stating because it looks like a bug and is not: `new URL('localhost:5173')`
+**succeeds** and yields scheme `localhost:` with an empty host, and a base argument does not change that.
+Dev servers print scheme-less addresses constantly, so `loopback-url.ts` runs a `host:port` pattern
+first and prefixes `http://` before parsing. The `\d{1,5}` port tail is what keeps `mailto:` and
+`javascript:` out.
+
+Three agent tools used to share the same service: `remote_port_forward`, `remote_ports_list` and
+`remote_port_forward_remove`. They were removed. A forward only makes sense on the machine holding the
+SSH connection — the same machine that draws the browser — so a tool registered by the *local* plugin can
+never be called by the Session that needs the port, and the remote agent has no route to create one
+either. Clicking is the only caller that is on the right side of that boundary.
 
 ### Bounds worth knowing
 
 | Bound | Cause |
 |---|---|
-| A local port that cannot be reused breaks the dev server's absolute URLs | The page names its own origin; the card warns with `ports.mismatch` and the fix is a relative/base URL |
+| A local port that cannot be reused breaks the dev server's absolute URLs | The page names its own origin; the row warns with `ports.mismatch` and the fix is a relative/base URL |
 | Iframe refusal and mixed content still apply on Web | The stock browser's own policy; a forward changes reachability, not embedding rules |
-| No automatic port discovery | Enumerating listeners portably needs a new agent capability and a reinstall; manual entry plus `remote_port_forward` covers the flow |
+| A non-loopback address is never forwarded | The remote end of every forward is the literal `127.0.0.1`, so a LAN host cannot be served |
+| A scheme-less address is only forwarded if it renders as a link | The interceptor reads `a[href]`; plain text in a transcript is not clickable, and rewriting transcript DOM was rejected |
+| No automatic port discovery | Enumerating listeners portably needs a new agent capability and a reinstall; a click names the port |
 | TCP only, remote loopback only | That is what `-L` does; UDP and remote-LAN proxying are out of scope |
 
 ## 7. Model credentials: two paths, chosen per host
@@ -698,6 +729,51 @@ receives the real key.
 Both paths are kept consistent by `#reconcileModelEnvironment` from §3.4, and switching sources reuses
 the provisioning flow directly (the remote process has to restart with the new environment):
 `setModelSource` only stores the choice and calls `provision` (`setModelSource` in `src/service.ts`).
+
+### 7.1 Proxy mode publishes the local provider list
+
+Proxy mode used to leave the remote with one synthetic provider derived from `DEEPSEEK_BASE_URL`, which
+meant the only model a mirrored Session could pick was the DeepSeek one — while the requests were already
+arriving on this machine. The remote now offers the providers this machine runs.
+
+Three pieces make that work, and none of them translates a request:
+
+1. **The route table.** `ModelCredentialProxy` takes `routes` instead of one upstream. A route with an
+   empty id is the catch-all that keeps the DeepSeek behaviour byte-for-byte; a route with an id answers
+   `/p/<id>/…`, strips the prefix, and joins the remainder onto **that route's** upstream base path with
+   **that route's** key. An unknown `/p/<id>` is a `404` that reaches no upstream — sending one
+   provider's traffic to another's endpoint would bill the wrong account and return another vendor's
+   answer.
+2. **The projection.** `projectProviders` (`src/model/providers.ts`) copies each local `llm-pi-ai`
+   profile and rewrites exactly two fields: `baseURL` → `<proxy>/p/<id>`, and `apiKeyEnv` → the
+   placeholder the remote already holds. `api`, `models`, `compat`, `headers`, `reasoning`,
+   `cacheRetention` and `modelOverrides` are untouched. Because the dialect and the endpoint are the ones
+   the provider was configured with, the proxy forwards bytes rather than interpreting them.
+3. **The overlay.** The projection is rendered as a `--patch` overlay (`renderModelOverlay`) and written
+   to `$DSH_HOME/waypoint-agent/model-routes.json` by the bootstrap; the systemd unit and the nohup
+   launcher pass it to `dsh web`. It replaces the `llm-pi-ai` row's `config` whole — a patch layer
+   replaces rather than merges — so a proxied host offers exactly the local list, and
+   `agent-default-model` is rewritten in the same overlay because the previous default may no longer
+   exist.
+
+Two details are deliberate. The overlay is **JSON**, which is a subset of YAML 1.2 and therefore a valid
+patch list: hand-building YAML would have to escape provider display names (`腾讯内网 · TT Switch`),
+model descriptions and arbitrary `headers`, and the first missed case would corrupt a provider instead of
+failing loudly. It travels to the host as **base64** so no byte of operator-authored text can be read as
+shell syntax.
+
+The remote reports what actually took effect through `HostInfo.modelRouteIds`, read from its live `llm`
+registry rather than from the overlay it was started with. `#modelRoutesMatch` compares that report
+against the ids the published overlay names, so a refused or ignored `--patch` shows up as a different
+set instead of as a prompt failing later. An absent or empty report means "this agent does not report
+routes" and never forces a reinstall, which is what keeps an older agent working. The authenticated
+remote Web UI keeps its own model selector — a proxied host's `--patch` overlay replaces its provider
+list exactly like it replaces the one used by mirrored Sessions.
+
+Two bounds follow from the shape. A provider with no `apiKeyEnv` (OAuth or cloud-metadata auth) has no
+local key to forward and is skipped with a diagnostic rather than given an invented one. And because the
+patch layer replaces the row, a proxied host no longer offers providers configured on the remote itself;
+`mirrorLocalProviders: false` restores the old behaviour, and `mirrorProviderIds` narrows the set.
 
 ## 8. Versions, reconnects, and degradation boundaries
 
@@ -728,8 +804,10 @@ the provisioning flow directly (the remote process has to restart with the new e
 | SSH reachability required; no relay/NAT traversal | Only ssh `-L`/`-R` today |
 | Windows remotes unsupported | The bootstrap is POSIX bash, and Node.js is handled as Linux/macOS |
 | The remote terminal needs `python3` | The PTY is a Python standard-library `pty` helper, not a native node-pty build |
-| A forwarded port on a different local number breaks the dev server's absolute URLs | The page names its own origin; the card warns and the fix is a relative or base URL (6.5) |
+| A forwarded port on a different local number breaks the dev server's absolute URLs | The page names its own origin; the row warns and the fix is a relative or base URL (6.5) |
 | A remote dev server is reachable but still refuses to render in the sidebar | The stock browser's iframe policy (`X-Frame-Options`, mixed content) is unchanged by a forward (6.5) |
+| A published port disappears after a restart or reconnect | The set is memory-only; the next click republishes (6.5) |
+| A scheme-less address in plain text cannot be clicked | The interceptor reads `a[href]`; rewriting transcript text to add links was rejected (6.5) |
 
 ## 10. Where to start when you want to change something
 
@@ -742,7 +820,7 @@ the provisioning flow directly (the remote process has to restart with the new e
 | Remote events → local session | `#appendEvent`, `toSeedEvent`, `isMirrorNoise` |
 | Adding a remote capability | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
 | File/terminal routing | `src/remote/files.ts`, `src/remote/terminal-controller.ts` |
-| Remote dev-server ports | `src/ssh/forward.ts`, `#syncForwards` in `src/service.ts`, `host/ports*` in `src/host-api/` |
+| Remote dev-server ports | `src/client/link-forwarding.ts` (the click), `src/client/loopback-url.ts` (which addresses count), `publishPort` in `src/service.ts`, `host/ports/publish` in `src/host-api/` |
 | Settings page behaviour | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
 
 ## 11. Verification status
@@ -761,21 +839,30 @@ the provisioning flow directly (the remote process has to restart with the new e
 - no live remote host was connected, so the ordering, timeouts, and sequencing are read from the code
   paths rather than observed — **except §6.5**, whose remote run is recorded below;
 
-**Checked by running** (§6.5, one real SSH host, an isolated `DSH_HOME`):
+**Checked by running** (§6.5). Two runs, two real SSH hosts (Linux x64, Python
+3.11, agent `1.1.0`), driven by `packages/local-plugin/test-e2e/remote-forward.e2e.ts`, which mounts the
+real `RemoteHostsService` against an isolated `stateDir` under the OS temp directory with
+`autoProvision: false`. **26 checks, all passing on both hosts**:
 
-- `host/ports/add` for a remotely listening port answered `phase: 'listening'` with
-  `localPort === remotePort`, and `http://127.0.0.1:<port>/` served the remote page from this machine;
-- a WebSocket upgrade through the same forward completed (`HTTP/1.1 101`) and delivered the remote
-  frame, which is the transport a dev server's HMR client uses;
-- occupying the preferred local port moved the forward to an ephemeral port and stayed usable, while an
-  **explicitly** requested busy port answered `port/invalid` with that row in `phase: 'error'`;
-- `disconnect` released the local port and left the rows `idle`; `connect` restored the bound port from
-  the record;
-- the stock right-Sidebar browser rendered the forwarded URL in its iframe;
-- the remote agent's recorded version and pid were not touched by the run, because `autoProvision: false`
-  short-circuits both reconcile paths (§3.4). The remote agent did restart twice during the session, but
-  from two unrelated `dsh web` processes on that host writing the same `agent.json` — the condition the
-  README's troubleshooting table names, not this plugin's reconcile.
+- `publishPort` answered `phase: 'listening'` with `localPort === remotePort`, and the remote page arrived
+  from this machine — body marker, and a deep path preserved;
+- a WebSocket upgrade completed (`HTTP/1.1 101`) **and** its unmasked text frame arrived, which is the
+  transport a dev server's HMR client uses;
+- exactly one `ssh` child carried each port, counted from the local process table rather than from the
+  service's own map;
+- **publishing a second port left the first page serving**, and its child alive — the regression that
+  one-child-per-port exists to prevent;
+- republishing the same port returned the same row and spawned no second child, with the open page intact;
+- occupying the preferred local port moved the forward to an ephemeral port that still served the remote
+  page, so the relocation path works and the mismatch is visible to the panel;
+- `hosts.json` gained no `forwards` key;
+- `disconnect` released every local port and cleared the rows.
+
+An earlier run against the pre-change design recorded the transport itself (forward serves the remote
+page, WebSocket survives, the stock sidebar browser renders it, and `autoProvision: false` leaves the
+remote agent's version and pid untouched). The one thing neither run observes is the browser-side click:
+the handler is covered by `test/link-forwarding.test.ts`, and driving it from a real transcript needs a
+mirrored Session in a live GUI.
 
 To confirm any single claim the smallest reproduction is `./scripts/test-sandbox.sh`, which builds and
 installs into an isolated environment, followed by one integration run under the visibility rules in

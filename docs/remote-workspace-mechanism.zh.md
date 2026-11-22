@@ -535,16 +535,19 @@ fork——这正是本仓库为终端试过、后来又删掉的方案，而收�
 
 所以远端 dev server 打不开的原因比"渲染器在本地"更简单：在这个浏览器里输入 `http://localhost:5173`，
 解析发生在**用户**机器上。修法与 **Open remote Web UI** 动作已经在用的那个相同——把远端 loopback 端口发布
-到本机 loopback，交给未修改的浏览器加载。
+到本机 loopback，交给未修改的浏览器加载。变化的是**谁来要求**：不再是设置页的卡片，而是转录里那一次点击。
 
 ### 转发本身
 
-`PortForwardTunnel`（`src/ssh/forward.ts`）是每台主机一个 `ssh -N` 子进程，把该主机**所有**转发作为额外的
-`-L` 参数一次带上：
+`PortForwardTunnel`（`src/ssh/forward.ts`）是**每个已发布端口一个** `ssh -N` 子进程：
 
 ```text
 -L 127.0.0.1:<local>:127.0.0.1:<remote>
 ```
+
+一端口一进程是这次改动必需的前提。运行中的 `ssh` 无法再加一条 `-L`，所以把整套转发放在一个子进程上意味着
+发布第二个端口会重启第一个、并让正在读它的页面断流。当发布是"专门去设置页点一次"时这还能接受；当发布是
+日常使用中的一次点击时不行。
 
 两个性质是承重的，且都不可配置：
 
@@ -554,45 +557,66 @@ fork——这正是本仓库为终端试过、后来又删掉的方案，而收�
   转发会直接拒连。因此 `src/hosts/types.ts` 的 `forwardUrl` 拼出 `http://127.0.0.1:<port>/`，客户端自己
   不构造这个字符串。
 
-它与 agent 隧道（`Tunnel`，§3.4）**刻意分成两个子进程**：agent 隧道承载镜像跟随的事件流，为加一条 `-L`
-而重启它会让所有镜像会话抖动一下。转发子进程可以随时重启，也的确在期望集合变化时重启。
+它与 agent 隧道（`Tunnel`，§3.4）**刻意分成不同子进程**：agent 隧道承载镜像跟随的事件流，为加一条 `-L`
+而重启它会让所有镜像会话抖动一下。
 
-### 期望态与实际态
+### 只在内存里，一端口一行
 
-`HostRecord.forwards` 是**期望**集合，且是持久的——DSH 重启后 dev server 还在同一个端口。
-`HostRuntime.forwards` / `HostView.forwards` 是**实际**状态，每个请求端口一行，`idle` / `listening` /
-`error`。该字段可选，因此本特性之前写下的记录照常加载，`HOST_STORE_VERSION` 仍是 `1`；
-`src/hosts/store.ts` 的 `isForwardRequestList` 会拒绝畸形条目而不是修复它——一个悄悄改了端口的转发，
-发布的服务就不是用户要的那个了。
+`HostRuntime.forwards` / `HostView.forwards` 是唯一的状态，每个已发布端口一行，`listening` 或 `error`。
+没有对应的持久字段：`HostRecord` 不再有 `forwards`，而旧版本写下的注册表照常加载，因为那个字段现在是
+**被忽略**而不是被校验（`HOST_STORE_VERSION` 仍是 `1`）。理由是发布端口的唯一途径是点击，所以重启无从知道
+用户还要哪些——把集合持久化只会产出没人要、而且界面上已经没有入口可清的记录。
 
-`#syncForwards`（`src/service.ts`）每次同步都重新规划每个条目，这正是重连能回到一个可用端口、而不是撞上
-上一个子进程仍占着端口的那个的原因。规划器（`planForwards`）优先用远端端口号、回退到临时端口——但
-**显式指定的本地端口被占用时报错，而不是搬家**，因为把页面发布到用户没要的地址比说"端口被占用"更糟。
-`ExitOnForwardFailure=yes` 让任何被占用的端口立刻退出子进程，规划器的判断因此是可观测的。
+`src/service.ts` 的 `publishPort` 就是全部表面。它是**幂等**的：子进程还活着的端口原样返回既有行，这正是
+"再点一次同一个链接不会重启页面正在读的子进程"的实现。处于 `error` 的行会被重建而不是保留，所以下一次
+点击能清掉它。本地端口由 `planLocalPort` 决定，优先同号、回退临时端口；已经不存在"显式指定本地端口"这条
+路径，因为唯一的调用方无从指定。
 
-转发失败刻意**不是**主机失败：只有那一行变 `error`，主机保持 `connected`，`PortForwardTunnel` 的退出处理
-按行记录原因，而不是把主机拖出 `connected`。agent 隧道是兄弟，不是依赖。
+每一类失败都表现为**一行状态**而不是异常：本地端口被占、特权端口、ssh 拒绝 `-L` 都只把那个端口置为
+`error` 并带上原因。转发失败刻意**不是**主机失败——主机保持 `connected`，`PortForwardTunnel` 的退出处理
+只记录那个端口的原因。agent 隧道是兄弟，不是依赖。
 
 ### 到达浏览器的那一段
 
-`host/ports`、`host/ports/add`、`host/ports/remove`（`src/host-api/handler.ts`）返回行与已解析好的 URL，
-所以设置页卡片和 Agent 工具消费同一个形状。卡片的 **在侧栏打开** 调用
-`openForwardedPort`（`src/client/open-browser.ts`），它请求
-`ctx.sidebarRight.openTab('browser', { params: { url } })`——与指南和聊天链接同一个调用——并在其抛错时回退
-`window.open`，因为 Web profile 默认禁用原生 `ui-sidebar-browser` 行。sidebarRight 这个面用 duck-typing
-而不是 import，与 `client/routing.ts` 对待 `ctx.uiWorkspace` 的方式一致，本插件不因此依赖另一个 DSH 包。
+`host/ports/publish`（`src/host-api/handler.ts`）只返回一行 `forward`，一次点击就能拿到绑定端口，不必再问
+第二个问题。没有列表与移除动词：已发布集合只在内存里，由需要它的那次点击重建。
 
-三个 Agent 工具共用同一个服务：`remote_port_forward`、`remote_ports_list`、
-`remote_port_forward_remove`。它们**不在** `HOST_WRITE_TOOLS` 里：那道门禁存在的原因是连接主机会复制本地
-模型密钥，而端口转发不复制任何凭据，也只暴露一个 loopback 监听。
+点击路径在 `src/client/link-forwarding.ts`：
+
+1. 一个捕获阶段的 `document` click 监听找到 `a[href]`，交给 `parseLoopbackUrl`
+   （`src/client/loopback-url.ts`）判断这是不是一个回环 dev server。
+2. 它从**缓存**读当前会话的镜像目标，缓存由 `host/session/mirror` 每秒刷新（那个接口对普通本地会话返回
+   `null`）。之所以要缓存，是因为 `preventDefault()` 只在事件派发期间有效，而"问宿主这个会话是否被镜像"
+   是一次网络往返。**缓存冷**并不构成丢掉的点击的理由：处理器先调 `preventDefault()`，再问宿主，然后要么
+   转发、要么把它抑制掉的那次导航补放回去（`nativeNavigation`）。若改成"先放行再决定"，第一次点击会按原生
+   导航走、第二次才转发——而这正是本特性要消灭的那次手动重试。缓存也**不是**一次性的：一个会话可能先是本地
+   的、后来被提升成镜像，所以过期的 `null` 会在下一次轮询被覆盖，而不是钉死到页面生命周期结束。
+3. 它调用 `publishPort`，再用 `openForwardedPort`（`src/client/open-browser.ts`）打开——与 **Open remote
+   Web UI** 动作同一个"先侧栏再 `window.open`"的载体。
+
+`rewriteToLocal` 保留 scheme、path、query 与 fragment，并把主机固定写成 `127.0.0.1`。保留 scheme 是因为
+转发搬运原始 TCP：`https:` 的 dev server 仍然保持自己的 TLS。主机写法固定是因为 Windows 上 `localhost`
+优先解析到 `::1`，而只绑 IPv4 的转发会拒连。
+
+有一个解析细节值得写下来，因为它看着像 bug 却不是：`new URL('localhost:5173')` **会成功**，得到 scheme 为
+`localhost:`、host 为空的地址，而且加 base 参数也改不了这一点。dev server 大量打印不带 scheme 的地址，
+所以 `loopback-url.ts` 先跑一遍 `host:port` 模式、补上 `http://` 再解析。`\d{1,5}` 的端口尾部正是把
+`mailto:` 与 `javascript:` 挡在外面的原因。
+
+曾经有三个共用同一服务的 Agent 工具：`remote_port_forward`、`remote_ports_list`、
+`remote_port_forward_remove`。它们已被删除。转发只对持有 SSH 连接的那台机器有意义——也就是画浏览器的那台
+——所以由**本地**插件注册的工具永远无法被真正需要那个端口的会话调用，而远端 agent 同样没有创建它的路由。
+点击是唯一站在这条边界正确一侧的调用方。
 
 ### 值得知道的边界
 
 | 边界 | 直接原因 |
 |---|---|
-| 本地端口复用时，dev server 的绝对 URL 会失效 | 页面写的是自己的 origin；卡片用 `ports.mismatch` 提示，修法是相对路径或 base URL |
+| 本地端口复用时，dev server 的绝对 URL 会失效 | 页面写的是自己的 origin；那一行用 `ports.mismatch` 提示，修法是相对路径或 base URL |
 | Web 载体下 iframe 拒绝与混合内容限制照旧 | 那是原生浏览器自己的策略；转发改变的是可达性，不是嵌入规则 |
-| 不做端口自动发现 | 可移植地枚举监听端口需要新的 agent 能力与重装；手填 + `remote_port_forward` 已覆盖该流程 |
+| 非回环地址永不转发 | 每条转发的远端都是字面量 `127.0.0.1`，所以内网主机无法被服务 |
+| 不带 scheme 的地址只有在渲染成链接时才能转发 | 拦截器读 `a[href]`；转录里的纯文本不可点，而改写转录 DOM 的方案已被否决 |
+| 不做端口自动发现 | 可移植地枚举监听端口需要新的 agent 能力与重装；点击本身已经指明了端口 |
 | 只做 TCP、只到远端 loopback | `-L` 就是这个语义；UDP 与远端内网代理不在范围内 |
 
 ## 7. 模型凭据：两条路径，按主机选择
@@ -610,6 +634,39 @@ fork——这正是本仓库为终端试过、后来又删掉的方案，而收�
 两条路径都靠第 3.4 节的 `#reconcileModelEnvironment` 保持一致，切换来源则直接复用 provisioning 流程
 （远端进程必须带新环境重启）：`setModelSource` 只是存下选择再调 `provision`（`src/service.ts` 的
 `setModelSource`）。
+
+### 7.1 代理模式发布本地 provider 列表
+
+以前代理模式只给远端留一个由 `DEEPSEEK_BASE_URL` 推出来的合成 provider，于是镜像会话能选的只有
+DeepSeek 一个——而请求其实早就回到本机了。现在远端提供的是本机在跑的那些 provider。
+
+三块拼起来，且都不翻译请求：
+
+1. **路由表。** `ModelCredentialProxy` 收的是 `routes` 而不是单个上游。`id` 为空的是 catch-all，让
+   DeepSeek 的行为逐字节不变；有 `id` 的响应 `/p/<id>/…`，剥掉前缀后把余下路径拼到**该路由自己的**
+   上游 base path 上，并用**该路由自己的** key。未知的 `/p/<id>` 返回 `404` 且不打上游——把一家的流量
+   送到另一家的端点会记错账、返回别家的答案。
+2. **投影。** `projectProviders`（`src/model/providers.ts`）复制本地每个 `llm-pi-ai` profile，只改两个
+   字段：`baseURL` → `<proxy>/p/<id>`，`apiKeyEnv` → 远端已经持有的占位符。`api`、`models`、
+   `compat`、`headers`、`reasoning`、`cacheRetention`、`modelOverrides` 一律原样。正因为方言和端点都是
+   该 provider 自己被配置的那一套，代理只转发字节、不解释内容。
+3. **overlay。** 投影渲染成 `--patch` 覆盖层（`renderModelOverlay`），由 bootstrap 写到
+   `$DSH_HOME/waypoint-agent/model-routes.json`，systemd unit 与 nohup 启动器把它传给 `dsh web`。它会
+   **整行替换** `llm-pi-ai` 的 `config`（patch 层是替换不是合并），所以代理主机提供的就是本地那一份；
+   `agent-default-model` 在同一个 overlay 里一并改写，因为原来的默认可能已不存在。
+
+两个细节是有意的。overlay 用 **JSON**（YAML 1.2 的子集，本身就是合法 patch 列表）：手写 YAML 得转义
+provider 显示名（`腾讯内网 · TT Switch`）、模型描述和任意 `headers`，漏一处就会悄悄毁掉一个 provider
+而不是报错。它以 **base64** 传到主机，因此运维作者写的任何字节都不会被当成 shell 语法。
+
+远端通过 `HostInfo.modelRouteIds` 上报**实际生效**的集合，读的是它活着的 `llm` 注册表而非启动时的
+overlay。`#modelRoutesMatch` 拿这份上报与已发布 overlay 里的 id 比对，于是被拒或被忽略的 `--patch`
+会表现为集合不同，而不是之后某个 prompt 失败。上报缺失或为空表示「这个 agent 不上报路由」，永不触发
+重装——这正是旧 agent 仍能工作的原因。
+
+由此有两条边界。没有 `apiKeyEnv`（OAuth 或云元数据鉴权）的 provider 没有本地 key 可转发，会带诊断
+被跳过，而不是编一个 key。另外因为 patch 层整行替换，代理主机不再提供它自己配置的 provider；
+`mirrorLocalProviders: false` 恢复旧行为，`mirrorProviderIds` 用于收窄集合。
 
 ## 8. 版本、重连与降级边界
 
@@ -636,8 +693,10 @@ fork——这正是本仓库为终端试过、后来又删掉的方案，而收�
 | 需要 SSH 可达，无 relay/NAT 穿透 | 当前只有 ssh `-L`/`-R` |
 | Windows 远端不支持 | bootstrap 是 POSIX bash，Node.js 也按 Linux/macOS 处理 |
 | 远端终端需要 `python3` | PTY 是 Python 标准库 `pty` 辅助脚本，不是原生 node-pty |
-| 转发到不同本地端口会破坏 dev server 的绝对 URL | 页面写的是自己的 origin；卡片会提示，修法是相对路径或 base URL（6.5） |
+| 转发到不同本地端口会破坏 dev server 的绝对 URL | 页面写的是自己的 origin；那一行会提示，修法是相对路径或 base URL（6.5） |
 | 远端 dev server 可达，但侧栏仍拒绝渲染 | 原生浏览器的 iframe 策略（`X-Frame-Options`、混合内容）不因转发而改变（6.5） |
+| 重启或重连后已发布的端口消失 | 集合只存在内存里，下一次点击会重建（6.5） |
+| 纯文本里不带 scheme 的地址点不了 | 拦截器读 `a[href]`；改写转录文本加链接的方案已被否决（6.5） |
 
 ## 10. 想动手改，从哪里进
 
@@ -650,7 +709,7 @@ fork——这正是本仓库为终端试过、后来又删掉的方案，而收�
 | 远端事件 → 本地 Session | `#appendEvent`、`toSeedEvent`、`isMirrorNoise` |
 | 新增远端能力 | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
 | 文件/终端路由 | `src/remote/files.ts`、`src/remote/terminal-controller.ts` |
-| 远端 dev server 端口 | `src/ssh/forward.ts`、`src/service.ts` 的 `#syncForwards`、`src/host-api/` 的 `host/ports*` |
+| 远端 dev server 端口 | `src/client/link-forwarding.ts`（点击）、`src/client/loopback-url.ts`（哪些地址算数）、`src/service.ts` 的 `publishPort`、`src/host-api/` 的 `host/ports/publish` |
 | Settings 页行为 | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
 
 ## 11. 验证状态
@@ -668,19 +727,25 @@ fork——这正是本仓库为终端试过、后来又删掉的方案，而收�
 - 没有连接真实远端主机，因此时序、超时与顺序是从代码路径读出来的，不是观测到的——**§6.5 例外**,
   它的远端实测记录如下；
 
-**已实测**（§6.5，一台真实 SSH 主机，隔离 `DSH_HOME`）：
+**已实测**（§6.5）。两台真实 SSH 主机各跑一次（Linux x64、Python 3.11、
+agent `1.1.0`），由 `packages/local-plugin/test-e2e/remote-forward.e2e.ts` 驱动：它挂载真实的
+`RemoteHostsService`，用操作系统临时目录下的隔离 `stateDir`，并设 `autoProvision: false`。
+**26 项检查，两台机器全部通过**：
 
-- 对一个远端确实在监听的端口调 `host/ports/add`，返回 `phase: 'listening'` 且
-  `localPort === remotePort`，并且本机 `http://127.0.0.1:<port>/` 能取到远端页面；
-- 同一条转发上的 WebSocket 升级完成（`HTTP/1.1 101`）并收到了远端帧——那正是 dev server 的 HMR
+- `publishPort` 返回 `phase: 'listening'` 且 `localPort === remotePort`，并且本机能取到远端页面——
+  内容和深层路径都对；
+- WebSocket 升级完成（`HTTP/1.1 101`）**并且**收到了它的 unmasked 文本帧，那正是 dev server 的 HMR
   客户端所用的通道；
-- 占住首选的本地端口后，转发落到临时端口且仍可用；而**显式指定**的端口被占用时返回 `port/invalid`,
-  该行留在 `phase: 'error'`；
-- `disconnect` 释放本地端口、行变 `idle`；`connect` 按记录恢复到原端口；
-- 原生右侧栏浏览器在 iframe 里渲染了这个转发 URL；
-- 远端 agent 记录的版本与 pid 未被本次运行触碰，因为 `autoProvision: false` 让两条 reconcile 路径都
-  在第一条语句就返回（§3.4）。该远端的 agent 在本次会话中确实重启过两次，但原因是该主机上两个无关的
-  `dsh web` 进程在写同一个 `agent.json`——即 README 排障表里那一条，而非本插件的 reconcile。
+- 每个端口**各有恰好一个** `ssh` 子进程，从本机进程表数出来，而不是读服务自己写的那张 map；
+- **发布第二个端口后第一个页面仍在服务**，它的子进程也还活着——这正是"一端口一进程"要防的回归；
+- 对同一端口重复发布返回同一行、不新起子进程，已打开的页面不受影响；
+- 占住首选的本地端口后，转发落到临时端口且仍能服务远端页面，说明重定位路径可用、端口不一致对面板可见；
+- `hosts.json` 里没有多出 `forwards` 键；
+- `disconnect` 释放全部本地端口并清空状态行。
+
+更早一次针对改前设计的运行记录了传输层本身（转发能取到远端页面、WebSocket 存活、原生侧栏浏览器能渲染它，
+以及 `autoProvision: false` 未触碰远端 agent 的版本与 pid）。两次运行都没有观测到的只有浏览器侧的点击：
+处理器由 `test/link-forwarding.test.ts` 覆盖，而在真实转录里驱动它需要在运行中的 GUI 里有一个镜像会话。
 
 若要确认某条结论，最小的复现路径是 `./scripts/test-sandbox.sh` 起隔离环境，再按
 [docs/testing.md](testing.md) 的可见性约定跑一次集成用例。

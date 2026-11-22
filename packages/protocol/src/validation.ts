@@ -78,6 +78,8 @@ function isHostInfo(value: unknown): value is HostInfo {
     && (value.modelBaseUrl === undefined || value.modelBaseUrl === null || isString(value.modelBaseUrl))
     && (value.modelKeyConfigured === undefined || typeof value.modelKeyConfigured === 'boolean')
     && (value.modelKeyFingerprint === undefined || value.modelKeyFingerprint === null || isString(value.modelKeyFingerprint))
+    && (value.modelRouteIds === undefined
+      || (Array.isArray(value.modelRouteIds) && value.modelRouteIds.every(isString)))
 }
 
 function isApprovalRequest(value: unknown): value is RemoteApprovalRequest {

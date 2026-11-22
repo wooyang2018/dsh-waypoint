@@ -61,31 +61,19 @@ export interface HostRecord {
    * older builds behaving exactly as they did.
    */
   readonly modelSource?: ModelSource | null
-  /**
-   * Remote loopback ports the user asked to publish on local loopback.
-   *
-   * This is the DESIRED set and it is durable, because a dev server is still at
-   * the same port after a DSH restart. `localPort` records the port actually
-   * bound, so a restart reuses it instead of landing somewhere new; `null` means
-   * "use the same number as the remote, or an ephemeral one when it is busy".
-   *
-   * Absent means none, which keeps records written by older builds loading
-   * unchanged and keeps the on-disk schema at version 1.
-   */
-  readonly forwards?: readonly PortForwardRequest[]
   readonly autoConnect: boolean
   readonly createdAt: string
   readonly updatedAt: string
 }
 
-/** One requested forward, as stored on the host record. */
-export interface PortForwardRequest {
-  readonly remotePort: number
-  /** Local loopback port to bind; `null`/absent prefers the remote number. */
-  readonly localPort?: number | null
-}
-
-/** Actual state of one requested forward. */
+/**
+ * One remote loopback port published on local loopback.
+ *
+ * This is runtime state, not a request: the published set is memory-only and is
+ * rebuilt by the click that needs it (see `RemoteHostsService.publishPort`).
+ * Nothing about it is durable, which is why the host record carries no
+ * counterpart of this type.
+ */
 export interface PortForwardRuntime {
   readonly remotePort: number
   /** Bound local port, or null while it is not listening. */
@@ -139,7 +127,7 @@ export interface HostRuntime {
   readonly dshUpdate: DshUpdate | null
   /** Set while an automatic reconnect is scheduled. */
   readonly retry: HostRetry | null
-  /** Bound loopback forwards, one per requested remote port. */
+  /** Published loopback forwards, one per remote port currently reachable. */
   readonly forwards: readonly PortForwardRuntime[]
 }
 
@@ -183,7 +171,7 @@ export interface HostView {
   readonly dshUpdate: DshUpdate | null
   /** Set while an automatic reconnect is scheduled. */
   readonly retry: HostRetry | null
-  /** Bound loopback forwards, one per requested remote port. */
+  /** Published loopback forwards, one per remote port currently reachable. */
   readonly forwards: readonly PortForwardRuntime[]
 }
 

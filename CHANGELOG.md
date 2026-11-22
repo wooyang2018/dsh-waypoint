@@ -1,6 +1,64 @@
 # Changelog
 
+## 1.2.0
+
+### Added
+
+- **Proxy mode now offers this machine's models on the remote host.** A host using **本地 Key 代理**
+  used to advertise exactly one provider, derived from `DEEPSEEK_BASE_URL`, so a Session mirrored from
+  that host could only pick a DeepSeek model even though every request was already arriving locally.
+  The local `llm-pi-ai` providers are now projected onto the remote: each one keeps its own `api`,
+  models, compatibility settings and headers, is published at `<proxy>/p/<provider-id>`, and reaches its
+  own configured endpoint with its own key. Nothing is translated between wire protocols — the remote
+  speaks the dialect its own profile names, to the endpoint that profile names.
+- **`ModelCredentialProxy` takes a route table instead of one upstream.** A route with an empty id is the
+  catch-all that keeps the DeepSeek path byte-for-byte identical; a named route answers `/p/<id>/…` and
+  uses its own upstream base path and key. An unknown `/p/<id>` answers `404` and contacts no upstream,
+  because falling back to another provider would bill the wrong account and return another vendor's
+  answer.
+- **`mirrorLocalProviders` / `mirrorProviderIds`.** The first turns the projection off (default `true`);
+  the second publishes a subset. A provider with no `apiKeyEnv` — OAuth or cloud-metadata auth — has no
+  key to forward and is skipped with a warning rather than given an invented one.
+- **`HostInfo.modelRouteIds`.** The remote reports the provider routes its live `llm` registry
+  resolves, so a refused or ignored overlay is visible as a different set instead of as a prompt failing
+  later. The field is optional, so `PROTOCOL_VERSION` stays `1` and an older agent keeps working.
+
+### Changed
+
+- **The installer writes a profile overlay and passes it to `dsh web`.** The projection is rendered as a
+  patch list (`$DSH_HOME/waypoint-agent/model-routes.json`) and added to the systemd unit and the nohup
+  launcher as `--patch`. It is JSON — a subset of YAML 1.2, so a valid patch list — because hand-building
+  YAML would have to escape display names, descriptions and arbitrary headers, and the first missed case
+  would corrupt a provider instead of failing loudly. It reaches the host base64-encoded so no
+  operator-authored byte can be read as shell syntax. An empty projection removes a previously written
+  file, which is what switching a host back to direct mode needs.
+- **A proxied host stops offering providers configured on the remote itself.** A patch layer replaces a
+  row's whole `config` rather than merging into it, which is what makes "the remote list is the local
+  list" true. `mirrorLocalProviders: false` restores the previous behaviour.
+
 ## 1.1.1
+
+### Changed
+
+- **Publishing a dev-server port is now a click.** Settings → **Remote development** → **Remote ports**
+  is gone, along with `remote_port_forward`, `remote_ports_list` and `remote_port_forward_remove`. In a
+  Session mirrored from a remote host, clicking a loopback address in the transcript publishes that port
+  on local loopback and opens the page in the sidebar Browser tab. A forward only makes sense on the
+  machine holding the SSH connection — the same machine that draws the browser — so the tool family could
+  never be called by the Session that needs the port, and the remote agent has no route to create one.
+- **The published set is memory-only.** `HostRecord` no longer carries `forwards`, and a registry written
+  by an earlier build still loads because the field is ignored rather than validated. A restart or a
+  reconnect clears the set and the next click republishes, so there are no rows left for a user who no
+  longer remembers asking. The host's expanded row in Settings lists what is currently published, which
+  is also where a refused bind explains itself.
+- **One `ssh` child per published port**, instead of one per host carrying every `-L`. A running `ssh`
+  cannot gain a `-L`, so the old shape restarted the first port's child whenever a second was published,
+  dropping any page already reading through it. That was tolerable when publishing was a deliberate visit
+  to a card; it is not when it happens during ordinary use.
+- **`host/ports` and `host/ports/remove` are gone**; `host/ports/add` became `host/ports/publish`, which
+  takes no local port and answers with one row. `parseLoopbackUrl` accepts a scheme-less `localhost:5173`
+  as well as `http://…`, because `new URL('localhost:5173')` parses as scheme `localhost:` with an empty
+  host and a base argument does not change that.
 
 ### Fixed
 

@@ -17,6 +17,7 @@ import { createHostsApi } from './api.ts'
 import { RemoteDevelopmentPanel } from './RemoteDevelopmentPanel.tsx'
 import { installNativeWorkspaceRouting } from './routing.ts'
 import { installModelCatalogMerge } from './model-catalog-merge.ts'
+import { installLoopbackLinkRouting } from './link-forwarding.ts'
 import { NS, en, zh, type LocaleFace } from './locale.ts'
 import { installWorkspaceAddMenu } from './workspace-add.ts'
 import { installWorkspaceDeleteCopy } from './workspace-delete-copy.ts'
@@ -93,6 +94,7 @@ export function apply(ctx: Context): void {
   }, 'dsh-waypoint: reveal promoted draft')
   installNativeWorkspaceRouting(ctx, api, t)
   installWorkspaceAddMenu(ctx, api, t)
+  installLoopbackLinkRouting(ctx, api, t)
   ctx.effect(() => installWorkspaceDeleteCopy(api), 'dsh-waypoint: mirrored workspace delete copy')
   // No client-side workspace-files proxy: the Host's Typert Gateway resolves a
   // Remote method with `Reflect.get(receiver, method)` on every call, so the

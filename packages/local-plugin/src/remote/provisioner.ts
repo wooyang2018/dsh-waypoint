@@ -76,6 +76,8 @@ export class RemoteProvisioner {
     options: {
       readonly modelBaseUrl?: string
       readonly modelApiKey?: string
+      /** Profile overlay publishing this machine's provider list on the remote. */
+      readonly modelRoutes?: string
       /** Install a specific DSH runtime instead of the configured/local default. */
       readonly dshVersion?: string
       /** Replace an existing DSH installation (manual remote upgrade). */
@@ -120,6 +122,7 @@ export class RemoteProvisioner {
         timeoutMs: this.#config.provisionTimeoutMs,
         ...options.modelBaseUrl === undefined ? {} : { modelBaseUrl: options.modelBaseUrl },
         ...options.modelApiKey === undefined ? {} : { modelApiKey: options.modelApiKey },
+        ...options.modelRoutes === undefined ? {} : { modelRoutes: options.modelRoutes },
         verbose: false,
         ...proxyUrl === undefined ? {} : {
           proxyUrl,

@@ -1,6 +1,6 @@
 {
   "name": "dsh-waypoint-agent",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "DSH remote agent: loopback HTTP/SSE companion the dsh-waypoint plugin installs on an SSH host.",
   "keywords": [
     "dsh",

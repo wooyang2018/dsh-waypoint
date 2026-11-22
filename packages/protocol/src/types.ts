@@ -72,6 +72,16 @@ export interface HostInfo {
   readonly modelKeyConfigured?: boolean
   /** SHA-256 of the configured model key, used only to detect drift; never the key itself. */
   readonly modelKeyFingerprint?: string | null
+  /**
+   * Provider routes this host can currently resolve, as its own registry reports
+   * them.
+   *
+   * The local plugin compares this against the list it published: a host whose
+   * overlay did not take effect (an older `dsh web`, a hand-edited profile)
+   * reports a different set, which is what a missing provider looks like before
+   * a prompt fails. Absent on agents that predate the field.
+   */
+  readonly modelRouteIds?: readonly string[]
 }
 
 /** Closed approval outcomes understood by the remote and local approval seams. */

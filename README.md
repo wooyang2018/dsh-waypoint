@@ -29,7 +29,7 @@ This plugin is developed for the **official DSH Desktop application**. Supported
 | Component | Version |
 |---|---|
 | [DSH Desktop / official client](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested) |
-| Plugin | [**1.1.1**](https://www.npmjs.com/package/dsh-waypoint) |
+| Plugin | [**1.2.0**](https://www.npmjs.com/package/dsh-waypoint) |
 | Remote DSH runtime | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested; new installs follow the local DSH version) |
 | Remote Node.js | [**22.19+**](https://nodejs.org/en/download) (one-click nvm + latest LTS install from the host card) |
 | Remote OS | Linux or macOS |
@@ -85,7 +85,7 @@ If npmjs.com still resolves an older `latest` tag for a newly published release,
 current version instead:
 
 ```text
-dsh-waypoint@1.1.1
+dsh-waypoint@1.2.0
 ```
 
 Keep this pinned version in sync with each release.
@@ -222,34 +222,35 @@ host uses its own.
 | `remote_session_prompt` | Send a prompt |
 | `remote_session_snapshot` | Read a transcript page |
 | `remote_session_cancel` | Cancel the active turn |
-| `remote_port_forward` | Publish a remote dev-server port and return its URL |
-| `remote_ports_list` | Published ports and their URLs |
-| `remote_port_forward_remove` | Stop publishing one port |
 
 `remote_host_add`, `remote_host_connect`, `remote_host_provision`, and `remote_host_restart` ask for
 approval before they run: they may open an SSH connection, and in direct-key mode provisioning copies
 the local model key into the remote service environment. `remote_host_restart` requires the
 installer-owned systemd user unit; a `nohup` deployment uses **Reinstall** or a manual restart instead.
 
-The three `remote_port_*` tools are deliberately **not** gated: a forward copies no credential, and it
-opens nothing beyond a `127.0.0.1` listener on this machine. They exist so an agent that starts a dev
-server can hand back a link that works, instead of a `localhost` address that resolves here.
+There is deliberately no tool for publishing a port. A forward only makes sense for the machine
+holding the SSH connection, which is the one drawing the browser, so it is initiated by a click rather
+than by an agent (see below).
 
 ### Previewing a remote dev server
 
 The right-sidebar browser renders pages on **your** machine, so `http://localhost:5173` typed into it
-looks for a server here, not on the remote host. Settings → **Remote development** → **Remote ports**
-publishes a remote loopback port on this machine's loopback:
+looks for a server here, not on the remote host. In a Session mirrored from a remote host, **clicking a
+loopback address in the transcript** is all it takes: the plugin publishes that port on local loopback
+and opens the page in the Browser tab beside the conversation.
 
-1. Start the dev server on the remote host, bound to its loopback (Vite's default `localhost:5173`).
-2. Enter that port in **Remote ports** and press **Add port**.
-3. Press **Open in sidebar**. The page loads in the Browser tab beside the conversation.
+Recognized addresses are `127.0.0.1`, `localhost`, `[::1]`, and `0.0.0.0`, with an explicit port, as
+`http://…` or as a bare `localhost:5173`. A link to a non-loopback host is left alone — the remote end
+of every forward is the literal `127.0.0.1`, so a `192.168.x.x` address cannot be served.
 
 The same port number is preferred, so a dev server's own absolute links keep working. When that number
-is already taken here, an ephemeral port is used instead and the card warns that absolute URLs naming the
-original port will break — serve relative paths or set the dev server's base/origin. HMR works because
-the forward carries raw TCP, WebSocket included. An explicitly chosen local port that is busy is reported
-as an error rather than silently moved.
+is already taken here, an ephemeral port is used and the host's row in Settings warns that absolute URLs
+naming the original port will break — serve relative paths or set the dev server's base/origin. HMR
+works because the forward carries raw TCP, WebSocket included.
+
+Published ports live in memory only. They survive neither a DSH restart nor a host reconnect, and they
+do not accumulate rows you have to clean up: the next click republishes. The host's expanded row in
+Settings lists what is currently published, which is also where a refused bind explains itself.
 
 ## Requirements
 
@@ -334,7 +335,8 @@ remote model requests use it as well, not just the installer.
     mirrorPollMs: 1500
     mirrorMaxEvents: 2000
 
-    # Publish remote dev-server ports on local loopback for the sidebar browser.
+    # Master switch for click-to-forward of dev-server ports. `false` makes a
+    # loopback link in a mirrored Session navigate normally instead.
     portForwarding: true
 ```
 
@@ -394,7 +396,7 @@ The remote agent config remains available for advanced deployments:
 | Remote DSH stopped starting after you switched Node.js versions | An nvm/Volta switch moves the npm global prefix with it, so the service's baked-in `dsh` path no longer exists. Click **Reinstall**; `dsh-waypoint-install doctor --target …` reports `global_dsh` and `login_path_has_dsh` |
 | Remote agent port jumps around or the host keeps disconnecting | Two `dsh web` processes are writing the same `agent.json`. Run one per `DSH_HOME`; `doctor` reports `dsh_web_processes` |
 | A published port says `error: local port N is already in use` | Something else on this machine holds that number. Clear the **Local port** field to let the plugin pick another one, or stop the other process |
-| The forwarded page loads but its assets 404 | The local port differs from the remote one, so absolute URLs naming the remote port do not resolve. Serve relative paths or set the dev server's base/origin, or free the remote number locally and add it again |
+| The forwarded page loads but its assets 404 | The local port differs from the remote one, so absolute URLs naming the remote port do not resolve. Serve relative paths or set the dev server's base/origin, or free the remote number locally and click the link again |
 
 Remote logs: `journalctl --user -u dsh-waypoint-agent -f` or `$DSH_HOME/waypoint-agent/web.log`.
 

@@ -204,6 +204,60 @@ describe('bootstrap rendering', () => {
     assert.match(unit, /Environment="PATH=\$DSH_PREFIX\/bin:\$DSH_NODE_BIN_DIR:.*:\$PATH"/)
     assert.match(unit, /Environment="DSH_WAYPOINT_DSH_VERSION=\$DSH_VERSION"/)
     assert.match(unit, /ExecStart="\$DSH_BIN" web --host 127\.0\.0\.1 --port \$PORT --no-open/)
+    // Without a provider overlay the command stays exactly as it was: a host
+    // that mirrors nothing must not gain an argument that could fail to load.
+    assert.equal(unit.includes('--patch'), false)
+  })
+
+  it('passes the provider overlay to the unit and the nohup launcher', () => {
+    const overlay = '[{"id":"llm-pi-ai","config":{"providers":{}}}]\n'
+    const unit = renderSystemdUnit({
+      profile: 'web',
+      port: 8080,
+      dshHome: '$HOME/.dsh',
+      dshVersion: '0.2.1-rc.2',
+      pnpmVersion: '11.21.0',
+      start: 'systemd',
+      agentTarball: '/tmp/agent.tgz',
+      modelRoutes: overlay,
+    })
+    assert.match(
+      unit,
+      /ExecStart="\$DSH_BIN" web --host 127\.0\.0\.1 --port \$PORT --no-open --patch "\$DSH_HOME\/waypoint-agent\/model-routes\.json"/,
+    )
+    const script = renderBootstrapScript({
+      profile: 'web', port: 0, dshHome: '/srv/dsh',
+      dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', start: 'nohup',
+      agentTarball: '/tmp/a.tgz', modelRoutes: overlay,
+    })
+    assert.match(script, /--no-open --patch "\$DSH_HOME\/waypoint-agent\/model-routes\.json"/)
+  })
+
+  it('carries the overlay as base64 so no provider text reaches shell syntax', () => {
+    // A display name is operator-authored and may contain anything; a quoting
+    // bug here would execute part of a provider name on the remote host.
+    const overlay = '[{"id":"llm-pi-ai","config":{"providers":{"x":{"displayName":"$(touch /tmp/pwned) `id`"}}}}]'
+    const script = renderBootstrapScript({
+      profile: 'web', port: 0, dshHome: '/srv/dsh',
+      dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', start: 'nohup',
+      agentTarball: '/tmp/a.tgz', modelRoutes: overlay,
+    })
+    assert.equal(script.includes('$(touch'), false, 'the payload must not appear verbatim')
+    assert.equal(script.includes('touch /tmp/pwned'), false)
+    const encoded = Buffer.from(overlay, 'utf8').toString('base64')
+    assert.ok(script.includes(encoded), 'it must travel as base64')
+    assert.match(script, /base64 -d > "\$MODEL_ROUTES_FILE"/)
+  })
+
+  it('removes a stale overlay when nothing is published', () => {
+    const script = renderBootstrapScript({
+      profile: 'web', port: 0, dshHome: '/srv/dsh',
+      dshVersion: '0.2.1-rc.2', pnpmVersion: '11.21.0', start: 'nohup',
+      agentTarball: '/tmp/a.tgz',
+    })
+    // Switching a host back to direct mode has to clear the file, or the next
+    // start would keep publishing providers the user just disabled.
+    assert.match(script, /rm -f "\$MODEL_ROUTES_FILE"/)
   })
 
   it('renders proxy env only when configured', () => {    const script = renderBootstrapScript({

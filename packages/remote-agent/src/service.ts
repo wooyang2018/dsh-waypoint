@@ -183,6 +183,28 @@ export class RemoteAgentService {
       modelKeyFingerprint: process.env.DEEPSEEK_API_KEY === undefined || process.env.DEEPSEEK_API_KEY === ''
         ? null
         : createHash('sha256').update(process.env.DEEPSEEK_API_KEY).digest('hex'),
+      modelRouteIds: this.#modelRouteIds(),
+    }
+  }
+
+  /**
+   * Provider routes this host can resolve right now.
+   *
+   * Read from the live registry rather than from the overlay this host was
+   * started with: the point is to tell the caller what actually took effect, so
+   * a rejected or ignored overlay shows up as a different set instead of as a
+   * prompt failing later. A host without the `llm` service reports an empty
+   * list, which the caller treats as "not reported".
+   */
+  #modelRouteIds(): readonly string[] {
+    try {
+      const llm = (this.ctx as unknown as { get(name: string): unknown }).get('llm') as
+        | { listProviders(): readonly { id: string }[] }
+        | undefined
+      if (llm === undefined) return []
+      return llm.listProviders().map(provider => provider.id)
+    } catch {
+      return []
     }
   }
 

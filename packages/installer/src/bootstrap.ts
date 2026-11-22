@@ -43,6 +43,14 @@ export interface BootstrapOptions {
   readonly modelBaseUrl?: string
   /** Placeholder key for the local credential proxy; never the real key. */
   readonly modelApiKey?: string
+  /**
+   * Profile overlay publishing this machine's provider list on the remote.
+   *
+   * Written beside the agent state and passed to `dsh web` as `--patch`, so the
+   * remote offers the providers this machine runs while every request still
+   * comes back over the tunnel. Absent leaves the remote's own catalog alone.
+   */
+  readonly modelRoutes?: string
   /** HTTP(S) proxy used by the remote installer. */
   readonly proxyUrl?: string
   /** Comma-separated proxy bypass list. */
@@ -86,7 +94,7 @@ export function renderSystemdUnit(options: BootstrapOptions): string {
     'Environment="DSH_WAYPOINT_DSH_VERSION=$DSH_VERSION"',
     ...options.modelBaseUrl === undefined ? [] : ['Environment="DEEPSEEK_BASE_URL=$MODEL_BASE_URL"'],
     ...options.modelApiKey === undefined ? [] : ['Environment="DEEPSEEK_API_KEY=$MODEL_API_KEY"'],
-    'ExecStart="$DSH_BIN" web --host 127.0.0.1 --port $PORT --no-open',
+    `ExecStart="$DSH_BIN" web --host 127.0.0.1 --port $PORT --no-open${options.modelRoutes === undefined ? '' : ' --patch "$DSH_HOME/waypoint-agent/model-routes.json"'}`,
     'Restart=always',
     'RestartSec=3',
     'WorkingDirectory=$DSH_HOME',
@@ -326,6 +334,10 @@ export function renderBootstrapScript(options: BootstrapOptions): string {
   if (options.globalPrefix !== undefined) assertConfigSafe(options.globalPrefix, 'globalPrefix')
   if (options.modelBaseUrl !== undefined) assertConfigSafe(options.modelBaseUrl, 'modelBaseUrl')
   if (options.modelApiKey !== undefined) assertConfigSafe(options.modelApiKey, 'modelApiKey')
+  // `modelRoutes` is deliberately not passed through assertConfigSafe: it is
+  // arbitrary operator-authored YAML/JSON that may legitimately contain
+  // newlines and punctuation, and it never reaches the script as text — it is
+  // base64-encoded into the MODEL_ROUTES_B64 assignment below.
   if (options.proxyUrl !== undefined) assertConfigSafe(options.proxyUrl, 'proxyUrl')
   if (options.noProxy !== undefined) assertConfigSafe(options.noProxy, 'noProxy')
   const startBlock = renderStartBlock(options)
@@ -345,6 +357,7 @@ AGENT_TARBALL=${shellLiteral(options.agentTarball)}
 GLOBAL_PREFIX=${options.globalPrefix === undefined || options.globalPrefix.trim() === '' ? "''" : shellLiteral(options.globalPrefix.trim())}
 MODEL_BASE_URL=${options.modelBaseUrl === undefined ? "''" : shellLiteral(options.modelBaseUrl)}
 MODEL_API_KEY=${options.modelApiKey === undefined ? "''" : shellLiteral(options.modelApiKey)}
+MODEL_ROUTES_FILE="$DSH_HOME/waypoint-agent/model-routes.json"
 PROXY_URL=${options.proxyUrl === undefined ? "''" : shellLiteral(options.proxyUrl)}
 PROXY_NO_PROXY=${options.noProxy === undefined ? "''" : shellLiteral(options.noProxy)}
 STATE_FILE="$DSH_HOME/waypoint-agent/agent.json"
@@ -353,6 +366,18 @@ WAIT_FOR_STATE=${options.start === 'none' ? 0 : 1}
 export DSH_HOME
 mkdir -p "$DSH_HOME/waypoint-agent"
 echo "dsh-waypoint: preparing remote install"
+# The provider overlay is carried as base64 so no byte of a provider display
+# name, header value or model description can be read as shell syntax. An empty
+# value removes a previously written overlay, which is what switching a host
+# back to direct mode has to do.
+MODEL_ROUTES_B64=${options.modelRoutes === undefined ? "''" : shellLiteral(Buffer.from(options.modelRoutes, 'utf8').toString('base64'))}
+if [ -n "$MODEL_ROUTES_B64" ]; then
+  printf '%s' "$MODEL_ROUTES_B64" | base64 -d > "$MODEL_ROUTES_FILE"
+  chmod 600 "$MODEL_ROUTES_FILE"
+  echo "dsh-waypoint: wrote provider overlay"
+else
+  rm -f "$MODEL_ROUTES_FILE"
+fi
 if [ -z "$PROXY_URL" ]; then
   # Reuse a proxy already configured by the account's actual login shell.
   LOGIN_SHELL="\${SHELL:-}"
@@ -636,6 +661,9 @@ function renderNohup(options: BootstrapOptions): string {
   const modelEnv = options.modelBaseUrl === undefined
     ? ''
     : `DEEPSEEK_BASE_URL="$MODEL_BASE_URL" DEEPSEEK_API_KEY="$MODEL_API_KEY" `
+  const patchArgs = options.modelRoutes === undefined
+    ? ''
+    : ' --patch "$DSH_HOME/waypoint-agent/model-routes.json"'
   return `if [ -f "$DSH_HOME/waypoint-agent/web.pid" ]; then
   kill "$(cat "$DSH_HOME/waypoint-agent/web.pid")" 2>/dev/null || true
 fi
@@ -643,7 +671,7 @@ echo "dsh-waypoint: starting dsh web under nohup"
 # $DSH_NODE_BIN_DIR is explicit because dsh runs under a "#!/usr/bin/env node"
 # shebang, and a non-login SSH session need not have that directory on PATH.
 ${modelEnv}DSH_WAYPOINT_DSH_VERSION="$DSH_VERSION" PATH="$DSH_PREFIX/bin:$DSH_NODE_BIN_DIR:$PATH" \\
-  nohup "$DSH_BIN" web --host 127.0.0.1 --port "$PORT" --no-open > "$DSH_HOME/waypoint-agent/web.log" 2>&1 &
+  nohup "$DSH_BIN" web --host 127.0.0.1 --port "$PORT" --no-open${patchArgs} > "$DSH_HOME/waypoint-agent/web.log" 2>&1 &
 echo $! > "$DSH_HOME/waypoint-agent/web.pid"
 echo "dsh-waypoint: started dsh web under nohup (pid $(cat "$DSH_HOME/waypoint-agent/web.pid"))"`
 }

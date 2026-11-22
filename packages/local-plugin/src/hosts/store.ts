@@ -11,8 +11,7 @@ import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promise
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isHostId } from './id.ts'
-import { MAX_FORWARDS, MIN_LOCAL_PORT, isPortNumber } from '../ssh/forward.ts'
-import type { HostRecord, PortForwardRequest } from './types.ts'
+import type { HostRecord } from './types.ts'
 
 /** Current on-disk schema version. */
 export const HOST_STORE_VERSION = 1
@@ -48,39 +47,12 @@ export function isHostRecord(value: unknown): value is HostRecord {
     // source, so a hand-edited registry cannot introduce a third state.
     && (record.modelSource === undefined || record.modelSource === null
       || record.modelSource === 'proxy' || record.modelSource === 'direct')
-    && isForwardRequestList(record.forwards)
+    // A record written by an older build may still carry a `forwards` array.
+    // Nothing reads it: the published set is memory-only now, so the field is
+    // ignored rather than rejected, and no schema migration is needed.
     && typeof record.autoConnect === 'boolean'
     && typeof record.createdAt === 'string'
     && typeof record.updatedAt === 'string'
-}
-
-/**
- * Whether a value is a well-formed requested-forward list.
- *
- * The record is the authority for which ports are published, so a malformed
- * entry has to fail the whole record rather than be repaired: a forward that
- * silently changed its remote port would publish a different service than the
- * one the user asked for.
- */
-export function isForwardRequestList(value: unknown): value is readonly PortForwardRequest[] | undefined {
-  if (value === undefined) return true
-  if (!Array.isArray(value)) return false
-  if (value.length > MAX_FORWARDS) return false
-  const remotes = new Set<number>()
-  const locals = new Set<number>()
-  for (const entry of value) {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false
-    const forward = entry as Record<string, unknown>
-    if (!isPortNumber(forward.remotePort)) return false
-    if (forward.localPort !== undefined && forward.localPort !== null) {
-      if (!isPortNumber(forward.localPort) || forward.localPort < MIN_LOCAL_PORT) return false
-      if (locals.has(forward.localPort)) return false
-      locals.add(forward.localPort)
-    }
-    if (remotes.has(forward.remotePort)) return false
-    remotes.add(forward.remotePort)
-  }
-  return true
 }
 
 /** Serialized host registry. */

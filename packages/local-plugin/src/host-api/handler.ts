@@ -21,13 +21,11 @@ import { listRemoteDirectories } from '../remote/directory.ts'
 import { listLocalDirectories } from '../remote/local-directory.ts'
 import {
   HOST_API_PATH,
-  type ForwardsResult,
   type HostApiEndpoint,
   type HostApiRequest,
   type HostApiResult,
   type HostApiValues,
 } from './contract.ts'
-import { forwardUrl } from '../hosts/types.ts'
 
 /** Register the route; returns its asynchronous disposer. */
 export function registerHostApi(
@@ -263,24 +261,11 @@ async function dispatch(
     }
     case 'host/web-url':
       return service.webUrl(requireStringField(payload, 'hostId'))
-    case 'host/ports':
-      return forwardsResult(service, requireStringField(payload, 'hostId'))
-    case 'host/ports/add': {
+    case 'host/ports/publish': {
       const body = requireRecord(payload)
       const hostId = requireStringField(body, 'hostId')
-      await service.addForward(hostId, {
-        remotePort: requireNumberField(body, 'remotePort'),
-        ...optionalNumberField(body, 'localPort') === undefined
-          ? {}
-          : { localPort: optionalNumberField(body, 'localPort') },
-      })
-      return forwardsResult(service, hostId)
-    }
-    case 'host/ports/remove': {
-      const body = requireRecord(payload)
-      const hostId = requireStringField(body, 'hostId')
-      await service.removeForward(hostId, requireNumberField(body, 'remotePort'))
-      return forwardsResult(service, hostId)
+      const forward = await service.publishPort(hostId, requireNumberField(body, 'remotePort'))
+      return { forward }
     }
     case 'host/model-catalog':
       return service.modelCatalog(requireStringField(payload, 'hostId'))
@@ -406,23 +391,6 @@ function jsonResult(result: HostApiResult<unknown>): Response {
     status: 200,
     headers: { 'cache-control': 'no-store' },
   })
-}
-
-/**
- * Project the forward rows into the shape the Settings card loads.
- *
- * The URL is resolved here, not in the browser, so the client never has to know
- * that the address must be `127.0.0.1` rather than `localhost`; that distinction
- * is the whole reason `forwardUrl` exists.
- */
-function forwardsResult(service: RemoteHostsService, hostId: string): ForwardsResult {
-  const forwards = service.forwards(hostId)
-  return {
-    forwards,
-    urls: forwards
-      .filter((forward): forward is typeof forward & { localPort: number } => forward.localPort !== null)
-      .map(forward => ({ remotePort: forward.remotePort, localPort: forward.localPort, url: forwardUrl(forward.localPort) })),
-  }
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {

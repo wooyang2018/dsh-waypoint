@@ -24,7 +24,12 @@ describe('model credential proxy', () => {
     await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', () => resolve()))
     const address = upstream.address() as { port: number }
     upstreamUrl = `http://127.0.0.1:${address.port}`
-    proxy = new ModelCredentialProxy({ apiKey: KEY, upstreamBaseUrl: `${upstreamUrl}/anthropic`, isTokenValid: token => token === PROXY_TOKEN })
+    proxy = new ModelCredentialProxy({
+      // One catch-all route is the pre-multi-provider behaviour: a host whose
+      // environment names only DeepSeek keeps exactly the path it had before.
+      routes: [{ id: '', upstreamBaseUrl: `${upstreamUrl}/anthropic`, apiKey: KEY }],
+      isTokenValid: token => token === PROXY_TOKEN,
+    })
     proxyUrl = (await proxy.start()).baseUrl
   })
 

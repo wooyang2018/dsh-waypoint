@@ -636,74 +636,39 @@
 /* The connected agent is older than this build. */
 .dshwp-agent-outdated { color: var(--dshwp-warning); }
 
-/* Published remote ports. One row per requested port: dot, mapping, URL, actions. */
-.dshwp-ports {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 8px 0;
-  padding: 0;
-  list-style: none;
-}
-
-.dshwp-port-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid var(--dshwp-border);
-  border-radius: var(--dshwp-radius);
-}
-
-.dshwp-port-row .dshwp-dot {
-  margin-top: 3px;
-}
-
-.dshwp-port-main {
+/* Ports published by clicking a loopback link in a mirrored Session. Read-only:
+   the row states which ports are up, and nothing here can add or remove one. */
+.dshwp-forward-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  flex: 1;
-  min-width: 0;
 }
 
-.dshwp-port-map {
+.dshwp-forward {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dshwp-forward .dshwp-dot {
+  align-self: center;
+}
+
+.dshwp-forward-map {
   font-size: 12px;
   color: var(--dshwp-label);
 }
 
-/* The address the user copies: selectable, and never wrapped mid-host. */
-.dshwp-port-url {
-  font-size: 11px;
-  color: var(--dshwp-label-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.dshwp-port-error {
+.dshwp-forward-error {
   font-size: 11px;
   color: var(--dshwp-danger);
 }
 
 /* Only shown when the local and remote port numbers differ. */
-.dshwp-port-warn {
+.dshwp-forward-warn {
   font-size: 11px;
   color: var(--dshwp-warning);
-}
-
-.dshwp-port-actions {
-  display: flex;
-  gap: 4px;
-  flex: none;
-}
-
-/* Host picker above the list when more than one host is connected. */
-.dshwp-port-hosts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin: 8px 0 4px;
 }
 
 /* The row is the disclosure control now: tint it when open so the expanded

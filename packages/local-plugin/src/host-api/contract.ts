@@ -49,9 +49,7 @@ export type HostApiEndpoint =
   | 'host/session/prompt'
   | 'host/session/cancel'
   | 'host/web-url'
-  | 'host/ports'
-  | 'host/ports/add'
-  | 'host/ports/remove'
+  | 'host/ports/publish'
   | 'host/model-catalog'
   | 'host/session/mirror'
   | 'host/session/model'
@@ -153,19 +151,15 @@ export interface WebUrlResult {
   readonly url: string
 }
 
-/** One published remote port, with the address the sidebar browser loads. */
-export interface ForwardedPort {
-  readonly remotePort: number
-  readonly localPort: number
-  /** `http://127.0.0.1:<localPort>/` — the value to open in the browser. */
-  readonly url: string
-}
-
-/** Result of listing, adding, or removing port forwards for one host. */
-export interface ForwardsResult {
-  readonly forwards: readonly PortForwardRuntime[]
-  /** Only the listening rows, pre-resolved into loadable URLs. */
-  readonly urls: readonly ForwardedPort[]
+/** Result of publishing one remote loopback port. */
+export interface PublishPortResult {
+  /**
+   * The row for that port, `listening` or `error`.
+   *
+   * A failed bind is an ordinary answer rather than a request error: the click
+   * that asked for it shows the reason instead of an unhandled rejection.
+   */
+  readonly forward: PortForwardRuntime
 }
 
 /**
@@ -239,9 +233,7 @@ export interface HostApiPayloads {
   }
   'host/session/cancel': { hostId: string; sessionId: string }
   'host/web-url': { hostId: string }
-  'host/ports': { hostId: string }
-  'host/ports/add': { hostId: string; remotePort: number; localPort?: number }
-  'host/ports/remove': { hostId: string; remotePort: number }
+  'host/ports/publish': { hostId: string; remotePort: number }
   'host/model-catalog': { hostId: string }
   'host/session/mirror': { localSessionId: string }
   'host/session/model': {
@@ -292,9 +284,7 @@ export interface HostApiValues {
   'host/session/prompt': AcceptedResult
   'host/session/cancel': AcceptedResult
   'host/web-url': WebUrlResult
-  'host/ports': ForwardsResult
-  'host/ports/add': ForwardsResult
-  'host/ports/remove': ForwardsResult
+  'host/ports/publish': PublishPortResult
   'host/model-catalog': ModelCatalogResult
   'host/session/mirror': MirrorTarget
   'host/session/model': AcceptedResult

@@ -27,7 +27,7 @@
 | 组件 | 版本 |
 |---|---|
 | [DSH Desktop / 官方客户端](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)（已测试） |
-| 插件 | [**1.1.1**](https://www.npmjs.com/package/dsh-waypoint) |
+| 插件 | [**1.2.0**](https://www.npmjs.com/package/dsh-waypoint) |
 | 远端 DSH 运行时 | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)（已测试；新安装跟随本机 DSH 版本） |
 | 远端 Node.js | [**22.19+**](https://nodejs.org/en/download)（可在主机卡片一键安装 nvm + 最新 LTS） |
 | 远端操作系统 | Linux 或 macOS |
@@ -77,7 +77,7 @@ DSH 会从 npm 安装 bundle。这个包已经包含远端 agent 资源，不需
 如果 npmjs.com 对刚发布版本的 `latest` 解析仍旧滞后，可以改为安装当前的精确版本：
 
 ```text
-dsh-waypoint@1.1.1
+dsh-waypoint@1.2.0
 ```
 
 每次发新版本时同步更新这个版本号。
@@ -182,23 +182,20 @@ $DSH_HOME/waypoint/test-visibility.json
 | `remote_session_prompt` | 发送 prompt |
 | `remote_session_snapshot` | 读取一页转录 |
 | `remote_session_cancel` | 取消当前 turn |
-| `remote_port_forward` | 发布一个远端 dev server 端口并返回 URL |
-| `remote_ports_list` | 已发布的端口与 URL |
-| `remote_port_forward_remove` | 停止发布某个端口 |
 
 主机写操作（`remote_host_add`、`remote_host_connect`、`remote_host_provision`、`remote_host_restart`）会走 DSH approval UI：它们可能发起 SSH 连接，直连模式下安装还会把本机模型 key 写入远端服务环境。`remote_host_restart` 依赖安装器创建的 systemd user unit；`nohup` 部署请改用**重新安装**或手动重启。`remote_host_add` 默认不自动连接。
 
-三个 `remote_port_*` 工具**刻意不**走 approval：端口转发不复制任何凭据，也只在本机开一个 `127.0.0.1` 监听。它们存在是为了让刚在远端起了 dev server 的 agent 能直接给出一个可用的链接，而不是一个在本机解析的 `localhost` 地址。
+这里**刻意没有**发布端口的工具。转发只有对持有 SSH 连接的那台机器才有意义，而那正是画浏览器的那台，所以它由点击触发，而不是由 agent 触发（见下）。
 
 ### 预览远端 dev server
 
-右侧栏浏览器在**你的**机器上渲染页面，所以往里输入 `http://localhost:5173` 找的是本机的服务，不是远端。Settings → **远程开发** → **远端端口** 可以把远端 loopback 端口发布到本机 loopback：
+右侧栏浏览器在**你的**机器上渲染页面，所以往里输入 `http://localhost:5173` 找的是本机的服务，不是远端。在从远端镜像过来的会话里，**直接点转录里的回环地址**就够了：插件把那个端口发布到本机 loopback，并在会话旁的「浏览器」标签里打开。
 
-1. 在远端把 dev server 起在它的 loopback 上（Vite 默认就是 `localhost:5173`）。
-2. 在**远端端口**里填那个端口，点**添加端口**。
-3. 点**在侧栏打开**。页面会在会话旁的「浏览器」标签里加载。
+可识别的地址是 `127.0.0.1`、`localhost`、`[::1]`、`0.0.0.0`，必须带显式端口，写成 `http://…` 或裸的 `localhost:5173` 都行。指向非回环主机的链接不会被处理——每条转发的远端固定是字面量 `127.0.0.1`，所以 `192.168.x.x` 这类地址无法转发。
 
-优先使用同一端口号，dev server 自己生成的绝对链接因此仍然有效。该端口在本机已被占用时会改用临时端口，卡片同时提示"写死原端口号的绝对 URL 会失效"——此时请改用相对路径，或设置 dev server 的 base/origin。HMR 可用：转发的是原始 TCP，包含 WebSocket。显式指定的本地端口被占用会直接报错，而不会悄悄换端口。
+优先使用同一端口号，dev server 自己生成的绝对链接因此仍然有效。该端口在本机已被占用时会改用临时端口，主机卡片会提示"写死原端口号的绝对 URL 会失效"——此时请改用相对路径，或设置 dev server 的 base/origin。HMR 可用：转发的是原始 TCP，包含 WebSocket。
+
+已发布的端口只存在于内存里：DSH 重启或主机重连后都不保留，也不会攒出需要清理的记录——再点一次就重建。Settings 里展开主机后会列出当前已发布的端口，绑定被拒的原因也显示在那里。
 
 ## 环境要求
 
@@ -250,7 +247,8 @@ $DSH_HOME/waypoint/test-visibility.json
     mirrorPollMs: 1500
     mirrorMaxEvents: 2000
 
-    # 把远端 dev server 端口发布到本机 loopback，供右侧栏浏览器打开。
+    # 点击转发 dev server 端口的总开关。设为 `false` 时，影子会话里的回环链接
+    # 会按原样导航。
     portForwarding: true
 ```
 
@@ -297,7 +295,7 @@ $DSH_HOME/waypoint/test-visibility.json
 | 切换 Node.js 版本后远端 DSH 起不来 | nvm/Volta 切版本会连 npm 全局前缀一起搬走，服务里烘焙的 `dsh` 路径随之失效。点 **Reinstall**；`dsh-waypoint-install doctor --target …` 会报 `global_dsh` 与 `login_path_has_dsh` |
 | 远端 agent 端口乱跳 / 主机反复断连 | 有两个 `dsh web` 在写同一个 `agent.json`。每个 `DSH_HOME` 只跑一个；`doctor` 会报 `dsh_web_processes` |
 | 某个端口显示 `error: local port N is already in use` | 本机已有进程占着这个号码。把**本地端口**留空让插件另选，或先停掉那个进程 |
-| 转发出来的页面能开，但静态资源 404 | 本地端口与远端不同，写死远端端口号的绝对 URL 解析不到。改用相对路径或设置 dev server 的 base/origin，或者先在本机腾出那个端口号再重新添加 |
+| 转发出来的页面能开，但静态资源 404 | 本地端口与远端不同，写死远端端口号的绝对 URL 解析不到。改用相对路径或设置 dev server 的 base/origin，或者先在本机腾出那个端口号再点一次链接 |
 
 远端日志：
 

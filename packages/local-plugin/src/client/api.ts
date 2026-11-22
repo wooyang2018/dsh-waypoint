@@ -15,12 +15,12 @@ import type {
 } from '@dsh-waypoint/protocol'
 import {
   HOST_API_PATH,
-  type ForwardsResult,
   type HostCreateSessionResult,
   type HostApiPayloads,
   type HostApiValues,
   type MirrorFileResult,
   type MirrorTarget,
+  type PublishPortResult,
   type RemoteHostsState,
   type RemoteNodeState,
   type SessionsResult,
@@ -74,11 +74,14 @@ export interface HostsApi {
   readonly upgrade: (hostId: string) => Promise<HostView>
   readonly restart: (hostId: string) => Promise<HostView>
   readonly webUrl: (hostId: string) => Promise<WebUrlResult>
-  /** Remote loopback ports published on local loopback, one row per request. */
-  readonly ports: (hostId: string) => Promise<ForwardsResult>
-  /** @param localPort - omitted prefers the remote number, then an ephemeral port. */
-  readonly addPort: (hostId: string, remotePort: number, localPort?: number) => Promise<ForwardsResult>
-  readonly removePort: (hostId: string, remotePort: number) => Promise<ForwardsResult>
+  /**
+   * Publish a remote loopback port on this machine's loopback.
+   *
+   * Called by the click interceptor (`link-forwarding.ts`) and by nothing else:
+   * the published set is memory-only, so there is no list or remove verb to
+   * pair with it. Idempotent for a port that is already listening.
+   */
+  readonly publishPort: (hostId: string, remotePort: number) => Promise<PublishPortResult>
   /** Open a published port in the sidebar Browser tab, else in a normal tab. */
   readonly openForwardedUrl: (url: string) => OpenForwardedResult
   /** Read-only: what Node.js the remote would run today. */
@@ -168,13 +171,7 @@ export function createHostsApi(ctx: Context): HostsApi {
       ...workspaceId === undefined ? {} : { workspaceId },
     }),
     webUrl: hostId => call('host/web-url', { hostId }),
-    ports: hostId => call('host/ports', { hostId }),
-    addPort: (hostId, remotePort, localPort) => call('host/ports/add', {
-      hostId,
-      remotePort,
-      ...localPort === undefined ? {} : { localPort },
-    }),
-    removePort: (hostId, remotePort) => call('host/ports/remove', { hostId, remotePort }),
+    publishPort: (hostId, remotePort) => call('host/ports/publish', { hostId, remotePort }),
     openForwardedUrl: url => openForwardedPort(url, (ctx as unknown as { sidebarRight?: unknown }).sidebarRight),
     nodeStatus: hostId => call('host/node', { hostId }),
     installNode: hostId => call('host/node-install', { hostId }),

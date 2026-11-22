@@ -160,33 +160,39 @@ iframe.
 ## Preview a remote dev server
 
 The right-sidebar browser renders pages on this machine, so a remote dev server needs one loopback hop
-before it is reachable. Settings → **Remote development** → **Remote ports** owns that:
+before it is reachable. There is no port card and no manual step: in a Session mirrored from a remote
+host, click a loopback address in the transcript.
 
 1. On the remote host, start the server bound to its loopback — `npm run dev` with Vite's default is
    already `localhost:5173`.
-2. In **Remote ports**, enter that port and press **Add port**. Leave **Local port** empty to prefer the
-   same number.
-3. Press **Open in sidebar** on the new row. The row also shows the exact URL, which can be copied.
+2. Click the address the agent printed. The plugin publishes that port on local loopback and opens the
+   page in the Browser tab beside the conversation.
 
-What the row's state means:
+Recognized addresses carry an explicit port and a loopback host: `127.0.0.1`, `localhost`, `[::1]`, or
+`0.0.0.0`, as `http://…` or as a bare `localhost:5173`. A non-loopback address is left to the browser:
+every forward's remote end is the literal `127.0.0.1`, so a LAN address cannot be served. A link back
+into the DSH page itself is never forwarded either.
+
+What the host's expanded row in Settings shows while ports are published:
 
 | State | Meaning |
 |---|---|
-| `Published` with a green dot | The `ssh -L` child is listening; the remote service may still be starting |
-| `Not started` | The host is disconnected. Reconnecting restores the forward from the host record |
-| `Failed` with a message | That row only. A busy local port, a privileged port, or ssh refusing the `-L`; the host itself stays connected |
+| A dot and `remote → local` | The `ssh -L` child for that port is listening; the remote service may still be starting |
+| `Failed` with a message | That port only. A busy local port, a privileged port, or ssh refusing the `-L`; the host itself stays connected |
+| Nothing | No port is published. A host reconnect or a DSH restart clears the set |
 
-Two limits are worth knowing before debugging:
+Three limits are worth knowing before debugging:
 
-- When the two port numbers differ, the card warns: pages whose absolute URLs name the remote port will
-  not resolve. Fix the dev server's `base`/`origin`, or free the original number locally and add the
-  forward again.
+- When the two port numbers differ, the row warns: pages whose absolute URLs name the remote port will
+  not resolve. Fix the dev server's `base`/`origin`, or free the original number locally and click again.
+- Published ports are memory-only, so a restart or reconnect loses them. Clicking the link again
+  republishes; there is no record to clean up.
 - The stock browser's iframe policy still applies. A host sending `X-Frame-Options: DENY` will not render
   inside the sidebar; use **Open in system browser** for those.
 
-For an agent, the same three actions are `remote_port_forward`, `remote_ports_list` and
-`remote_port_forward_remove`. They are not approval-gated: a forward copies no credential. Set
-`portForwarding: false` in the plugin config to disable the feature entirely.
+There is no agent tool for publishing a port. A forward only makes sense on the machine holding the SSH
+connection, which is the one drawing the browser, so the tool could never reach the Session that needs
+it. Set `portForwarding: false` in the plugin config to disable the feature entirely.
 
 ## Test/CI workspace visibility
 
@@ -216,6 +222,19 @@ Proxy mode (**本地 Key 代理**):
 - the tunnel adds `-R 127.0.0.1:47821:127.0.0.1:<local-proxy-port>`;
 - the local proxy validates that token, injects the real key, and forwards to
   `credentialProxyUpstream`.
+
+Proxy mode also publishes this machine's provider list. Each local `llm-pi-ai` provider is projected
+with its own `api`, models and compatibility settings, reachable at `<proxy>/p/<provider-id>`; the
+bootstrap writes that projection to `$DSH_HOME/waypoint-agent/model-routes.json` and passes it to
+`dsh web` as `--patch`. The remote therefore offers the models that can actually answer, and each one
+reaches its own configured endpoint with its own key. Nothing is translated between protocols. A
+provider with no `apiKeyEnv` has no key to forward and is skipped with a warning rather than given an
+invented one. Because a patch layer replaces the row's whole `config`, a proxied host stops offering
+providers configured on the remote itself; set `mirrorLocalProviders: false` to keep them, or
+`mirrorProviderIds` to publish a subset.
+
+To confirm the overlay took effect, compare what the host reports in `modelRouteIds` against the ids in
+that file. A host that reports nothing predates the field and keeps working without it.
 
 Switch a host to proxy in that card, or seed new hosts with `credentialProxy: true`. The proxy is one
 loopback server that validates a per-host token, so several hosts can share it while each keeps its
@@ -279,6 +298,12 @@ Local plugin profile override:
     credentialProxyUpstream: https://api.deepseek.com/anthropic
     credentialProxyRemotePort: 47821
     modelCredentialRef: DEEPSEEK_API_KEY
+
+    # Proxy mode also publishes this machine's provider list on the remote, so a
+    # mirrored Session can pick any model this machine can run. Set false to
+    # leave the remote's own catalog alone; mirrorProviderIds narrows the set.
+    mirrorLocalProviders: true
+    mirrorProviderIds: []
 
     mirrorSessions: true
     mirrorPollMs: 1500
