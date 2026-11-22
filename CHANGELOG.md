@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.0
+## 1.1.1
 
 ### Added
 
@@ -35,11 +35,6 @@
 - **A proxied host stops offering providers configured on the remote itself.** A patch layer replaces a
   row's whole `config` rather than merging into it, which is what makes "the remote list is the local
   list" true. `mirrorLocalProviders: false` restores the previous behaviour.
-
-## 1.1.1
-
-### Changed
-
 - **Publishing a dev-server port is now a click.** Settings → **Remote development** → **Remote ports**
   is gone, along with `remote_port_forward`, `remote_ports_list` and `remote_port_forward_remove`. In a
   Session mirrored from a remote host, clicking a loopback address in the transcript publishes that port
