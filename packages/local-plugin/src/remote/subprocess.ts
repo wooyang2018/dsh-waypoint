@@ -95,13 +95,20 @@ interface RemoteSpecContext {
  *
  * @param mirrors - the mirror registry.
  * @param cwd - the spawn spec's working directory.
+ * @param sessionId - the Session this command is for, when the caller recorded one.
  * @returns the owning workspace, or undefined when this is a local directory.
- * @throws `LocalError` when a remote path belongs to more than one host.
+ * @throws `LocalError` when a remote path belongs to more than one host and no
+ *   Session identifies which one is meant.
  */
-function contextOf(mirrors: RemoteMirrorService, cwd: string): RemoteSpecContext | undefined {
+function contextOf(mirrors: RemoteMirrorService, cwd: string, sessionId?: string): RemoteSpecContext | undefined {
   const local = mirrors.remoteFileContext(cwd)
   if (local !== undefined) return local
-  const hostId = mirrors.resolveHostForRemotePath(cwd)
+  // Ungrouped workspaces are excluded from `resolveHostForRemotePath`, so an
+  // enclosing home directory no longer makes every path ambiguous, and an exact
+  // workspace root is preferred over any enclosing one. What remains is two
+  // hosts serving the same exact directory, which only the Session settles.
+  const session = sessionId ?? mirrors.lastResolvedSession()
+  const hostId = mirrors.hostForRemotePathOnBehalfOf(cwd, session)
   if (hostId === undefined) {
     if (!mirrors.ownsMirroredRemotePath(cwd)) return undefined
     throw new LocalError(

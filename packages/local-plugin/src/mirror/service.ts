@@ -1041,6 +1041,30 @@ export class RemoteMirrorService {
   }
 
   /**
+   * Whether a workspace record is a real remote workspace rather than the
+   * catch-all created for a Session that started in an uncovered directory.
+   *
+   * An `ungrouped` record names no remote workspace, and its `remoteRoot` is
+   * whatever directory that Session began in — often an entire home directory.
+   * It exists to host Sessions and to appear in the sidebar; it names no
+   * checkout, so it must never answer "which workspace does this remote path
+   * belong to". Treating it as an ordinary root is what let `/data/home/user00`
+   * claim every project beneath it on every host.
+   *
+   * Both markers are checked because the record shape differs by origin: a
+   * synthesized record carries no remote workspace id, while one discovered from
+   * a remote listing keeps the `ungrouped:` id it was registered under.
+   *
+   * @param record - the workspace record to classify.
+   * @returns whether the record describes a real remote workspace.
+   */
+  #isRealWorkspace(record: WorkspaceRecord): boolean {
+    if (record.remoteRoot === undefined) return false
+    if (record.remoteWorkspaceId === null) return false
+    return !record.remoteWorkspaceId.startsWith('ungrouped:')
+  }
+
+  /**
    * Resolve a *remote* absolute path on one known host to the workspace that mirrors it.
    *
    * The Forge panel canonicalizes the paths Git printed on the remote host
@@ -1049,13 +1073,9 @@ export class RemoteMirrorService {
    *
    * WHY `hostId` IS REQUIRED
    * A remote path alone does not identify a host. Two hosts can serve the same
-   * directory name — `/data/home/user00/my-trex-skills` existed on two of them —
-   * and an `ungrouped` workspace takes the whole directory a Session started in
-   * as its root, so one host's `/data/home/user00` encloses every other host's
-   * project. Guessing from the string therefore sends commands to a host that
-   * has no such directory, which surfaces as `spawn ENOENT` from a git that
-   * cannot start in a missing cwd. The caller knows which host it means; this
-   * method does not guess.
+   * directory name — `/data/home/user00/my-trex-skills` exists on two of them —
+   * so the string cannot separate them. The caller knows which host it means,
+   * from the Session it is working for; this method does not guess.
    *
    * @param path - an absolute POSIX path in that host's execution world.
    * @param hostId - the host whose workspaces may answer for this path.
@@ -1066,15 +1086,16 @@ export class RemoteMirrorService {
     hostId: string,
   ): { hostId: string; remoteRoot: string; anchor: string } | undefined {
     if (!path.startsWith('/')) return undefined
-    // Within one host the most specific root still wins: an ungrouped workspace
-    // rooted above a real checkout must not answer for the checkout.
+    // Within one host the most specific real root wins. Ungrouped records are
+    // excluded outright: they name no checkout, and their roots enclose others.
     let best: { hostId: string; remoteRoot: string; anchor: string } | undefined
     for (const record of Object.values(this.#state.workspaces)) {
-      if (record.remoteRoot === undefined || record.hostId !== hostId || this.#workspaceRemoved(record)) continue
-      const root = record.remoteRoot.endsWith('/') ? record.remoteRoot : `${record.remoteRoot}/`
-      if (path !== record.remoteRoot && !path.startsWith(root)) continue
-      if (best !== undefined && record.remoteRoot.length <= best.remoteRoot.length) continue
-      best = { hostId: record.hostId, remoteRoot: record.remoteRoot, anchor: canonicalPath(record.anchor) }
+      if (record.hostId !== hostId || this.#workspaceRemoved(record) || !this.#isRealWorkspace(record)) continue
+      const remoteRoot = record.remoteRoot as string
+      const root = remoteRoot.endsWith('/') ? remoteRoot : `${remoteRoot}/`
+      if (path !== remoteRoot && !path.startsWith(root)) continue
+      if (best !== undefined && remoteRoot.length <= best.remoteRoot.length) continue
+      best = { hostId: record.hostId, remoteRoot, anchor: canonicalPath(record.anchor) }
     }
     return best
   }
@@ -1082,24 +1103,39 @@ export class RemoteMirrorService {
   /**
    * Name the single host that can own a remote absolute path, or refuse.
    *
-   * This is a narrowing step, not a resolution: it answers "which host could
-   * this be" only when exactly one host claims a root enclosing the path. Zero
-   * or several candidates return `undefined` deliberately — a caller must not
-   * fall back to another host, to the local anchor, or to iteration order, and
-   * this method gives it nothing to fall back to.
+   * Matching prefers an exact `remoteRoot` before any enclosing one, because a
+   * caller that canonicalized a checkout's top level passes that root verbatim —
+   * the shape `forkPoint` uses. Only when no host has that exact root does an
+   * enclosing root answer, longest first.
+   *
+   * Ungrouped records are excluded throughout: their roots are whole directories
+   * a Session happened to start in, so they enclose real checkouts without
+   * naming one, and letting them answer is what attributed every project to a
+   * single host.
    *
    * @param path - an absolute POSIX path in some host's execution world.
    * @returns the owning host id, or undefined when no host or more than one does.
    */
   resolveHostForRemotePath(path: string): string | undefined {
     if (!path.startsWith('/')) return undefined
-    const hosts = new Set<string>()
-    for (const record of Object.values(this.#state.workspaces)) {
-      if (record.remoteRoot === undefined || this.#workspaceRemoved(record)) continue
-      const root = record.remoteRoot.endsWith('/') ? record.remoteRoot : `${record.remoteRoot}/`
-      if (path !== record.remoteRoot && !path.startsWith(root)) continue
-      hosts.add(record.hostId)
+    const real = Object.values(this.#state.workspaces)
+      .filter(record => !this.#workspaceRemoved(record) && this.#isRealWorkspace(record))
+    // An exact root names one workspace outright; prefer it over any root that
+    // merely encloses the path.
+    const exact = real.filter(record => record.remoteRoot === path)
+    if (exact.length > 0) {
+      const hosts = new Set(exact.map(record => record.hostId))
+      return hosts.size === 1 ? [...hosts][0] : undefined
     }
+    const enclosing = real.filter(record => {
+      const root = (record.remoteRoot as string).endsWith('/') ? record.remoteRoot as string : `${record.remoteRoot}/`
+      return path.startsWith(root)
+    })
+    if (enclosing.length === 0) return undefined
+    const longest = Math.max(...enclosing.map(record => (record.remoteRoot as string).length))
+    const hosts = new Set(
+      enclosing.filter(record => (record.remoteRoot as string).length === longest).map(record => record.hostId),
+    )
     return hosts.size === 1 ? [...hosts][0] : undefined
   }
 
@@ -1108,7 +1144,8 @@ export class RemoteMirrorService {
    *
    * A different question from "whose is it": diagnostics and confinement checks
    * need to know that a path belongs to *some* mirror without deciding which
-   * host, since they never route anything.
+   * host, since they never route anything. Ungrouped records count here — a
+   * confinement decision must still recognise a path inside one.
    *
    * @param path - an absolute POSIX path in some host's execution world.
    * @returns whether at least one mirrored workspace encloses it.
@@ -1121,6 +1158,114 @@ export class RemoteMirrorService {
       return path === record.remoteRoot || path.startsWith(root)
     })
   }
+
+  /**
+   * Record that a Session's sandbox policy was resolved, keyed by its anchor.
+   *
+   * A mirror Session's `header.cwd` is its local anchor, and an anchor maps to
+   * exactly one host — which is how a Session whose record is still being
+   * written can still be attributed. The Session is also remembered as the most
+   * recent asker, which is the only signal available to a spawn that starts from
+   * a remote path none of this plugin's code chose.
+   *
+   * @param sessionId - the Session's id.
+   * @param anchor - the Session's current working directory.
+   */
+  noteSessionAnchor(sessionId: string, anchor: string): void {
+    const context = this.remoteFileContext(anchor)
+    if (context === undefined) return
+    this.#sessionHosts.set(sessionId, context.hostId)
+    this.#lastResolvedSession = sessionId
+  }
+
+  /**
+   * The Session whose sandbox policy was resolved most recently.
+   *
+   * Used only to break a tie between hosts that serve the same exact directory,
+   * where the path carries no information left to read. Forge resolves a
+   * Session's policy and binds its Git runner in one synchronous step, so the
+   * most recent asker is the Session whose commands are about to run.
+   *
+   * @returns the Session id, or undefined when no mirrored Session has resolved one.
+   */
+  lastResolvedSession(): string | undefined {
+    return this.#lastResolvedSession
+  }
+
+  /**
+   * The host a Session belongs to, when its anchor has been seen.
+   *
+   * @param sessionId - the Session's id.
+   * @returns the host id, or undefined when this Session is not mirrored.
+   */
+  hostIdForSession(sessionId: string): string | undefined {
+    const record = this.#mirrorRecordForSession(sessionId)
+    return record?.hostId ?? this.#sessionHosts.get(sessionId)
+  }
+
+  /**
+   * The host to attribute a remote path to, for work done on a Session's behalf.
+   *
+   * Prefers the Session's own workspace, because that is knowledge rather than
+   * inference: two hosts may serve the same directory, and only the Session
+   * knows which one it is looking at. The Session's own record decides — a path
+   * inside its workspace belongs to that host regardless of what another host
+   * happens to have at the same absolute path.
+   *
+   * Narrows by path only when the Session is unknown, which is sound whenever
+   * exactly one host serves it.
+   *
+   * @param path - an absolute POSIX path in some host's execution world.
+   * @param sessionId - the Session the work is for, when known.
+   * @returns the host id, or undefined when it cannot be established.
+   */
+  hostForRemotePathOnBehalfOf(path: string, sessionId?: string): string | undefined {
+    if (sessionId !== undefined) {
+      const own = this.hostIdForSession(sessionId)
+      if (own !== undefined && this.#hostServes(own, path)) return own
+    }
+    return this.resolveHostForRemotePath(path)
+  }
+
+  /**
+   * Whether one host has a real workspace that covers a remote path.
+   *
+   * A path-only question, asked of a host already named — never a way to pick a
+   * host. Kept separate from `remoteContextForRemotePath` because this answer is
+   * a yes/no and must not construct workspace roots for a host that turns out to
+   * be the wrong one.
+   *
+   * @param hostId - the host to ask about.
+   * @param path - an absolute POSIX path in that host's execution world.
+   * @returns whether that host's workspace covers the path.
+   */
+  #hostServes(hostId: string, path: string): boolean {
+    return this.remoteContextForRemotePath(path, hostId) !== undefined
+  }
+
+  /**
+   * The mirror record for a local Session id.
+   *
+   * A Session's own record is the strongest statement available about which
+   * host it is working on: it was created for that host and carries that host's
+   * anchor. Resolutions for the Session's paths should use it rather than
+   * matching the path against every host at once.
+   *
+   * @param sessionId - the local Session id.
+   * @returns the record, or undefined when this Session is not mirrored.
+   */
+  #mirrorRecordForSession(sessionId: string): MirrorRecord | undefined {
+    for (const record of Object.values(this.#state.sessions)) {
+      if (record.localSessionId === sessionId) return record
+    }
+    return undefined
+  }
+
+  /** Session id to host, learned from each mirror Session's anchor. */
+  readonly #sessionHosts = new Map<string, string>()
+
+  /** The Session whose sandbox policy was resolved most recently. */
+  #lastResolvedSession: string | undefined
 
   /** Record the local Session a client currently shows, refreshing its freshness window. */
   reportVisibleSession(sessionId: string | undefined): void {

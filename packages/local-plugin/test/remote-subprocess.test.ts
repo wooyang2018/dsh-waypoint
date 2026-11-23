@@ -22,6 +22,10 @@ function fakeMirrors() {
     ownsMirroredRemotePath(path: string) {
       return path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)
     },
+    lastResolvedSession() { return undefined },
+    hostForRemotePathOnBehalfOf(path: string, _sessionId?: string) {
+      return this.resolveHostForRemotePath(path)
+    },
     remoteContextForRemotePath(path: string, hostId: string) {
       if (hostId !== 'host-1') return undefined
       if (path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)) {
@@ -275,8 +279,11 @@ describe('remote subprocess routing', () => {
     const ambiguous = {
       remoteFileContext() { return undefined },
       ownsMirroredRemotePath() { return true },
-      // Two hosts claim the path, so narrowing yields nothing.
+      // Two real workspaces claim the same directory, and no Session has been
+      // seen that could break the tie.
       resolveHostForRemotePath() { return undefined },
+      lastResolvedSession() { return undefined },
+      hostForRemotePathOnBehalfOf() { return undefined },
       remoteContextForRemotePath() { return undefined },
     }
     const ctx = { logger: { warn() {} }, get: (name: string) => name === 'subprocess' ? service : undefined } as any
@@ -289,5 +296,36 @@ describe('remote subprocess routing', () => {
     // Nothing reached the local provider: the command did not run anywhere.
     assert.equal(service.calls.length, 0, 'an ambiguous cwd must not spawn locally')
     assert.equal(hosts.calls.length, 0, 'an ambiguous cwd must not reach an agent either')
+  })
+
+  it('routes a tied cwd to the Session that asked for it', () => {
+    // Two hosts serve the same directory, so the path cannot decide. The
+    // Session can: its anchor names one host, and Forge resolves that Session's
+    // policy immediately before binding the runner whose commands these are.
+    const service = fakeSubprocess()
+    const hosts = fakeHosts()
+    const tied = {
+      remoteFileContext() { return undefined },
+      ownsMirroredRemotePath() { return true },
+      resolveHostForRemotePath() { return undefined },
+      lastResolvedSession() { return 'session-on-b' },
+      hostForRemotePathOnBehalfOf(_path: string, sessionId?: string) {
+        return sessionId === 'session-on-b' ? 'host-b' : undefined
+      },
+      remoteContextForRemotePath(_path: string, hostId: string) {
+        return hostId === 'host-b'
+          ? { hostId: 'host-b', remoteRoot: REMOTE_ROOT, anchor: '/home/dev/.dsh/anchors/b' }
+          : undefined
+      },
+    }
+    const ctx = { logger: { warn() {} }, get: (name: string) => name === 'subprocess' ? service : undefined } as any
+    installRemoteSubprocess(ctx, tied as any, hosts as any)
+
+    const child = service.spawn(spec(REMOTE_ROOT, ['git', 'rev-parse', '--show-toplevel']) as any)
+    assert.ok(child !== undefined)
+    // The command travelled, so the tie no longer stops the panel.
+    assert.equal(service.calls.length, 0, 'a tied cwd with a Session runs remotely, not locally')
+    assert.equal(hosts.calls.length, 1, 'the Session that asked decides the host')
+    assert.equal(hosts.calls[0]!.cwd, REMOTE_ROOT)
   })
 })

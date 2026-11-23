@@ -143,17 +143,31 @@ below had to be fixed together for it to work at all.
 - **A remote path no longer decides which host owns it.** The remote-namespace lookup above matched
   the first workspace whose `remoteRoot` was a prefix of the path, which is not the same question as
   "which host owns this". A host that once ran a Session from a home directory keeps an `ungrouped`
-  workspace rooted at that whole directory, so it encloses every checkout on every host; two hosts can
-  also serve the same absolute path. The changed-files card then vanished for a mirrored workspace:
-  its `forkPoint()` command is the only one in an inspection that starts from the remote path rather
-  than the anchor, it was attributed to the enclosing host, and `git` cannot start in a directory that
-  host does not have — reported as `spawn git ENOENT`, which reads like a git failure but means the
-  process never started. Resolution now takes the host as a required input
-  (`remoteContextForRemotePath(path, hostId)`); `resolveHostForRemotePath` narrows a path to a single
-  host and returns nothing when two could claim it, and `ownsMirroredRemotePath` answers the separate
-  "does any mirror claim this" question confinement needs. An ambiguous path raises with the directory
-  named instead of falling back to another host or to the local provider, so it can no longer look
-  like "this is not a mirrored workspace". See [docs/mirror-host-resolution.md](docs/mirror-host-resolution.md).
+  workspace rooted at that whole directory, so it encloses every checkout on every host. The
+  changed-files card then vanished for a mirrored workspace: its `forkPoint()` command is the only one
+  in an inspection that starts from the remote path rather than the anchor, it was attributed to the
+  enclosing host, and `git` cannot start in a directory that host does not have — reported as
+  `spawn git ENOENT`, which reads like a git failure but means the process never started.
+
+  Attribution now has three layers, and each removes a different false answer:
+
+  1. **`ungrouped` workspaces never answer it.** Their root is the directory a Session happened to
+     start in, not a checkout, so `/data/home/user00` no longer claims every project beneath it. They
+     still host Sessions and still count for confinement, which asks a different question.
+  2. **An exact `remoteRoot` beats an enclosing one**, which is the shape that matters: `forkPoint`
+     passes the canonicalized checkout root verbatim, so the workspace it belongs to matches exactly.
+  3. **A genuine tie between two real workspaces is settled by the Session that asked.** Two hosts
+     really can serve the same absolute directory, and then no string is decisive. A mirror Session's
+     `header.cwd` is its anchor, and an anchor maps to exactly one host, so `subprocess.spawn` —
+     which carries no Session of its own — reads the anchor recorded when Forge resolved that
+     Session's sandbox policy, one synchronous step earlier.
+
+  `remoteContextForRemotePath(path, hostId)` still takes the host as a required input;
+  `resolveHostForRemotePath` narrows a path to a single host, and `ownsMirroredRemotePath` answers the
+  separate "does any mirror claim this" question confinement needs. A path that survives all three
+  layers still raises with the directory named, rather than falling back to another host or to the
+  local provider — the fallback that used to make "which host?" look like "not a mirrored workspace".
+  See [docs/mirror-host-resolution.md](docs/mirror-host-resolution.md).
 
 ## 1.1.0
 

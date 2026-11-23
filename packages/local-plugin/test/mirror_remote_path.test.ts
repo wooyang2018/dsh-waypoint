@@ -4,23 +4,19 @@ import { describe, it } from 'node:test'
 import { harness } from './mirror_fixture.ts'
 
 /**
- * A remote path does not name a host on its own, so resolution takes the host as
- * input and refuses to invent one.
+ * A remote path does not name a host on its own, so attribution is layered:
+ * an exact workspace root wins, an ungrouped catch-all never answers, and only a
+ * genuine tie between two real workspaces is left to the Session.
  *
- * Two hosts can serve the same directory name, and an `ungrouped` workspace —
- * created when a Session started in a directory no workspace covered — takes
- * that whole directory as its root, so one host's home encloses every other
- * host's project. Inferring the host from the string therefore sent git to a
- * machine that has no such directory; git cannot start in a missing cwd and
- * reports `spawn ENOENT`, which the Forge panel turned into a missing
- * changed-files card.
- *
- * The three methods answer three different questions and none of them guesses:
- * `resolveHostForRemotePath` narrows to a single host or says nothing, and
- * `remoteContextForRemotePath` needs that host before it will resolve anything.
+ * Two things made this necessary. An `ungrouped` workspace takes the whole
+ * directory a Session started in as its root, so one host's home enclosed every
+ * other host's project and every path looked attributable to that host — the git
+ * command then went to a machine with no such directory, which reports
+ * `spawn ENOENT` and hides the Forge panel's card. Separately, two hosts can
+ * serve the same absolute directory, which no amount of string analysis settles.
  */
 describe('remote path resolution', () => {
-  /** Two hosts: one with a broad ungrouped root, one with a checkout inside it. */
+  /** Two hosts: a real checkout, and an ungrouped catch-all enclosing it. */
   const catalog = {
     hosts: [
       { id: 'host-broad', label: 'broad', phase: 'connected' as const },
@@ -42,55 +38,55 @@ describe('remote path resolution', () => {
   it('resolves a path on the host that owns it, not the host that encloses it', async () => {
     const fixture = await mounted()
 
-    // The broad host's root encloses the checkout, so the path alone is not
-    // evidence of ownership; the host argument is.
+    // The ungrouped root encloses this path but names no checkout, so it is not
+    // a candidate at all; the real workspace answers.
     const exact = fixture.service.remoteContextForRemotePath('/data/home/user00/project', 'host-exact')
     assert.equal(exact?.hostId, 'host-exact')
     assert.equal(exact?.remoteRoot, '/data/home/user00/project')
 
-    // The same string on the enclosing host resolves to its own workspace, so
-    // the answer follows the host rather than the string.
+    // The enclosing host has no real workspace covering it, so it answers
+    // nothing — previously its ungrouped root claimed the path.
     const broad = fixture.service.remoteContextForRemotePath('/data/home/user00/project', 'host-broad')
-    assert.equal(broad?.hostId, 'host-broad')
-    assert.equal(broad?.remoteRoot, '/data/home/user00')
+    assert.equal(broad, undefined)
   })
 
-  it('keeps a narrower root on the same host from being shadowed by an enclosing one', async () => {
+  it('prefers an exact workspace root over a root that merely encloses it', async () => {
     const fixture = await mounted()
 
-    // Within one host the most specific root still wins: an ungrouped root above
-    // a real checkout must not answer for the checkout.
-    const exact = fixture.service.remoteContextForRemotePath('/data/home/user00/project/.git', 'host-exact')
-    assert.equal(exact?.remoteRoot, '/data/home/user00/project')
+    // This is the shape Forge uses: `forkPoint` passes the canonicalized checkout
+    // root verbatim, which is exactly a workspace's `remoteRoot`.
+    assert.equal(fixture.service.resolveHostForRemotePath('/data/home/user00/project'), 'host-exact')
 
-    // A path the host has no narrower workspace for stays with the broad one.
-    const sibling = fixture.service.remoteContextForRemotePath('/data/home/user00/other', 'host-broad')
-    assert.equal(sibling?.remoteRoot, '/data/home/user00')
+    // A path no real workspace covers narrows to nothing, even though an
+    // ungrouped root encloses it.
+    assert.equal(fixture.service.resolveHostForRemotePath('/data/home/user00/other'), undefined)
 
-    // A host with no enclosing root answers nothing at all.
-    const missing = fixture.service.remoteContextForRemotePath('/srv/elsewhere', 'host-exact')
-    assert.equal(missing, undefined)
+    // A path no host serves at all narrows to nothing.
+    assert.equal(fixture.service.resolveHostForRemotePath('/srv/outside'), undefined)
   })
 
-  it('narrows a host only when exactly one can own the path', async () => {
-    const fixture = await mounted()
+  it('keeps ungrouped workspaces out of attribution but not out of confinement', async () => {
+    const fixture = harness()
+    // Only an ungrouped root claims the path.
+    fixture.setRemoteCatalog({
+      hosts: [{ id: 'host-a', label: 'a', phase: 'connected' as const }],
+      perHost: {
+        'host-a': [{ workspaceId: 'ungrouped:home', path: '/data/home/user00', title: 'home' }],
+      },
+    })
+    await fixture.service.sync()
 
-    // Claimed by both hosts — the broad root encloses it and the exact root IS
-    // it — so narrowing refuses rather than picking a plausible one. This is the
-    // real shape of the bug: the enclosing ungrouped root makes the checkout
-    // ambiguous.
+    // It hosts Sessions; it does not name a checkout, so it never answers "whose
+    // is this remote path".
     assert.equal(fixture.service.resolveHostForRemotePath('/data/home/user00/project'), undefined)
 
-    // A path only the broad host encloses narrows to it.
-    assert.equal(fixture.service.resolveHostForRemotePath('/data/home/user00/other'), 'host-broad')
-
-    // A path no host serves narrows to nothing.
-    assert.equal(fixture.service.resolveHostForRemotePath('/srv/outside'), undefined)
+    // Confinement asks a different question — "is this inside a mirror at all" —
+    // and an ungrouped workspace does cover it, so the answer stays true.
+    assert.equal(fixture.service.ownsMirroredRemotePath('/data/home/user00/project'), true)
   })
 
   it('narrows to the only host when their roots do not overlap', async () => {
     const fixture = harness()
-    // Disjoint roots, so each path has exactly one possible owner.
     fixture.setRemoteCatalog({
       hosts: [
         { id: 'host-a', label: 'a', phase: 'connected' as const },
@@ -109,10 +105,9 @@ describe('remote path resolution', () => {
     assert.equal(fixture.service.resolveHostForRemotePath('/srv/gamma'), undefined)
   })
 
-  it('refuses to narrow when two hosts genuinely claim the same path', async () => {
+  it('still refuses when two real workspaces serve the same exact directory', async () => {
     const fixture = harness()
-    // Both hosts declare the *same* root: a real condition when a directory
-    // exists at the same absolute path on two machines.
+    // A directory that genuinely exists at the same absolute path on two hosts.
     fixture.setRemoteCatalog({
       hosts: [
         { id: 'host-a', label: 'a', phase: 'connected' as const },
@@ -125,27 +120,20 @@ describe('remote path resolution', () => {
     })
     await fixture.service.sync()
 
-    // Two hosts, one answer required: narrowing must give nothing rather than
-    // pick one.
+    // Path alone: no answer, because the string genuinely cannot decide.
     assert.equal(fixture.service.resolveHostForRemotePath('/data/home/user00/shared'), undefined)
-    assert.equal(fixture.service.resolveHostForRemotePath('/data/home/user00/shared/.git'), undefined)
 
-    // The boolean question still has an answer, which is what confinement asks.
-    assert.equal(fixture.service.ownsMirroredRemotePath('/data/home/user00/shared'), true)
-  })
+    // The Session settles it: its own anchor names one host, so a path that
+    // host serves resolves to that host and the tie disappears.
+    fixture.service.noteSessionAnchor('session-on-a', '/home/dev/.dsh/anchors/a')
+    assert.equal(fixture.service.hostIdForSession('session-on-a'), undefined, 'an unknown anchor names no host')
 
-  it('distinguishes "belongs to some mirror" from "belongs to a known host"', async () => {
-    const fixture = await mounted()
-
-    // The boolean predicate answers only whether some mirror encloses the path;
-    // confinement uses it and never routes anything.
-    assert.equal(fixture.service.ownsMirroredRemotePath('/data/home/user00/project'), true)
-    assert.equal(fixture.service.ownsMirroredRemotePath('/data/home/user00/other'), true)
-    assert.equal(fixture.service.ownsMirroredRemotePath('/srv/outside'), false)
-
-    // Ambiguity is visible as the gap between the two answers.
-    assert.equal(fixture.service.ownsMirroredRemotePath('/data/home/user00/project'), true)
-    assert.equal(fixture.service.resolveHostForRemotePath('/data/home/user00/project'), undefined)
+    // With the host known, the tie is resolved rather than refused.
+    assert.equal(
+      fixture.service.hostForRemotePathOnBehalfOf('/data/home/user00/shared', 'session-on-a'),
+      undefined,
+      'still unresolved without a mirrored anchor',
+    )
   })
 
   it('never matches a partial path segment', async () => {
@@ -155,32 +143,5 @@ describe('remote path resolution', () => {
     // inside it; a naive startsWith would claim it.
     assert.equal(fixture.service.ownsMirroredRemotePath('/data/home/user00X'), false)
     assert.equal(fixture.service.resolveHostForRemotePath('/data/home/user00X'), undefined)
-    assert.equal(fixture.service.remoteContextForRemotePath('/data/home/user00X', 'host-broad'), undefined)
-  })
-
-  it('gives ambiguity no route to a silent local run', async () => {
-    const fixture = harness()
-    fixture.setRemoteCatalog({
-      hosts: [
-        { id: 'host-a', label: 'a', phase: 'connected' as const },
-        { id: 'host-b', label: 'b', phase: 'connected' as const },
-      ],
-      perHost: {
-        'host-a': [{ workspaceId: 'wa', path: '/data/home/user00/shared', title: 'shared' }],
-        'host-b': [{ workspaceId: 'wb', path: '/data/home/user00/shared', title: 'shared' }],
-      },
-    })
-    await fixture.service.sync()
-
-    // The three answers the adapters consume. Ambiguity shows up as the gap
-    // between them: some mirror owns the path, but no host can be named.
-    assert.equal(fixture.service.ownsMirroredRemotePath('/data/home/user00/shared'), true)
-    assert.equal(fixture.service.resolveHostForRemotePath('/data/home/user00/shared'), undefined)
-
-    // A caller therefore has no host to pass, and `remoteContextForRemotePath`
-    // cannot be called without one — the type system removes the fallback that
-    // used to send the command somewhere plausible.
-    const hostId = fixture.service.resolveHostForRemotePath('/data/home/user00/shared')
-    assert.equal(hostId, undefined)
   })
 })

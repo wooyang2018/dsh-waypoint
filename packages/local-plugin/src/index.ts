@@ -15,6 +15,7 @@ import { registerHostApi } from './host-api/handler.ts'
 import { RemoteMirrorService } from './mirror/service.ts'
 import { installRemoteWorkspaceFiles } from './remote/files.ts'
 import { installRemoteConfine } from './remote/sandbox.ts'
+import { installRemoteSandboxPolicy } from './remote/sandbox-policy.ts'
 import { installRemoteFileSystem } from './remote/fs.ts'
 import { installRemoteSubprocess } from './remote/subprocess.ts'
 import { installRemoteWorkspaceChanges, prefetchChangesSummary, RemoteChangesCache } from './remote/workspace-changes.ts'
@@ -107,6 +108,16 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
     child.effect(
       () => installRemoteConfine(child, mirrors),
       'dsh-waypoint: remote process confinement bypass',
+    )
+  })
+  // The Forge panel resolves a Session's sandbox policy once per Git runner and
+  // never tells `subprocess.spawn` which Session it is working for. That resolve
+  // is the only place a mirrored Session's host can be learned from its anchor,
+  // so it is recorded here and consulted when a remote path alone is ambiguous.
+  ctx.inject(['sandboxPolicy'], child => {
+    child.effect(
+      () => installRemoteSandboxPolicy(child, mirrors),
+      'dsh-waypoint: mirrored Session host registry',
     )
   })
   ctx.inject(['fs'], child => {

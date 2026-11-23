@@ -13,28 +13,46 @@ Source locations are cited as `file → symbol`, since line numbers drift.
 
 ## 1. The rule
 
-**Routing takes the host as input. It never infers a host from a path.**
+**Routing takes the host as input. It never infers a host from a path alone.**
 
-`packages/local-plugin/src/mirror/service.ts` exposes three methods that answer three different
-questions, and only one of them needs a host:
+Attribution is layered, and each layer removes a different false answer:
+
+1. **`ungrouped` workspaces never participate.** Their `remoteRoot` is the directory a Session
+   happened to start in — often an entire home directory — so they enclose real checkouts without
+   naming one. They still host Sessions, appear in the sidebar, and count for confinement.
+2. **An exact `remoteRoot` beats an enclosing one.** `forkPoint` passes the canonicalized checkout
+   root verbatim, so the workspace that owns it matches exactly; an enclosing root only answers when
+   nothing matches exactly.
+3. **A tie between two real workspaces is settled by the Session that asked.** Two hosts can serve the
+   same absolute directory. The Session knows which one it is looking at, because its `header.cwd` is
+   its local anchor and an anchor maps to exactly one host.
+
+`packages/local-plugin/src/mirror/service.ts` exposes the pieces:
 
 | Method | Question it answers | Needs a host? |
 |---|---|---|
 | `remoteFileContext(root)` | Which mirror owns this **local anchor** (or a path below one)? | No — anchors are unique |
-| `resolveHostForRemotePath(path)` | Which **single** host could own this remote path? | No, and it refuses when several could |
+| `resolveHostForRemotePath(path)` | Which **single** host owns this remote path under layers 1–2? | No, and it refuses on a tie |
+| `hostForRemotePathOnBehalfOf(path, sessionId)` | Same, but layer 3 may break a tie | No |
 | `remoteContextForRemotePath(path, hostId)` | Which of **that host's** workspaces mirrors this path? | **Yes, required** |
 | `ownsMirroredRemotePath(path)` | Does **any** mirror claim this path? (boolean only) | No — never routes |
 
-The signature of `remoteContextForRemotePath` is the enforcement: `hostId` is a required parameter,
-so a caller that has not established the host cannot call it. There is deliberately no overload, no
-optional host, and no fallback.
+### How a spawn learns which Session it belongs to
 
-### Why not "longest prefix wins"
+`SubprocessSpawnSpec` carries no Session — only `argv`, `cwd`, `env`, `signal`, and limits. So the
+Session's host is captured where a Session *is* available: Forge calls
+`ctx.sandboxPolicy.resolve({ session })` once per Git runner (`gitIn`), and
+`remote/sandbox-policy.ts` records `session → host` from that Session's anchor there.
 
-Longest-prefix matching is still used, but only *inside* a named host, to pick between that host's own
-workspaces. It cannot decide between hosts: two machines can serve the same absolute path, and then
-no amount of string analysis separates them. When a first-match-wins scan was used across hosts, it
-did not merely pick a wrong-but-close answer — it picked a **different machine**.
+That record is a Session-level fact, **not** a resolve-to-spawn pairing. Seven Git commands are
+issued concurrently within milliseconds of each other, so "the most recent resolve" would attribute
+commands to each other's Sessions. A Session-keyed map has no such race; the only value read at spawn
+time is "which Session resolved a policy most recently", and it is consulted **only** when layers 1–2
+left a genuine tie.
+
+Note that `remote/sandbox.ts`'s `confine` interception cannot carry this: Forge skips `confine`
+entirely under `danger-full-access`, which is the common case for a mirrored Session. `resolve` is
+called unconditionally.
 
 ## 2. How the bug actually presented
 
@@ -83,17 +101,23 @@ therefore owns a workspace rooted at the whole home, and every real checkout on 
 inside it. Path-prefix inference then finds that broad workspace first and attributes unrelated
 projects to that host.
 
-## 3. When routing is ambiguous
+That is why layer 1 excludes them from attribution. They are still real for everything else — they
+host the Sessions that created them, they appear in the sidebar, and confinement must still recognise
+a path inside one — they simply never answer "which checkout is this".
 
-Two conditions produce a path that names no single host:
+## 3. When routing is still ambiguous
 
-1. **The same absolute path exists on two hosts** — for example
-   `/data/home/user00/my-trex-skills` on two machines. Nothing in the string distinguishes them.
-2. **One host's broad root encloses another host's checkout** — the `ungrouped` case above.
+After layers 1–2, a path that names no single host has exactly one cause: **two real workspaces on
+different hosts share the same absolute directory**, for example
+`/data/home/user00/my-trex-skills`. Nothing in the string distinguishes them, and no amount of prefix
+analysis ever will.
 
-Both are handled the same way: `resolveHostForRemotePath` returns `undefined`, and the callers refuse.
-`packages/local-plugin/src/remote/subprocess.ts → contextOf` raises a `LocalError` naming the
-directory, and `remote/fs.ts → remoteOwnerOf` does the same. **Neither falls back** to:
+Layer 3 handles it, because the Session does know: it was created for one host, and its anchor
+identifies which. `hostForRemotePathOnBehalfOf(path, sessionId)` consults that first.
+
+If no Session identifies the caller — a spawn that arrived outside any mirrored Session's work — the
+callers refuse rather than guess. `packages/local-plugin/src/remote/subprocess.ts → contextOf` raises
+a `LocalError` naming the directory, as does `remote/fs.ts → remoteOwnerOf`. **Neither falls back** to:
 
 - another host that plausibly matches,
 - the local provider (which would run against the empty anchor),
@@ -101,7 +125,8 @@ directory, and `remote/fs.ts → remoteOwnerOf` does the same. **Neither falls b
 
 Falling back to the local provider is the worst of the three: the command runs, git answers
 "not a git repository", and the caller reads that as "this is not a mirrored workspace" — the exact
-misreading that hid the panel.
+misreading that hid the panel. A refusal is loud and names the directory; that is the intended
+behaviour for a case this code genuinely cannot decide.
 
 ## 4. How to diagnose a routing problem
 

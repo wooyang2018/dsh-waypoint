@@ -22,6 +22,10 @@ function fakeMirrors() {
     ownsMirroredRemotePath(path: string) {
       return path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)
     },
+    lastResolvedSession() { return undefined },
+    hostForRemotePathOnBehalfOf(path: string, _sessionId?: string) {
+      return this.resolveHostForRemotePath(path)
+    },
     remoteContextForRemotePath(path: string, hostId: string) {
       if (hostId !== 'host-1') return undefined
       if (path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)) {
