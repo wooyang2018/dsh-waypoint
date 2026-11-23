@@ -85,14 +85,32 @@ interface RemoteSpecContext {
  * run. Looking up only the anchor would send the second form to the local
  * provider, which finds no repository at a POSIX path and reports "not a
  * checkout".
+ *
+ * The remote form is narrowed to a single host before it is resolved. A remote
+ * path alone does not name a host — two hosts can serve the same directory, and
+ * an `ungrouped` workspace rooted at a home directory encloses every project
+ * below it — so an ambiguous path raises instead of being routed somewhere
+ * plausible. Guessing used to send git to a host with no such directory, which
+ * git reports as `spawn ENOENT`, and the panel hid the changed-files card.
+ *
  * @param mirrors - the mirror registry.
  * @param cwd - the spawn spec's working directory.
  * @returns the owning workspace, or undefined when this is a local directory.
+ * @throws `LocalError` when a remote path belongs to more than one host.
  */
 function contextOf(mirrors: RemoteMirrorService, cwd: string): RemoteSpecContext | undefined {
   const local = mirrors.remoteFileContext(cwd)
   if (local !== undefined) return local
-  const remote = mirrors.remoteContextForRemotePath(cwd)
+  const hostId = mirrors.resolveHostForRemotePath(cwd)
+  if (hostId === undefined) {
+    if (!mirrors.ownsMirroredRemotePath(cwd)) return undefined
+    throw new LocalError(
+      'request/invalid',
+      `dsh-waypoint: could not run git in "${cwd}": more than one mirrored host serves that directory`,
+      { retryable: false, details: { cwd } },
+    )
+  }
+  const remote = mirrors.remoteContextForRemotePath(cwd, hostId)
   if (remote === undefined) return undefined
   return { ...remote, remoteDirectory: true }
 }
@@ -125,8 +143,18 @@ export function installRemoteSubprocess(
   }
 
   const spawn = (spec: SubprocessSpawnSpec): SubprocessHandle => {
+    // An ambiguous remote cwd throws from here rather than returning undefined:
+    // running the command locally would execute it against the empty anchor and
+    // report "not a git repository", which reads as "this is not a mirrored
+    // workspace" instead of "I could not tell which host".
     const context = contextOf(mirrors, spec.cwd)
-    if (context === undefined) return originalSpawn(spec)
+    if (context === undefined) {
+      // Not a mirrored directory at all: the local provider is the right answer.
+      // A path that *is* mirrored but produced no context cannot reach here —
+      // `contextOf` raises for the ambiguous case and would have returned one
+      // for a unique one — so there is nothing to report.
+      return originalSpawn(spec)
+    }
     if (!hosts.supportsAgent(context.hostId, 'git.exec')) {
       throw new LocalError(
         'agent/unavailable',
@@ -138,7 +166,7 @@ export function installRemoteSubprocess(
     if (program === undefined || !GIT_BASENAMES.has(basename(program).toLowerCase())) {
       const message = `dsh-waypoint: refusing to run "${program ?? ''}" on ${context.hostId}; `
         + 'only git is routed to a mirrored workspace'
-      ctx.logger.warn(message)
+      ctx.logger?.warn(message)
       throw new LocalError('request/invalid', message, {
         retryable: false,
         details: { cwd: spec.cwd, program: program ?? null },

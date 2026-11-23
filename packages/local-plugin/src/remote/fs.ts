@@ -42,6 +42,7 @@ import {
 import type { AgentCapability, RemoteAgentClient } from '@dsh-waypoint/protocol'
 import type { RemoteHostsService } from '../service.ts'
 import type { RemoteMirrorService } from '../mirror/service.ts'
+import { LocalError } from '../errors.ts'
 import { replaceMethods } from './install.ts'
 
 /** Opcode prefix identifying a target this adapter minted. */
@@ -146,6 +147,75 @@ export function installRemoteFileSystem(
    * Anything else delegates, which is how a genuinely local Session keeps the
    * stock behaviour.
    */
+  /**
+   * Report a path whose base is a mirrored workspace but which did not map.
+   *
+   * Returning `undefined` hands the call to the local service, which answers about
+   * the empty anchor. That is right for a path belonging to no mirror and wrong for
+   * one that does, so only the latter is reported. Once per path, because a polling
+   * panel would otherwise repeat the same line forever.
+   *
+   * @param operation - the fs method that failed to map.
+   * @param path - the caller's path.
+   * @param cwd - the base it was resolved against, if any.
+   * @param hostId - the host the caller had pinned down, when it had one.
+   */
+  const reportedMisses = new Set<string>()
+  const noteUnmapped = (
+    operation: string,
+    path: string,
+    cwd: string | undefined,
+    hostId?: string,
+  ): void => {
+    const base = cwd === undefined || cwd === '' ? path : cwd
+    const mirrored = mirrors.remoteFileContext(base) !== undefined || mirrors.ownsMirroredRemotePath(base)
+    if (!mirrored) return
+    const key = `${operation}\u0000${path}\u0000${base}`
+    if (reportedMisses.has(key)) return
+    reportedMisses.add(key)
+    ctx.logger?.warn(
+      'dsh-waypoint: %s could not map "%s" (base "%s") in a mirrored workspace; served locally, which reads the empty anchor',
+      operation,
+      path,
+      base,
+    )
+    mirrors.noteRoutingMiss?.({ operation, path, base, ...hostId === undefined ? {} : { hostId } })
+  }
+
+  /**
+   * Resolve one remote path to the workspace that owns it, on a named host's behalf.
+   *
+   * An ambiguous remote path raises instead of falling through to the local
+   * service. Falling through would read the empty anchor and let a caller treat
+   * "I could not tell which host" as "this is not a mirrored path" — the reading
+   * that hid the Forge panel's changed-files card behind a git command sent to
+   * the wrong machine.
+   *
+   * @param path - the remote absolute path.
+   * @param operation - the fs method, for the routing-miss record.
+   * @returns the owning workspace roots, or undefined when no mirror claims it.
+   * @throws `LocalError` when more than one host claims the path.
+   */
+  const remoteOwnerOf = (
+    path: string,
+    operation: string,
+  ): { hostId: string; remoteRoot: string; anchor: string } | undefined => {
+    const hostId = mirrors.resolveHostForRemotePath(path)
+    if (hostId === undefined) {
+      if (!mirrors.ownsMirroredRemotePath(path)) return undefined
+      const message = `dsh-waypoint: remote path "${path}" belongs to more than one mirrored host; refusing to guess`
+      ctx.logger?.warn(message)
+      mirrors.noteRoutingMiss?.({ operation, path, base: path })
+      throw new LocalError('request/invalid', message, {
+        retryable: false,
+        details: { path },
+      })
+    }
+    const context = mirrors.remoteContextForRemotePath(path, hostId)
+    if (context === undefined) return undefined
+    return context
+  }
+
   const remoteTargetOf = (path: string, cwd: string | undefined): FsTarget | undefined => {
     // A relative path is only meaningful against a base, so the base decides
     // the namespace and the path is joined onto its remote spelling.
@@ -156,7 +226,7 @@ export function installRemoteFileSystem(
         const base = relative === undefined ? local.remoteRoot : remotePath.join(local.remoteRoot, relative)
         return encodeTarget(local.hostId, remotePath.resolve(base, path))
       }
-      const remote = mirrors.remoteContextForRemotePath(cwd)
+      const remote = remoteOwnerOf(cwd, 'resolve')
       if (remote !== undefined) return encodeTarget(remote.hostId, remotePath.resolve(cwd, path))
       return undefined
     }
@@ -169,7 +239,7 @@ export function installRemoteFileSystem(
         relative === undefined ? path : remotePath.join(local.remoteRoot, relative),
       )
     }
-    const remote = mirrors.remoteContextForRemotePath(path)
+    const remote = remoteOwnerOf(path, 'resolve')
     if (remote !== undefined) return encodeTarget(remote.hostId, remotePath.resolve(path))
     return undefined
   }
@@ -177,6 +247,7 @@ export function installRemoteFileSystem(
   const resolve = async (path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget> => {
     const target = remoteTargetOf(path, opts?.cwd)
     if (target !== undefined) return target
+    noteUnmapped('resolve', path, opts?.cwd)
     return await original.resolve(path, opts)
   }
 

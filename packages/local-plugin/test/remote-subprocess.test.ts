@@ -14,7 +14,16 @@ function fakeMirrors() {
       }
       return undefined
     },
-    remoteContextForRemotePath(path: string) {
+    // One host, so any remote path it encloses narrows to it unambiguously.
+    resolveHostForRemotePath(path: string) {
+      if (path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)) return 'host-1'
+      return undefined
+    },
+    ownsMirroredRemotePath(path: string) {
+      return path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)
+    },
+    remoteContextForRemotePath(path: string, hostId: string) {
+      if (hostId !== 'host-1') return undefined
       if (path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)) {
         return { hostId: 'host-1', remoteRoot: REMOTE_ROOT, anchor: MIRROR_ANCHOR }
       }
@@ -253,5 +262,32 @@ describe('remote subprocess routing', () => {
     assert.notEqual(service.spawn, original)
     restore()
     assert.equal(service.spawn, original)
+  })
+
+  it('refuses a cwd that two hosts both serve, instead of running it locally', () => {
+    // The failure this guards: an ambiguous remote cwd used to fall through to
+    // the local provider, which ran the command against the empty anchor. Git
+    // then answered "not a git repository" and the Forge panel showed no
+    // changed files, so the real cause -- "I could not tell which host" -- was
+    // invisible. The routing layer must say so instead.
+    const service = fakeSubprocess()
+    const hosts = fakeHosts()
+    const ambiguous = {
+      remoteFileContext() { return undefined },
+      ownsMirroredRemotePath() { return true },
+      // Two hosts claim the path, so narrowing yields nothing.
+      resolveHostForRemotePath() { return undefined },
+      remoteContextForRemotePath() { return undefined },
+    }
+    const ctx = { logger: { warn() {} }, get: (name: string) => name === 'subprocess' ? service : undefined } as any
+    installRemoteSubprocess(ctx, ambiguous as any, hosts as any)
+
+    assert.throws(
+      () => service.spawn(spec(REMOTE_ROOT, ['git', 'rev-parse', '--show-toplevel']) as any),
+      /more than one mirrored host serves that directory/,
+    )
+    // Nothing reached the local provider: the command did not run anywhere.
+    assert.equal(service.calls.length, 0, 'an ambiguous cwd must not spawn locally')
+    assert.equal(hosts.calls.length, 0, 'an ambiguous cwd must not reach an agent either')
   })
 })

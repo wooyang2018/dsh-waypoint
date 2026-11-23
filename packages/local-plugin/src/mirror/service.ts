@@ -224,10 +224,41 @@ export interface MirrorLogGap {
 /** The plugin-record name carrying {@link MirrorLogGap}. */
 const PLUGIN_RECORD = 'plugin:dsh-waypoint/log-gap' as const
 
+/**
+ * A path that belonged to a mirrored workspace but was served by the local
+ * service anyway.
+ *
+ * The reads then describe the empty anchor, which is why Forge concludes there is
+ * no checkout and hides the changed-files card without raising. Kept in the
+ * Session log because the only other signal is a console the desktop app does not
+ * keep.
+ */
+const ROUTING_RECORD = 'plugin:dsh-waypoint/routing-miss' as const
+
+/** One routing miss: the operation, the path, and the base it did not map against. */
+interface MirrorRoutingMiss {
+  readonly operation: string
+  readonly path: string
+  readonly base: string
+  /**
+   * The host the caller had already pinned this base to, when it had one.
+   *
+   * `undefined` means the base could not be attributed at all — an ambiguous
+   * remote path names no host — and then nothing is written to any Session.
+   */
+  readonly hostId?: string
+}
+
 declare module '@deepseek-ai/dsh-session' {
   interface PluginRecordMap {
     /** Written by the mirror when a range of the remote log cannot be projected. */
     'plugin:dsh-waypoint/log-gap': MirrorLogGap
+    /**
+     * A path belonging to a mirrored workspace that was served by the local
+     * service, which reads the empty anchor. This is the condition that hides
+     * the Forge panel's changed-files card with no error anywhere.
+     */
+    'plugin:dsh-waypoint/routing-miss': MirrorRoutingMiss
   }
 }
 
@@ -868,8 +899,13 @@ export class RemoteMirrorService {
     localSessionId: string,
     localSeq: number,
   ): { hostId: string; remoteSessionId: string; turn: number } | undefined {
+    // A stopped runtime has finished following its remote; it has not forgotten
+    // what it projected. `changesTurns` and the summary cache are still valid, so
+    // a card for a completed turn stays readable instead of vanishing when the
+    // remote Session closes. Everything that advances state checks `stopped`
+    // separately.
     const runtime = this.#runtimes.get(localSessionId)
-    if (runtime === undefined || runtime.stopped) return undefined
+    if (runtime === undefined) return undefined
     const turn = runtime.changesTurns.get(localSeq)
     if (turn === undefined) return undefined
     return {
@@ -878,6 +914,60 @@ export class RemoteMirrorService {
       turn,
     }
   }
+
+  /**
+   * Record that a mirrored workspace's path was served locally.
+   *
+   * Called by the fs and subprocess adapters, which cannot write to the Session
+   * themselves. Reported once per path — a polling panel would otherwise append
+   * the same record on every tick — into the Session whose workspace owns the
+   * base, so the transcript showing the empty card is the one that explains it.
+   *
+   * A miss that names no host cannot be attributed to a Session: an ambiguous
+   * remote path is exactly the case where no Session owns it, so there is
+   * nothing to write and the caller's own warning is the whole record.
+   *
+   * @param miss - the operation, the path, the base it did not map against, and
+   *   the host the caller had already pinned down, when it had one.
+   */
+  noteRoutingMiss(miss: MirrorRoutingMiss): void {
+    const key = `${miss.operation}\u0000${miss.path}\u0000${miss.base}`
+    if (this.#routingMisses.has(key)) return
+    this.#routingMisses.add(key)
+    const local = this.remoteFileContext(miss.base)
+    const hostId = local?.hostId ?? miss.hostId
+    if (hostId === undefined) return
+    for (const runtime of this.#runtimes.values()) {
+      if (hostId !== runtime.record.hostId) continue
+      const detail = { operation: miss.operation, path: miss.path, base: miss.base }
+      try {
+        appendPluginRecord(runtime.session, ROUTING_RECORD, detail)
+        return
+      } catch (error) {
+        // Same reasoning as `#appendPlaceholder`: a real Session cannot fail here for
+        // a reason this fallback could fix, and a double implements only the public
+        // surface. A diagnostic that quietly fails is worse than none.
+        if (!isSessionLike(runtime.session)) {
+          try {
+            const append = runtime.session.append.bind(runtime.session) as (...args: unknown[]) => unknown
+            append(ROUTING_RECORD, detail)
+            return
+          } catch {
+            // Fall through to the warning below.
+          }
+        }
+        this.#ctx.logger.warn(
+          'dsh-waypoint: could not record a routing miss for %s: %s',
+          runtime.record.remoteSessionId,
+          String(error),
+        )
+        return
+      }
+    }
+  }
+
+  /** Misses already recorded, so a polling panel cannot repeat them. */
+  readonly #routingMisses = new Set<string>()
 
   /**
    * Install the change-summary prefetch hook.
@@ -909,17 +999,28 @@ export class RemoteMirrorService {
    */
   async #prefetchChanges(runtime: MirrorRuntime, event: RemoteSessionEvent): Promise<void> {
     if (event.type !== 'workspace/changes') return
-    const hook = this.#changesPrefetch
-    if (hook === undefined) return
     const turn = (event.data as { turn?: unknown } | undefined)?.turn
     if (typeof turn !== 'number') return
     const remoteSessionId = runtime.record.remoteSessionId
     if (remoteSessionId === undefined) return
-    await hook(runtime.record.localSessionId, {
+    await this.#prefetchTurn(runtime.record.localSessionId, {
       hostId: runtime.record.hostId,
       remoteSessionId,
       turn,
     })
+  }
+
+  /**
+   * Fetch one turn's summary into the cache, by coordinates.
+   *
+   * Split from `#prefetchChanges` because a seed has neither a runtime nor an
+   * event yet: it knows the host, the remote Session and the turn, and it needs
+   * the same cache warmed so a seeded mirror's card is not empty.
+   */
+  async #prefetchTurn(localSessionId: string, target: RemoteChangeTarget): Promise<void> {
+    const hook = this.#changesPrefetch
+    if (hook === undefined) return
+    await hook(localSessionId, target)
   }
 
   /** Resolve a local workspace anchor to its remote filesystem context. */
@@ -928,7 +1029,11 @@ export class RemoteMirrorService {
     for (const record of Object.values(this.#state.workspaces)) {
       if (record.remoteRoot === undefined || this.#workspaceRemoved(record)) continue
       const anchor = canonicalPath(record.anchor)
-      if (root === anchor || root.startsWith(`${anchor}/`)) {
+      // `canonicalPath` is `realpathSync`, which returns backslash paths on
+      // Windows. Without the second form a child of an anchor looks unrelated,
+      // and the adapters serve it from the empty local anchor instead of the
+      // remote checkout the Forge panel needs to read.
+      if (root === anchor || root.startsWith(`${anchor}/`) || root.startsWith(`${anchor}\\`)) {
         return { hostId: record.hostId, remoteRoot: record.remoteRoot, anchor }
       }
     }
@@ -936,25 +1041,85 @@ export class RemoteMirrorService {
   }
 
   /**
-   * Resolve a *remote* absolute path to the workspace that mirrors it.
+   * Resolve a *remote* absolute path on one known host to the workspace that mirrors it.
    *
    * The Forge panel canonicalizes the paths Git printed on the remote host
    * (`--show-toplevel`, `--git-common-dir`). Those strings are in the remote
    * namespace, so `remoteFileContext` cannot see them: it matches local anchors.
-   * Without this lookup the stock resolver claims them and returns a local path.
-   * @param path - an absolute POSIX path in some host's execution world.
-   * @returns the owning host and workspace roots, when one mirrors this path.
+   *
+   * WHY `hostId` IS REQUIRED
+   * A remote path alone does not identify a host. Two hosts can serve the same
+   * directory name — `/data/home/user00/my-trex-skills` existed on two of them —
+   * and an `ungrouped` workspace takes the whole directory a Session started in
+   * as its root, so one host's `/data/home/user00` encloses every other host's
+   * project. Guessing from the string therefore sends commands to a host that
+   * has no such directory, which surfaces as `spawn ENOENT` from a git that
+   * cannot start in a missing cwd. The caller knows which host it means; this
+   * method does not guess.
+   *
+   * @param path - an absolute POSIX path in that host's execution world.
+   * @param hostId - the host whose workspaces may answer for this path.
+   * @returns the workspace roots, when that host mirrors this path.
    */
-  remoteContextForRemotePath(path: string): { hostId: string; remoteRoot: string; anchor: string } | undefined {
+  remoteContextForRemotePath(
+    path: string,
+    hostId: string,
+  ): { hostId: string; remoteRoot: string; anchor: string } | undefined {
     if (!path.startsWith('/')) return undefined
+    // Within one host the most specific root still wins: an ungrouped workspace
+    // rooted above a real checkout must not answer for the checkout.
+    let best: { hostId: string; remoteRoot: string; anchor: string } | undefined
+    for (const record of Object.values(this.#state.workspaces)) {
+      if (record.remoteRoot === undefined || record.hostId !== hostId || this.#workspaceRemoved(record)) continue
+      const root = record.remoteRoot.endsWith('/') ? record.remoteRoot : `${record.remoteRoot}/`
+      if (path !== record.remoteRoot && !path.startsWith(root)) continue
+      if (best !== undefined && record.remoteRoot.length <= best.remoteRoot.length) continue
+      best = { hostId: record.hostId, remoteRoot: record.remoteRoot, anchor: canonicalPath(record.anchor) }
+    }
+    return best
+  }
+
+  /**
+   * Name the single host that can own a remote absolute path, or refuse.
+   *
+   * This is a narrowing step, not a resolution: it answers "which host could
+   * this be" only when exactly one host claims a root enclosing the path. Zero
+   * or several candidates return `undefined` deliberately — a caller must not
+   * fall back to another host, to the local anchor, or to iteration order, and
+   * this method gives it nothing to fall back to.
+   *
+   * @param path - an absolute POSIX path in some host's execution world.
+   * @returns the owning host id, or undefined when no host or more than one does.
+   */
+  resolveHostForRemotePath(path: string): string | undefined {
+    if (!path.startsWith('/')) return undefined
+    const hosts = new Set<string>()
     for (const record of Object.values(this.#state.workspaces)) {
       if (record.remoteRoot === undefined || this.#workspaceRemoved(record)) continue
       const root = record.remoteRoot.endsWith('/') ? record.remoteRoot : `${record.remoteRoot}/`
-      if (path === record.remoteRoot || path.startsWith(root)) {
-        return { hostId: record.hostId, remoteRoot: record.remoteRoot, anchor: canonicalPath(record.anchor) }
-      }
+      if (path !== record.remoteRoot && !path.startsWith(root)) continue
+      hosts.add(record.hostId)
     }
-    return undefined
+    return hosts.size === 1 ? [...hosts][0] : undefined
+  }
+
+  /**
+   * Whether any mirrored workspace claims a remote absolute path.
+   *
+   * A different question from "whose is it": diagnostics and confinement checks
+   * need to know that a path belongs to *some* mirror without deciding which
+   * host, since they never route anything.
+   *
+   * @param path - an absolute POSIX path in some host's execution world.
+   * @returns whether at least one mirrored workspace encloses it.
+   */
+  ownsMirroredRemotePath(path: string): boolean {
+    if (!path.startsWith('/')) return false
+    return Object.values(this.#state.workspaces).some(record => {
+      if (record.remoteRoot === undefined || this.#workspaceRemoved(record)) return false
+      const root = record.remoteRoot.endsWith('/') ? record.remoteRoot : `${record.remoteRoot}/`
+      return path === record.remoteRoot || path.startsWith(root)
+    })
   }
 
   /** Record the local Session a client currently shows, refreshing its freshness window. */
@@ -1542,7 +1707,7 @@ export class RemoteMirrorService {
       } catch {
         return false
       }
-      return root === anchor || root.startsWith(`${anchor}/`)
+      return root === anchor || root.startsWith(`${anchor}/`) || root.startsWith(`${anchor}\\`)
     })
   }
 
@@ -2276,6 +2441,17 @@ export class RemoteMirrorService {
     const remoteToLocalSeq = new Map<number, number>()
     for (const [index, event] of filtered.entries()) remoteToLocalSeq.set(event.seq, index)
 
+    // A seed never passes through `#appendEvent`, so the announcement turns
+    // it would have recorded are collected here and handed to `#mountRuntime`.
+    // Without them `changesEvent` cannot map a local seq to a remote turn and
+    // the changed-files card is empty for every seeded mirror.
+    const seededChanges = new Map<number, number>()
+    for (const [index, event] of filtered.entries()) {
+      if (event.type !== 'workspace/changes') continue
+      const turn = (event.data as { turn?: unknown } | undefined)?.turn
+      if (typeof turn === 'number') seededChanges.set(index, turn)
+    }
+
     if (reuse !== undefined) {
       // Re-attaching reuses the local Session, so the mapping must describe the
       // events actually in it. Positional rebuilding (local[i] ↔ remote[i]) only
@@ -2360,7 +2536,18 @@ export class RemoteMirrorService {
       await this.#save()
       return undefined
     }
-    await this.#mountRuntime(record, session, snapshot, remoteToLocalSeq, latestTurn, remote.live)
+    await this.#mountRuntime(record, session, snapshot, remoteToLocalSeq, latestTurn, remote.live, seededChanges)
+    // A seed announced these turns without passing through the projection, so
+    // their summaries were never fetched. Doing it here keeps the card readable
+    // the moment a client can see the event, which is what the other two paths
+    // guarantee by fetching before they append.
+    for (const turn of seededChanges.values()) {
+      await this.#prefetchTurn(localId, {
+        hostId: host.id,
+        remoteSessionId: remote.sessionId,
+        turn,
+      })
+    }
     this.#ctx.logger.info(
       'dsh-waypoint: mirrored remote session %s as local %s',
       remote.sessionId,
@@ -2440,6 +2627,7 @@ export class RemoteMirrorService {
     remoteToLocalSeq: Map<number, number>,
     latestTurn: number,
     live: boolean,
+    seededChanges: ReadonlyMap<number, number> = new Map(),
   ): Promise<void> {
     // Reconcile the persisted mapping against the local log before anything
     // replays. `lastSeq` is written with `#save()`, while the events are
@@ -2469,7 +2657,7 @@ export class RemoteMirrorService {
       waiters: [],
       rejectedSelections: new Set(),
       skippedRemoteSeqs: new Set(),
-      changesTurns: new Map(),
+      changesTurns: new Map(seededChanges),
       closedTurns: new Set(),
       diverged: undefined,
     } satisfies MirrorRuntime
@@ -2711,8 +2899,18 @@ export class RemoteMirrorService {
     for (const seq of [...runtime.remoteToLocalSeq.keys()]) {
       if (seq >= nextSeq) runtime.remoteToLocalSeq.delete(seq)
     }
-    for (const seq of [...runtime.changesTurns.keys()]) {
-      if (seq >= nextSeq) runtime.changesTurns.delete(seq)
+    // `changesTurns` is keyed by LOCAL seq while `nextSeq` is a REMOTE seq, so the
+    // two cannot be compared directly. Translating through `remoteToLocalSeq` (which
+    // runs above and is keyed by remote seq) drops exactly the announcements whose
+    // source event is at or beyond the gap.
+    const localAtOrBeyond = new Set(
+      [...runtime.remoteToLocalSeq.entries()]
+        .filter(([remoteSeq]) => remoteSeq >= nextSeq)
+        .map(([, localSeq]) => localSeq),
+    )
+    for (const localSeq of [...runtime.changesTurns.keys()]) {
+      if (!localAtOrBeyond.has(localSeq)) continue
+      runtime.changesTurns.delete(localSeq)
     }
     for (const seq of [...runtime.skippedRemoteSeqs]) {
       if (seq >= nextSeq) runtime.skippedRemoteSeqs.delete(seq)
@@ -2907,8 +3105,19 @@ export class RemoteMirrorService {
         }
         // Same ordering as the replay path: a turn that arrives live must get
         // its card too, and this path previously skipped the fetch entirely.
-        await this.#prefetchChanges(runtime, event)
-        this.#appendEvent(runtime, event)
+        //
+        // One event the projection rejects must not end the whole stream: the
+        // replay path already survives that per event, and a live turn that dies
+        // here would leave every later event unread.
+        const localBefore = runtime.session.seq
+        try {
+          await this.#prefetchChanges(runtime, event)
+          this.#appendEvent(runtime, event)
+        } catch (error) {
+          runtime.skippedRemoteSeqs.add(event.seq)
+          this.#noteSkipped(runtime, event, error)
+        }
+        this.#noteProjection(runtime, event, runtime.session.seq > localBefore)
         runtime.record.lastSeq = event.seq + 1
         runtime.record.updatedAt = new Date().toISOString()
         await this.#save()

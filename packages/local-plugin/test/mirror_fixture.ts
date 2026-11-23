@@ -178,6 +178,21 @@ export function harness() {
     async unarchiveSession() {},
   }
 
+  /**
+   * Register a local workspace row under an exact id.
+   *
+   * `#workspaceRemoved` treats a record whose `localWorkspaceId` is absent from
+   * the registry as deleted, so a test that seeds `mirrors.json` directly must
+   * also present the workspace the record points at. Seeding through `sync()`
+   * would instead derive the ids from the remote catalog, which is exactly the
+   * state a resolution test needs to control.
+   * @param id - local workspace id the seeded record names.
+   * @param anchor - local anchor directory for that workspace.
+   */
+  function adoptWorkspace(id: string, anchor: string): void {
+    workspaces.set(id, { id, anchor, title: id, attachSession: async () => {} })
+  }
+
   const agents = {
     enter(agent: FixtureAgent) {
       if (failEnter) throw new Error('agent registration failed')
@@ -200,10 +215,27 @@ export function harness() {
   const workspace = { workspaceId: 'remote-workspace', path: '/srv/project', title: 'project' }
   let remote: Summary[] = []
   const snapshots = new Map<string, Snapshot>()
+  /**
+   * Extra hosts and remote workspaces for a test that needs more than one.
+   *
+   * Path resolution is a question about several hosts at once — one host's
+   * `ungrouped` root can enclose another host's checkout — so a single-host
+   * fixture cannot express the case. `undefined` keeps the original
+   * one-host, one-workspace behaviour every other suite relies on.
+   */
+  let catalogExtra: {
+    hosts?: readonly { id: string; label: string; phase: 'connected' | 'disconnected' }[]
+    workspaces?: readonly { workspaceId: string; path: string; title: string }[]
+    /** Workspaces each host serves, keyed by host id; overrides `workspaces`. */
+    perHost?: Readonly<Record<string, readonly { workspaceId: string; path: string; title: string }[]>>
+  } = {}
 
   const hosts = {
-    list: () => [host],
-    workspaces: async () => [workspace],
+    list: () => (catalogExtra.hosts === undefined ? [host] : [...catalogExtra.hosts]),    workspaces: async (hostId: string) => {
+      const scoped = catalogExtra.perHost?.[hostId]
+      if (scoped !== undefined) return [...scoped]
+      return catalogExtra.workspaces === undefined ? [workspace] : [...catalogExtra.workspaces]
+    },
     sessions: async () => ({ sessions: remote }),
     snapshot: async (_hostId: string, sessionId: string) => {
       const snapshot = snapshots.get(sessionId)
@@ -305,6 +337,14 @@ export function harness() {
     setFailEnter(value: boolean) { failEnter = value },
     setHostPhase(value: 'connected' | 'disconnected') { host.phase = value },
     setCreatedPreset(value: string | undefined) { createdPreset = value },
+    adoptWorkspace,
+    /**
+     * Replace the fake remote host/workspace catalog with several of each.
+     *
+     * Named distinctly from `setCatalog`, which sets the *model* catalog.
+     * @param next - hosts and workspaces `list`/`workspaces` should serve.
+     */
+    setRemoteCatalog(next: NonNullable<typeof catalogExtra>) { catalogExtra = next },
     setSnapshot(id: string, snapshot: Snapshot) { snapshots.set(id, snapshot) },
     /**
      * Run exactly one poll for a mirrored Session and wait for it to settle.

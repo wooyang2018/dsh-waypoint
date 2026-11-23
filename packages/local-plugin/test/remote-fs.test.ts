@@ -14,7 +14,16 @@ function fakeMirrors() {
       }
       return undefined
     },
-    remoteContextForRemotePath(path: string) {
+    // One host, so any remote path it encloses narrows to it unambiguously.
+    resolveHostForRemotePath(path: string) {
+      if (path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)) return 'host-1'
+      return undefined
+    },
+    ownsMirroredRemotePath(path: string) {
+      return path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)
+    },
+    remoteContextForRemotePath(path: string, hostId: string) {
+      if (hostId !== 'host-1') return undefined
       if (path === REMOTE_ROOT || path.startsWith(`${REMOTE_ROOT}/`)) {
         return { hostId: 'host-1', remoteRoot: REMOTE_ROOT, anchor: ANCHOR }
       }

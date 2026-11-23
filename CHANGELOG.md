@@ -140,6 +140,20 @@ below had to be fixed together for it to work at all.
   `--show-toplevel`/`--git-common-dir`/`--git-dir`, and `sandbox.confine` did not treat the remote
   root as mirrored. `RemoteMirrorService.remoteContextForRemotePath` is the remote-namespace lookup
   all three now consult alongside `remoteFileContext`.
+- **A remote path no longer decides which host owns it.** The remote-namespace lookup above matched
+  the first workspace whose `remoteRoot` was a prefix of the path, which is not the same question as
+  "which host owns this". A host that once ran a Session from a home directory keeps an `ungrouped`
+  workspace rooted at that whole directory, so it encloses every checkout on every host; two hosts can
+  also serve the same absolute path. The changed-files card then vanished for a mirrored workspace:
+  its `forkPoint()` command is the only one in an inspection that starts from the remote path rather
+  than the anchor, it was attributed to the enclosing host, and `git` cannot start in a directory that
+  host does not have — reported as `spawn git ENOENT`, which reads like a git failure but means the
+  process never started. Resolution now takes the host as a required input
+  (`remoteContextForRemotePath(path, hostId)`); `resolveHostForRemotePath` narrows a path to a single
+  host and returns nothing when two could claim it, and `ownsMirroredRemotePath` answers the separate
+  "does any mirror claim this" question confinement needs. An ambiguous path raises with the directory
+  named instead of falling back to another host or to the local provider, so it can no longer look
+  like "this is not a mirrored workspace". See [docs/mirror-host-resolution.md](docs/mirror-host-resolution.md).
 
 ## 1.1.0
 

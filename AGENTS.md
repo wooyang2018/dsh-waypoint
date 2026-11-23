@@ -92,6 +92,10 @@ this repository:
   terminals are rerouted. Start here before changing the mirror. The Chinese copy
   (`docs/remote-workspace-mechanism.zh.md`) mirrors it; edit both, and treat the
   English page as canonical.
+- `docs/mirror-host-resolution.md` — how a remote absolute path is attributed to a
+  host, and why it never is: read this before touching
+  `remoteContextForRemotePath`, `resolveHostForRemotePath`, or anything that turns
+  a `cwd` into a host.
 - `docs/testing.md` — test workspace visibility, mirror regressions, CI steps.
 - `docs/development.md` — workspace layout, build scripts, the Windows
   package-manager shims this repository has to work around.

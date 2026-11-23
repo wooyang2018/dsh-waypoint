@@ -153,6 +153,156 @@ describe('the change summary is cached before its event is visible', () => {
  * and the fixture exposes no way to seed it. Recorded as a known gap rather than
  * implied by a test that does not exercise it.
  */
+
+/**
+ * A seeded mirror must be able to resolve its change announcements.
+ *
+ * A fresh mirror seeds the local Session from the remote snapshot instead of
+ * appending event by event, so it never reaches `#appendEvent` — the only place
+ * that records `changesTurns` and prefetches a summary. Both are exactly what the
+ * changed-files card reads: `summary(localSessionId, localSeq)` resolves the seq
+ * through `changesEvent()`, which reads that map.
+ *
+ * Without the seed producing them, `changesEvent()` returns undefined, `summary()`
+ * falls through to the Host's own service, and a newly mirrored session shows its
+ * announcement in the transcript while the sidebar card stays empty.
+ */
+describe('a seeded mirror resolves its change announcements', () => {
+  it('keys the announcement by the local seq it actually landed on', async () => {
+    // A realistic window: noise interleaved with content. `isMirrorNoise` drops the
+    // splices and the scheduled job rows are kept, so a seeded event's index is not
+    // its remote seq — which is exactly the case a clean four-event fixture hides.
+    const test = harness()
+    const prefetched: number[] = []
+    test.setRemote([parent])
+    test.setSnapshot(parent.sessionId, snapshotOf([
+      { seq: 0, type: 'agent/inbox/spliced', data: {} },
+      start(1, 1),
+      { seq: 2, type: 'agent/inbox/spliced', data: {} },
+      say(1, 'hello', 3),
+      { seq: 4, type: 'job/registered', data: { id: 'job-1' } },
+      { seq: 5, type: 'assistant/message', data: { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } } },
+      { seq: 6, type: 'workspace/changes', data: { turn: 1 } },
+      { seq: 7, type: 'job/settled', data: { id: 'job-1' } },
+      end(1, 8),
+    ], false, 9))
+    test.service.setChangesPrefetch(async (_sessionId, target) => {
+      prefetched.push(target.turn)
+    })
+    await test.service.start()
+    try {
+      const record = Object.values((await test.state()).sessions)
+        .find(candidate => candidate.remoteSessionId === parent.sessionId)
+      assert.ok(record !== undefined, 'the remote session was mirrored')
+
+      const local = test.sessions.get(record.localSessionId)
+      assert.ok(local !== undefined, 'the local mirror session exists')
+      const announcement = local.snapshotEvents()
+        .find(event => event.type === 'workspace/changes')
+      assert.ok(announcement !== undefined, 'the seeded log carries the announcement')
+
+      // The UI asks with the seq the event landed on, not the seed index.
+      const resolved = test.service.changesEvent(record.localSessionId, announcement.seq)
+      assert.ok(
+        resolved !== undefined,
+        `the announcement at local seq ${announcement.seq} must resolve to a remote turn`,
+      )
+      assert.equal(resolved.turn, 1, 'the resolved turn is the announced one')
+      assert.deepEqual(prefetched, [1], 'the summary was fetched for that turn')
+    } finally {
+      await test.service.dispose()
+    }
+  })
+
+  it('still answers for a turn whose remote session has ended', async () => {
+    // `#poll` stops the runtime once a remote Session is no longer live and the
+    // mirror has caught up. That is normal end of life, not a failure: the local
+    // log and the summary cache are still there, so the card must stay readable
+    // instead of disappearing when its remote turn finishes.
+    const test = harness()
+    const prefetched: number[] = []
+    test.setRemote([parent])
+    const history = [
+      start(1, 0),
+      say(1, 'hello', 1),
+      { seq: 2, type: 'workspace/changes', data: { turn: 1 } },
+      end(1, 3),
+    ]
+    test.setSnapshot(parent.sessionId, snapshotOf(history, true, 4))
+    test.service.setChangesPrefetch(async (_sessionId, target) => {
+      prefetched.push(target.turn)
+    })
+    await test.service.start()
+    try {
+      const record = Object.values((await test.state()).sessions)
+        .find(candidate => candidate.remoteSessionId === parent.sessionId)
+      assert.ok(record !== undefined, 'the remote session was mirrored')
+      const local = test.sessions.get(record.localSessionId)
+      assert.ok(local !== undefined, 'the local mirror session exists')
+      const announcement = local.snapshotEvents()
+        .find(event => event.type === 'workspace/changes')
+      assert.ok(announcement !== undefined, 'the log carries the announcement')
+
+      // The remote finishes: no longer live and fully caught up, which is what
+      // makes `#poll` stop the runtime.
+      test.setSnapshot(parent.sessionId, snapshotOf(history, false, 4))
+      await test.poll(parent.sessionId)
+
+      const resolved = test.service.changesEvent(record.localSessionId, announcement.seq)
+      assert.ok(resolved !== undefined, 'a finished turn still resolves its announcement')
+      assert.equal(resolved.turn, 1, 'the resolved turn is the announced one')
+    } finally {
+      await test.service.dispose()
+    }
+  })
+
+  it('still resolves after later events are appended', async () => {
+    // The mirror keeps polling after the seed. A key recorded at seed time must
+    // still name the same node once the log has grown past it.
+    const test = harness()
+    const prefetched: number[] = []
+    test.setRemote([parent])
+    test.setSnapshot(parent.sessionId, snapshotOf([
+      start(1, 0),
+      say(1, 'hello', 1),
+      { seq: 2, type: 'workspace/changes', data: { turn: 1 } },
+      end(1, 3),
+    ], false, 4))
+    test.service.setChangesPrefetch(async (_sessionId, target) => {
+      prefetched.push(target.turn)
+    })
+    await test.service.start()
+    try {
+      const record = Object.values((await test.state()).sessions)
+        .find(candidate => candidate.remoteSessionId === parent.sessionId)
+      assert.ok(record !== undefined)
+      const local = test.sessions.get(record.localSessionId)
+      assert.ok(local !== undefined)
+      const announcement = local.snapshotEvents()
+        .find(event => event.type === 'workspace/changes')
+      assert.ok(announcement !== undefined)
+
+      // Append a later turn, then ask again with the original seq.
+      test.setSnapshot(parent.sessionId, snapshotOf([
+        start(1, 0),
+        say(1, 'hello', 1),
+        { seq: 2, type: 'workspace/changes', data: { turn: 1 } },
+        end(1, 3),
+        start(2, 4),
+        say(2, 'again', 5),
+        end(2, 6),
+      ], true, 7))
+      await test.poll(parent.sessionId)
+
+      const still = test.service.changesEvent(record.localSessionId, announcement.seq)
+      assert.ok(still !== undefined, 'the earlier announcement still resolves after growth')
+      assert.equal(still.turn, 1)
+    } finally {
+      await test.service.dispose()
+    }
+  })
+})
+
 describe('the projection diagnostic accounts for consumed events', () => {
   it('reports a filtered event as routine, not as a loss', async () => {
     const test = await mounted()
@@ -235,6 +385,90 @@ describe('the projection diagnostic accounts for consumed events', () => {
       await test.service.dispose()
     }
   })
+
+/**
+ * A routing miss must be readable after the fact.
+ *
+ * The desktop app keeps no console, so `logger.warn` alone leaves the operator with
+ * nothing to read. The Forge panel's `localOf()` also swallows every error, so an
+ * unmapped path surfaces as a hidden card and no message at all. Writing a
+ * `plugin:` record into the Session puts the reason where the empty card is.
+ */
+/**
+ * A path below an anchor must belong to that workspace.
+ *
+ * `remoteFileContext` canonicalizes both sides with `realpathSync`, which returns
+ * backslash paths on Windows. Comparing only against `${anchor}/` therefore matched
+ * the anchor itself and nothing under it, so every child path looked unrelated: the
+ * fs and subprocess adapters served it locally, and for a mirrored Session that
+ * means the *empty* anchor. The Forge panel then reads no repository and hides the
+ * changed-files card while the remote checkout plainly has changes.
+ */
+describe('anchor containment', () => {
+  it('resolves a child path of the anchor to its remote workspace', async () => {
+    const test = await mounted()
+    try {
+      const workspace = Object.values((await test.state()).workspaces)[0]
+      assert.ok(workspace !== undefined, 'a mirror workspace exists')
+
+      const anchor = workspace.anchor
+      const context = test.service.remoteFileContext(anchor)
+      assert.ok(context !== undefined, 'the anchor itself resolves')
+
+      // The separator the platform actually uses for a child path.
+      const separator = anchor.includes('\\') ? '\\' : '/'
+      const child = `${anchor}${separator}README.md`
+      const fromChild = test.service.remoteFileContext(child)
+      assert.ok(
+        fromChild !== undefined,
+        `a child of the anchor resolves too (${child})`,
+      )
+      assert.equal(fromChild.remoteRoot, context.remoteRoot)
+    } finally {
+      await test.service.dispose()
+    }
+  })
+})
+
+describe('a routing miss is recorded durably', () => {
+  it('records a routing miss in the session log, once per path', async () => {
+    const test = await mounted()
+    try {
+      const workspace = Object.values((await test.state()).workspaces)[0]
+      assert.ok(workspace !== undefined, 'a mirror workspace exists')
+
+      // The record is written into the runtime the mirror holds, reached through
+      // the record's local id — not necessarily the `local` the mount helper
+      // captured, because the mirror may have re-mounted the session.
+      const session = test.sessions.get(test.record.localSessionId)
+      assert.ok(session !== undefined, 'the mirror session is live')
+
+      const before = session.snapshotEvents().length
+      test.service.noteRoutingMiss({
+        operation: 'resolve',
+        path: 'README.md',
+        base: workspace.anchor,
+      })
+
+      const added = session.snapshotEvents().slice(before)
+      const record = added.find(event => event.type === 'plugin:dsh-waypoint/routing-miss')
+      assert.ok(record !== undefined, 'the miss is in the session log')
+      assert.equal((record.data as { path?: string }).path, 'README.md')
+
+      // A polling panel must not append the same record on every tick.
+      test.service.noteRoutingMiss({
+        operation: 'resolve',
+        path: 'README.md',
+        base: workspace.anchor,
+      })
+      const repeats = session.snapshotEvents().slice(before)
+        .filter(event => event.type === 'plugin:dsh-waypoint/routing-miss')
+      assert.equal(repeats.length, 1, 'the same miss is recorded once, not per poll')
+    } finally {
+      await test.service.dispose()
+    }
+  })
+})
 
 describe('an event the local projection rejects', () => {
   it('does not freeze every later event', async () => {

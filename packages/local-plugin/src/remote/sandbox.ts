@@ -58,8 +58,12 @@ export function installRemoteConfine(ctx: Context, mirrors: RemoteMirrorService)
     // to the canonicalized remote root, so a policy naming that directory is
     // describing the mirrored workspace just as an anchor-named policy is; a
     // lookup that only knew anchors would let a local wrapper through.
+    //
+    // This asks only whether the root belongs to *some* mirror — confinement
+    // decides whether to wrap, it never routes the command — so it uses the
+    // host-agnostic predicate rather than naming a host it does not need.
     const mirrored = root !== undefined
-      && (mirrors.remoteFileContext(root) !== undefined || mirrors.remoteContextForRemotePath(root) !== undefined)
+      && (mirrors.remoteFileContext(root) !== undefined || mirrors.ownsMirroredRemotePath(root))
     if (mirrored) {
       // The remote agent runs this command in its own world, under its own
       // process controls; a local wrapper would be an unknown executable there.
