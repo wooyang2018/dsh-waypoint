@@ -7,7 +7,8 @@ This repository is intended to be public on GitHub.
 - Preserve the existing commit author identity; do not rewrite history or authors.
 - Keep test hostnames, personal paths, tokens, and screenshots out of committed files.
 - Local logs, screenshots, and test state may contain real values; only staged content matters.
-- Do not bump the version for test-only tooling or documentation. The current release is 1.0.1.
+- Do not bump the version for test-only tooling or documentation. `packages/local-plugin/package.json`
+  is the only record of the current version; read it rather than trusting this file.
 - In CHANGELOG entries, link the related issue or PR and thank external contributors with `@handle`.
 - When releasing a new version, update the pinned install version in `README.md`, `README.zh.md`, and `packages/local-plugin/README.md`.
 - Do not commit generated `lib/` output, tarballs, local DSH state, or credentials.
