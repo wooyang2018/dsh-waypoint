@@ -2,12 +2,15 @@
 
 [![CI](https://github.com/wooyang2018/dsh-waypoint/actions/workflows/ci.yml/badge.svg)](https://github.com/wooyang2018/dsh-waypoint/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/dsh-waypoint.svg)](https://www.npmjs.com/package/dsh-waypoint)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 [English](README.md) | 简体中文
 
 把远端开发变成和本地 Session 一样的体验。
 
 添加一次 SSH 主机后，插件会自动准备远端 DSH 运行时，把远端工作区和 Session 镜像到本地侧边栏，并在**普通 Conversation UI** 中打开远端 Session。转录、输入框、工具卡片、停止按钮和 Session 列表都与本地 Session 一致。
+
+![Settings → 远程开发 的主机列表，显示一台已连接的主机与其模型 Key 来源](https://raw.githubusercontent.com/wooyang2018/dsh-waypoint/main/packages/local-plugin/screenshots/settings-hosts.png)
 
 ```text
 本地 DSH                                        远端主机

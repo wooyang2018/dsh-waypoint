@@ -1,6 +1,26 @@
 # dsh-waypoint
 
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+[![npm](https://img.shields.io/npm/v/dsh-waypoint.svg)](https://www.npmjs.com/package/dsh-waypoint)
+
 Remote development that appears as ordinary local sessions.
+
+Add an SSH host once. The plugin provisions the remote DSH runtime itself, mirrors its workspaces and
+Sessions into the local sidebar, and opens a remote Session in the **ordinary Conversation UI** — the
+same transcript, composer, tool cards, stop control and session list as a local Session.
+
+![The host list in Settings → Remote development, showing a connected remote host and its model key source](https://raw.githubusercontent.com/wooyang2018/dsh-waypoint/main/packages/local-plugin/screenshots/settings-hosts.png)
+
+Creating a workspace: pick **This computer** or a connected **Remote device**, then add a source folder.
+Local folders use the native picker; remote folders use the read-only SSH browser.
+
+![The add-workspace dialog offering a local folder or a connected remote device](https://raw.githubusercontent.com/wooyang2018/dsh-waypoint/main/packages/local-plugin/screenshots/workspace-add.png)
+
+The same two panels in the dark theme:
+
+![The host list in the dark theme](https://raw.githubusercontent.com/wooyang2018/dsh-waypoint/main/packages/local-plugin/screenshots/settings-hosts-dark.png)
+
+![The add-workspace dialog in the dark theme](https://raw.githubusercontent.com/wooyang2018/dsh-waypoint/main/packages/local-plugin/screenshots/workspace-add-dark.png)
 
 ## Supported environment
 

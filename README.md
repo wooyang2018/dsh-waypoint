@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/wooyang2018/dsh-waypoint/actions/workflows/ci.yml/badge.svg)](https://github.com/wooyang2018/dsh-waypoint/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/dsh-waypoint.svg)](https://www.npmjs.com/package/dsh-waypoint)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 English | [Chinese](README.zh.md)
 
@@ -10,6 +11,8 @@ Remote development that behaves like a local session.
 Add an SSH host once. The plugin provisions the remote DSH runtime itself, mirrors its workspaces and
 sessions into the local sidebar, and opens a remote session in the **ordinary Conversation UI** — the
 same transcript, composer, tool cards, stop control, and session list as a local session.
+
+![The host list in Settings → Remote development, showing a connected remote host and its model key source](https://raw.githubusercontent.com/wooyang2018/dsh-waypoint/main/packages/local-plugin/screenshots/settings-hosts.png)
 
 ```text
 Local DSH                                         Remote host

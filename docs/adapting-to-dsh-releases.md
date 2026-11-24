@@ -61,8 +61,34 @@ Four places carry an exact version and must agree with the new target:
 | `packages/local-plugin/src/remote/provisioner.ts` → `FALLBACK_REMOTE_DSH_VERSION` | used only when the local DSH version cannot be read; tracks the newest supported release |
 | `README.md`, `README.zh.md`, `packages/local-plugin/README.md`, `SECURITY.md`, `CONTRIBUTING.md`, `RELEASING.md` | the supported-version matrix |
 
-`engines.dsh` and `dsh.compatibility.dsh` use a range (`>=0.2.2-rc.2 <0.3.0-0`), so a
-patch/prerelease update inside `0.2.2` needs no edit there; a new minor line (`0.3.x`) does.
+`engines.dsh` and every `@deepseek-ai/dsh*` peer carry one range, and its shape is load-bearing:
+
+```text
+>=0.2.2-rc.2 <0.3.0-0
+```
+
+Two different evaluators read it, and they disagree about prereleases:
+
+- **DSH** checks with `semver.satisfies(runtime, range, { includePrerelease: true })`, so every `0.2.x`
+  prerelease inside the bounds passes.
+- **npm and pnpm** use semver's defaults. node-semver admits a prerelease of `X.Y.Z` only when a
+  comparator in the range sits on the same `X.Y.Z` tuple *and* carries a prerelease tag. This range
+  therefore admits `0.2.2-rc.*` to an installer and rejects `0.2.3-alpha.*`, while the harness would
+  accept both.
+
+**Move the range when — and only when — a line becomes supported and tested.** Widening it to admit
+`0.2.3-alpha.*` was tried and reverted: npm resolves every DSH peer in an *optional* range to the
+highest version that matches, so admitting that line made it install `dsh-api-terminal-controller@0.2.3-alpha.2`,
+whose own `@deepseek-ai/cordis@~4.2.0-alpha.1` conflicts with `cordis-plugin-include@1.2.0-alpha.1`'s
+`cordis-plugin-loader@~1.2.0-alpha.1`. The install then failed on `0.2.2` — a line that installs
+cleanly today. So the enumerated shape is not a fix for the `0.2.3` prereleases; it is a regression.
+
+The cost of the current range is narrow: a user running a `0.2.3-alpha.*` harness cannot install the
+plugin with plain `npm install` (DSH's own compatibility gate would accept it). When that line becomes
+the tested baseline, move the range to enumerate the new tuple *and* update `VERSIONS` in
+`packages/local-plugin/test/peer-range.test.ts` in the same commit; that test pins what each evaluator
+decides for every published runtime, so an unintended widening fails there instead of in a user's
+install. Keep the `-0` upper bound — without it `0.3.0` itself becomes admissible.
 
 Then verify the whole chain, not just the parts you touched:
 

@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **The package description and keywords name what the plugin does.** The npm listing carried a
+  serialized feature list ("host registry, SSH tunnels, remote workspace/session discovery, an
+  authenticated Connection RPC surface, …") instead of a sentence a reader can act on, and five
+  keywords that no plausible search uses. It is now one sentence — SSH remote development for
+  DeepSeek Harness, mirroring remote Sessions into the sidebar with terminals, files and dev servers
+  over one tunnel — with keywords for the words people search for (`ssh-tunnel`, `remote-session`,
+  `remote-workspace`, `dev-server`, `port-forwarding`). This takes effect on the next published
+  version.
+
+### Documentation
+
+- **Both READMEs and the package README show the plugin.** The Settings host list and the
+  add-workspace dialog were only described in prose, which left the plugin-market entry — the page
+  most people see first — as a wall of text with no image at all. Each page now opens with the host
+  list and the add-workspace dialog, in both themes.
+- **The READMEs carry the Awesome DSH Plugin badge.** The project has been listed in
+  [awesome-dsh-plugin](https://awesome-dsh-plugin.com) under **Remote & Mobile** since 2026-11-19;
+  the badge links back to the list.
+- **The DSH dependency range records what it does and does not admit.** DSH evaluates
+  `engines.dsh` with `includePrerelease: true` while npm and pnpm use semver's defaults, so the
+  current `>=0.2.2-rc.2 <0.3.0-0` admits the whole `0.2.2` line to an installer but not the
+  `0.2.3-alpha.*` line. Widening it to cover those prereleases was implemented, measured and
+  reverted in this release: npm resolves every optional DSH peer to the highest matching version, so
+  admitting `0.2.3-alpha.*` pulled in `dsh-api-terminal-controller@0.2.3-alpha.2`, whose
+  `@deepseek-ai/cordis@~4.2.0-alpha.1` conflicts with `cordis-plugin-include@1.2.0-alpha.1` — and the
+  install then failed on `0.2.2`, which installs cleanly today. `docs/adapting-to-dsh-releases.md`
+  now records that measurement, and `packages/local-plugin/test/peer-range.test.ts` pins what each
+  evaluator decides for every published DSH release so the range cannot drift silently.
+
 ## 1.1.1
 
 ### Added
