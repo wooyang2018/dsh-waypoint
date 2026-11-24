@@ -44,7 +44,7 @@ async function fixture(options: {
     { stateDir, sshConfigPath: sshConfig, autoProvision: false },
     { DSH_HOME: home },
   )
-  const service = new RemoteHostsService(fakeContext(), config, { localDshVersion: '0.2.2-rc.3' })
+  const service = new RemoteHostsService(fakeContext(), config, { localDshVersion: '0.2.2-rc.5' })
   await service.start()
   return { service, home, sshConfig }
 }

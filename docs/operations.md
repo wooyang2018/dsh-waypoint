@@ -296,7 +296,7 @@ Local plugin profile override:
     remoteDshHome: ~/.dsh
     # npm global prefix owning pnpm and dsh; empty asks `npm prefix -g`.
     remoteGlobalPrefix: ''
-    # remoteDshVersion: 0.2.2-rc.3  # pin a remote DSH version; omit to follow the local one
+    # remoteDshVersion: 0.2.2-rc.5  # pin a remote DSH version; omit to follow the local one
     remotePnpmVersion: 11.21.0
     remoteStart: systemd            # systemd | nohup | none
     provisionTimeoutMs: 600000

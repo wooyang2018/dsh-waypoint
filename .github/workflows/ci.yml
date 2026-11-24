@@ -16,7 +16,7 @@ permissions:
 env:
   # The only supported and tested target. Bumping a DSH release means changing
   # this value; the workflow re-pins every DSH package and peer to it.
-  DSH_TARGET: 0.2.2-rc.3
+  DSH_TARGET: 0.2.2-rc.5
 
 jobs:
   verify:

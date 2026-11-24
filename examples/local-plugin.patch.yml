@@ -30,7 +30,7 @@
     # Global npm prefix that owns the remote `dsh` command.
     # Empty means `npm prefix -g`; there is no fallback location.
     remoteGlobalPrefix: ''
-    # remoteDshVersion: 0.2.2-rc.3  # pin a remote DSH version; omit to follow the local DSH version
+    # remoteDshVersion: 0.2.2-rc.5  # pin a remote DSH version; omit to follow the local DSH version
     remotePnpmVersion: 11.21.0
     # Node.js is detected through the account's own shell and never installed by
     # provisioning. The host's "..." menu offers "Install remote Node.js" (nvm +

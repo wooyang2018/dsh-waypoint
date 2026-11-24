@@ -282,7 +282,7 @@ The client tests render the built Settings component with React's test renderer.
 CI runs one job, `verify`, against the current target in the workflow's `DSH_TARGET` environment value:
 
 1. `pnpm install --frozen-lockfile` — the committed lockfile must install cleanly. This is what a fresh
-   clone gets, and it is currently pinned to the same `0.2.2-rc.3` release as `DSH_TARGET`.
+   clone gets, and it is currently pinned to the same `0.2.2-rc.5` release as `DSH_TARGET`.
 2. `node scripts/dev/select_dsh_version.mjs "$DSH_TARGET"` — re-pin every installed DSH package and peer.
    The script discovers packages through `pnpm list`, so it needs step 1's tree first.
 3. `pnpm install --no-frozen-lockfile` — resolve the re-pinned tree; deliberately outside the lockfile.
@@ -300,7 +300,7 @@ Bumping a DSH release means changing `DSH_TARGET` and moving the committed basel
 [adapting-to-dsh-releases.md](adapting-to-dsh-releases.md)); there is no separate baseline job, and the
 artifact name follows the value automatically.
 The job installs into no DSH profile and calls no model provider. The Playwright suite is not part of
-CI: `test/playwright` defaults to DSH `0.2.2-rc.3` through `DSH_WAYPOINT_E2E_DSH_VERSION` and runs
+CI: `test/playwright` defaults to DSH `0.2.2-rc.5` through `DSH_WAYPOINT_E2E_DSH_VERSION` and runs
 locally; see [test/playwright/README.md](../test/playwright/README.md). Changes to the mirror's Agent
 interface must pass CI and the Playwright suite locally.
 

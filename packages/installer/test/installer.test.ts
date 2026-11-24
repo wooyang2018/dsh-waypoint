@@ -15,7 +15,7 @@ describe('installer options', () => {
     assert.equal(options.profile, 'web')
     assert.equal(options.port, 0)
     assert.equal(options.start, 'systemd')
-    assert.equal(options.dshVersion, '0.2.2-rc.3')
+    assert.equal(options.dshVersion, '0.2.2-rc.5')
     assert.equal(options.strictHostKeyChecking, 'accept-new')
   })
 
@@ -476,7 +476,7 @@ describe('bootstrap rendering', () => {
       profile: 'web',
       port: 0,
       dshHome: '~/.dsh',
-      dshVersion: '0.2.2-rc.3',
+      dshVersion: '0.2.2-rc.5',
       pnpmVersion: '11.21.0',
       start: 'systemd' as const,
       agentTarball: '/tmp/a.tgz',

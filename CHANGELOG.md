@@ -1,17 +1,25 @@
 # Changelog
 
-## Unreleased
+## 1.1.2
 
 ### Changed
 
+- **The tested DSH release moves from `0.2.2-rc.3` to `0.2.2-rc.5`.** CI's `DSH_TARGET`, the
+  installer's `--dsh-version` default, `FALLBACK_REMOTE_DSH_VERSION`, the committed dependency
+  baseline and the supported-version matrix all follow it. **No plugin code changed**, and no peer
+  range needed widening: `>=0.2.2-rc.2 <0.3.0-0` already admits `rc.5` under both DSH's
+  prerelease-inclusive check and npm's stricter one, and `@deepseek-ai/cordis` (`4.1.0`) and
+  `@deepseek-ai/schemastery` (`3.19.0`) are unchanged between the two. Of the 338 DSH packages, 16
+  changed; `dsh-api-terminal-controller`'s `lib/index.js` — the service this plugin patches — is
+  byte-identical, and the only relevant difference (`dsh-api-remotes`) is confined to its browser
+  bundle. The full suite passes unchanged.
 - **The package description and keywords name what the plugin does.** The npm listing carried a
   serialized feature list ("host registry, SSH tunnels, remote workspace/session discovery, an
   authenticated Connection RPC surface, …") instead of a sentence a reader can act on, and five
   keywords that no plausible search uses. It is now one sentence — SSH remote development for
   DeepSeek Harness, mirroring remote Sessions into the sidebar with terminals, files and dev servers
   over one tunnel — with keywords for the words people search for (`ssh-tunnel`, `remote-session`,
-  `remote-workspace`, `dev-server`, `port-forwarding`). This takes effect on the next published
-  version.
+  `remote-workspace`, `dev-server`, `port-forwarding`).
 
 ### Documentation
 
@@ -22,6 +30,16 @@
 - **The READMEs carry the Awesome DSH Plugin badge.** The project has been listed in
   [awesome-dsh-plugin](https://awesome-dsh-plugin.com) under **Remote & Mobile** since 2026-11-19;
   the badge links back to the list.
+- **[Adapting to a new DSH release](docs/adapting-to-dsh-releases.md) is rewritten around the
+  measurements that actually decide a migration.** It gains a step 0 that asks which npm channel the
+  release is on, whether the plugin installs **into a real DSH runtime** (rather than into a bare
+  directory, where npm invents an optional-peer resolution no profile would have), and which packages
+  changed by comparing built output rather than version numbers. It also records two answers that were
+  wrong until they were measured: that the plugin cannot install into a newer line because a bare
+  directory reported a conflict, and that a differing package always means work — `dsh-api-remotes`
+  differed only in a browser bundle this plugin never patches. It documents the npm-versus-pnpm
+  prerelease divergence and why widening the peer range broke a line that installed cleanly, and ends
+  with the `rc.3 → rc.5` move as a worked example to compare the next one against.
 - **The DSH dependency range records what it does and does not admit.** DSH evaluates
   `engines.dsh` with `includePrerelease: true` while npm and pnpm use semver's defaults, so the
   current `>=0.2.2-rc.2 <0.3.0-0` admits the whole `0.2.2` line to an installer but not the

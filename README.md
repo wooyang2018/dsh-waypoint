@@ -31,16 +31,16 @@ This plugin is developed for the **official DSH Desktop application**. Supported
 
 | Component | Version |
 |---|---|
-| [DSH Desktop / official client](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested) |
-| Plugin | [**1.1.1**](https://www.npmjs.com/package/dsh-waypoint) |
-| Remote DSH runtime | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3) (tested; new installs follow the local DSH version) |
+| [DSH Desktop / official client](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.5**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.5) (tested) |
+| Plugin | [**1.1.2**](https://www.npmjs.com/package/dsh-waypoint) |
+| Remote DSH runtime | [**0.2.2-rc.5**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.5) (tested; new installs follow the local DSH version) |
 | Remote Node.js | [**22.19+**](https://nodejs.org/en/download) (one-click nvm + latest LTS install from the host card) |
 | Remote OS | Linux or macOS |
 
 Other DSH GUI plugins, community forks, modified clients, non-DSH GUIs, and other DSH versions have
 **not** been tested. The package's dependency range is intentionally permissive for installation, but
 it is not a compatibility or support guarantee. The desktop client and the remote runtime are tested
-on `0.2.2-rc.3`; new remote installs follow the local DSH runtime version by default and can be
+on `0.2.2-rc.5`; new remote installs follow the local DSH runtime version by default and can be
 pinned with `remoteDshVersion`.
 
 ## What works now
@@ -88,7 +88,7 @@ If npmjs.com still resolves an older `latest` tag for a newly published release,
 current version instead:
 
 ```text
-dsh-waypoint@1.1.1
+dsh-waypoint@1.1.2
 ```
 
 Keep this pinned version in sync with each release.
@@ -326,7 +326,7 @@ remote model requests use it as well, not just the installer.
     remoteDshHome: ~/.dsh
     # npm globals (pnpm and @deepseek-ai/dsh) go into this prefix; empty asks `npm prefix -g`.
     remoteGlobalPrefix: ''
-    # remoteDshVersion: 0.2.2-rc.3  # pin a remote DSH version; omit to follow the local DSH version
+    # remoteDshVersion: 0.2.2-rc.5  # pin a remote DSH version; omit to follow the local DSH version
     remotePnpmVersion: 11.21.0
     # Remote-visible proxy for npm and DSH downloads. Empty means inspect the remote login shell.
     remoteInstallProxy: ''

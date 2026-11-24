@@ -33,7 +33,7 @@ export type ProvisionProgress = (code: HostDetail) => void
  * version, so it tracks the newest supported release rather than a development
  * baseline.
  */
-const FALLBACK_REMOTE_DSH_VERSION = '0.2.2-rc.3'
+const FALLBACK_REMOTE_DSH_VERSION = '0.2.2-rc.5'
 
 /**
  * Resolve the DSH version to install on a remote host.

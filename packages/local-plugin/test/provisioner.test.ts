@@ -47,20 +47,20 @@ describe('agent install target', () => {
 
 describe('remote DSH version selection', () => {
   it('follows the local runtime when no version is configured', () => {
-    assert.equal(resolveRemoteDshVersion('', '0.2.2-rc.3'), '0.2.2-rc.3')
-    assert.equal(resolveRemoteDshVersion(undefined, '0.2.2-rc.3'), '0.2.2-rc.3')
+    assert.equal(resolveRemoteDshVersion('', '0.2.2-rc.5'), '0.2.2-rc.5')
+    assert.equal(resolveRemoteDshVersion(undefined, '0.2.2-rc.5'), '0.2.2-rc.5')
   })
 
   it('pins an explicitly configured version', () => {
-    assert.equal(resolveRemoteDshVersion('0.2.2-rc.2', '0.2.2-rc.3'), '0.2.2-rc.2')
+    assert.equal(resolveRemoteDshVersion('0.2.2-rc.2', '0.2.2-rc.5'), '0.2.2-rc.2')
   })
 
   it('lets a manual upgrade override the configured version', () => {
-    assert.equal(resolveRemoteDshVersion('0.2.2-rc.2', '0.2.2-rc.2', '0.2.2-rc.3'), '0.2.2-rc.3')
+    assert.equal(resolveRemoteDshVersion('0.2.2-rc.2', '0.2.2-rc.2', '0.2.2-rc.5'), '0.2.2-rc.5')
   })
 
   it('falls back when the local runtime version is unknown', () => {
-    assert.equal(resolveRemoteDshVersion('', undefined), '0.2.2-rc.3')
+    assert.equal(resolveRemoteDshVersion('', undefined), '0.2.2-rc.5')
   })
 })
 

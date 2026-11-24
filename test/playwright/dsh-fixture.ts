@@ -57,7 +57,7 @@ function findChrome(): string | undefined {
 export const APP = findDshCli()
 export const CHROME = findChrome()
 export const FAKE_SSH = join(ROOT, 'test/playwright/fake-ssh.mjs')
-const DSH_VERSION = process.env.DSH_WAYPOINT_E2E_DSH_VERSION ?? '0.2.2-rc.3'
+const DSH_VERSION = process.env.DSH_WAYPOINT_E2E_DSH_VERSION ?? '0.2.2-rc.5'
 
 /**
  * The tarball `pnpm test:e2e` just built.

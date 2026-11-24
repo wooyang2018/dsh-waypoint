@@ -15,7 +15,7 @@ function scriptedExitCodes(): number[] {
     profile: 'web',
     port: 0,
     dshHome: '/srv/dsh',
-    dshVersion: '0.2.2-rc.3',
+    dshVersion: '0.2.2-rc.5',
     pnpmVersion: '11.21.0',
     start: 'systemd',
     agentTarball: '/tmp/a.tgz',

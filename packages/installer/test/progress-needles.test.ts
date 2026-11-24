@@ -37,7 +37,7 @@ function render(start: 'systemd' | 'nohup', upgrade: boolean): string {
     profile: 'web',
     port: 0,
     dshHome: '$HOME/.dsh',
-    dshVersion: '0.2.2-rc.3',
+    dshVersion: '0.2.2-rc.5',
     pnpmVersion: '11.21.0',
     upgrade,
     start,

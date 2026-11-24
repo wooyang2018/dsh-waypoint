@@ -29,15 +29,15 @@
 
 | 组件 | 版本 |
 |---|---|
-| [DSH Desktop / 官方客户端](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)（已测试） |
-| 插件 | [**1.1.1**](https://www.npmjs.com/package/dsh-waypoint) |
-| 远端 DSH 运行时 | [**0.2.2-rc.3**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)（已测试；新安装跟随本机 DSH 版本） |
+| [DSH Desktop / 官方客户端](https://github.com/deepseek-ai/deepseek-harness) | [**0.2.2-rc.5**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.5)（已测试） |
+| 插件 | [**1.1.2**](https://www.npmjs.com/package/dsh-waypoint) |
+| 远端 DSH 运行时 | [**0.2.2-rc.5**](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.5)（已测试；新安装跟随本机 DSH 版本） |
 | 远端 Node.js | [**22.19+**](https://nodejs.org/en/download)（可在主机卡片一键安装 nvm + 最新 LTS） |
 | 远端操作系统 | Linux 或 macOS |
 
 没有测试过其他 DSH GUI 插件、社区 fork、修改过的客户端、非 DSH GUI，以及其他 DSH 版本。
 包的依赖范围为了安装兼容性写得较宽，但不代表兼容性承诺或支持范围。桌面客户端和远端运行时
-均已在 `0.2.2-rc.3` 上测试；新远端安装默认跟随本机 DSH 版本，可用 `remoteDshVersion` 固定。
+均已在 `0.2.2-rc.5` 上测试；新远端安装默认跟随本机 DSH 版本，可用 `remoteDshVersion` 固定。
 
 ## 已实现功能
 
@@ -80,7 +80,7 @@ DSH 会从 npm 安装 bundle。这个包已经包含远端 agent 资源，不需
 如果 npmjs.com 对刚发布版本的 `latest` 解析仍旧滞后，可以改为安装当前的精确版本：
 
 ```text
-dsh-waypoint@1.1.1
+dsh-waypoint@1.1.2
 ```
 
 每次发新版本时同步更新这个版本号。
@@ -237,7 +237,7 @@ node scripts/test/test-sandbox.mjs
     remoteDshHome: ~/.dsh
     # pnpm 与 @deepseek-ai/dsh 的全局安装前缀；留空则用 `npm prefix -g`
     remoteGlobalPrefix: ''
-    # remoteDshVersion: 0.2.2-rc.3  # 固定远端 DSH 版本；省略则跟随本机 DSH 版本
+    # remoteDshVersion: 0.2.2-rc.5  # 固定远端 DSH 版本；省略则跟随本机 DSH 版本
     remotePnpmVersion: 11.21.0
     # 远端可访问的代理；留空则读取远端登录 shell 的环境变量
     remoteInstallProxy: ''

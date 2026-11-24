@@ -55,7 +55,7 @@ export function parseArgs(argv: readonly string[]): InstallerOptions {
   let profile = 'web'
   let port = 0
   let dshHome = '$HOME/.dsh'
-  let dshVersion = '0.2.2-rc.3'
+  let dshVersion = '0.2.2-rc.5'
   let pnpmVersion = '11.21.0'
   let globalPrefix = ''
   let start: StartMode = 'systemd'
@@ -250,7 +250,7 @@ Options:
   --profile                Remote DSH profile (default: web)
   --port                   Remote DSH Web port, 0 lets the OS pick (default: 0)
   --dsh-home               Remote DSH home (default: $HOME/.dsh)
-  --dsh-version            @deepseek-ai/dsh version (default: 0.2.2-rc.3)
+  --dsh-version            @deepseek-ai/dsh version (default: 0.2.2-rc.5)
   --pnpm-version           pnpm version installed into the global prefix (default: 11.21.0)
   --global-prefix          npm global prefix that owns the remote dsh (default: npm prefix -g)
   --start                  systemd | nohup | none (default: systemd)
