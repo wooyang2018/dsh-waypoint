@@ -51,16 +51,73 @@ describe('remote terminal', () => {
       await new Promise(resolve => setTimeout(resolve, 700))
       assert.ok(output.join('').includes('dsh-terminal-ok'))
       manager.input('t1', { type: 'resize', cols: 100, rows: 30 })
-      manager.close('t1')
+      await manager.close('t1')
       controller.abort()
       await reader
     } finally {
-      // `dispose` waits for the helpers to exit, so the directory can be removed
-      // without racing a socket error from a process nobody is watching. That
-      // window only shows up where the test actually runs — it skips on Windows,
-      // which is why CI saw it first.
+      // Both `close` and `dispose` wait for the helpers, so the directory can be
+      // removed without racing a socket error from a process nobody watches.
+      // That window only shows up where this test actually runs — it skips on
+      // Windows, which is why CI saw it first.
       await manager.dispose()
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('remote terminal teardown', () => {
+  const posix = process.platform !== 'win32'
+
+  // `close` and `dispose` share one primitive: request the exit, then await it.
+  // The record leaves `#terminals` first so callers stop seeing the terminal,
+  // but the helper is a separate process a `SIGHUP` only asks to stop, and
+  // returning while it still closes its PTY socket is what let an `ECONNRESET`
+  // land after the caller had moved on. That is what made CI fail
+  // intermittently with "generated asynchronous activity after the test ended".
+  //
+  // Runs everywhere on purpose: the contract is about the manager's bookkeeping,
+  // not about the PTY. Off POSIX the helper fails immediately, which still
+  // exercises the close-then-dispose path this asserts.
+  it('waits for the helper when a terminal is closed', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-drain-'))
+    const manager = new RemoteTerminalManager()
+    try {
+      manager.create({ id: 'drain', cwd: dir, cols: 80, rows: 24 })
+      const started = Date.now()
+      await manager.close('drain')
+      // The reply means the helper is gone, not merely asked to go.
+      assert.ok(Date.now() - started < 2_000, 'close must not fall through to the backstop')
+      // A closed terminal stops being offered, so nothing above can reach it.
+      assert.deepEqual(manager.list(), [])
+      // And dispose afterwards has nothing left to wait for.
+      await manager.dispose()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not let a socket error from a dying helper escape', { skip: !posix && 'requires a POSIX pty' }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-reset-'))
+    const manager = new RemoteTerminalManager()
+    const uncaught: unknown[] = []
+    const onUncaught = (error: unknown): void => {
+      uncaught.push(error)
+    }
+    process.on('uncaughtException', onUncaught)
+    try {
+      manager.create({ id: 'reset', cwd: dir, cols: 80, rows: 24 })
+      // Closing while the shell is still starting maximises the chance the PTY
+      // socket resets after the last frame, which is the window that used to
+      // fail the whole run.
+      await manager.close('reset')
+      await manager.dispose()
+      await rm(dir, { recursive: true, force: true })
+      // Anything the helper emits on the way out is handled by its own
+      // listeners; give the loop a turn to deliver it before asserting.
+      await new Promise<void>(resolveTurn => setTimeout(resolveTurn, 100))
+      assert.deepEqual(uncaught, [], 'a stream error must be handled, not thrown')
+    } finally {
+      process.off('uncaughtException', onUncaught)
     }
   })
 })

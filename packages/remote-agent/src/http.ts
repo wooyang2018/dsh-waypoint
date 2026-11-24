@@ -190,7 +190,9 @@ export async function handleAgentRequest(
           sendJson(res, { accepted: true })
           return
         case 'terminal-close':
-          service.terminals.close(route.terminalId)
+          // Awaited so the reply means the helper is gone, not merely asked to
+          // go: the caller's next request may reopen the same id.
+          await service.terminals.close(route.terminalId)
           sendJson(res, { accepted: true })
           return
         default:

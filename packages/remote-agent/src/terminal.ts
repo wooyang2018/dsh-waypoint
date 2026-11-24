@@ -20,6 +20,15 @@ const MAX_BUFFERED_BYTES = 512 * 1024
 const MAX_COLS = 240
 const MAX_ROWS = 80
 
+/**
+ * How long teardown waits for a helper to exit after `SIGHUP`.
+ *
+ * A helper that ignores the signal must not hang shutdown, but the wait has to
+ * be long enough to matter: the crash this bounds is a socket error arriving
+ * after the last frame, so returning early is what leaves the error unowned.
+ */
+const EXIT_BACKSTOP_MS = 2_000
+
 /** The passwd login shell, when the platform can report it. */
 function passwdLoginShell(): string | undefined {
   try {
@@ -195,6 +204,17 @@ export class RemoteTerminalManager {
     child.stderr.on('data', (chunk: Buffer) => {
       record.stderr = `${record.stderr}${chunk.toString('utf8')}`.slice(-8 * 1024)
     })
+    // A PTY socket can reset while a helper is being torn down. Without a
+    // listener that surfaces as an uncaught exception and fails whatever ran
+    // next — a test, or a cleanup racing the dying process. The `exit` handler
+    // below already publishes the terminal's final state; this only records why.
+    const noteStreamError = (error: Error): void => {
+      record.stderr = `${record.stderr}${String(error)}`.slice(-8 * 1024)
+    }
+    child.stdin.on('error', noteStreamError)
+    child.stdout.on('error', noteStreamError)
+    child.stderr.on('error', noteStreamError)
+    record.control.on('error', noteStreamError)
     child.on('error', error => this.#finish(record, 'failed', null, String(error)))
     child.on('exit', code => this.#finish(record, code === 0 ? 'exited' : 'failed', code, undefined))
     return info
@@ -231,13 +251,21 @@ export class RemoteTerminalManager {
     record.info = { ...record.info, title: title.trim() || record.info.title }
   }
 
-  /** Close one terminal and its child. */
-  close(id: string): void {
+  /**
+   * Close one terminal and wait until its helper is gone.
+   *
+   * The record leaves `#terminals` first, so `list()`, `input()` and `attach()`
+   * stop offering it immediately. What the caller then awaits is the same
+   * primitive {@link dispose} uses: a `SIGHUP` asks the helper to stop, it does
+   * not stop it, and returning while it is still closing its PTY socket is what
+   * let an `ECONNRESET` land after the caller had moved on.
+   */
+  async close(id: string): Promise<void> {
     const record = this.#terminals.get(id)
     if (record === undefined) return
     this.#finish(record, 'exited', record.info.exitCode, undefined)
-    record.child.kill('SIGHUP')
     this.#terminals.delete(id)
+    await this.#terminate(record)
   }
 
   /** Stream one attachment. */
@@ -280,31 +308,41 @@ export class RemoteTerminalManager {
   }
 
   /**
-   * Terminate every PTY, optionally waiting for the helpers to exit.
-   *
-   * `SIGHUP` detaches the child, but the child may still be tearing down its
-   * socket when this returns. Anything the caller does next — removing the
-   * working directory, ending a test — then races a `ECONNRESET` emitted by a
-   * process nobody is watching. Awaiting the exits makes the teardown ordered
-   * instead of hopeful.
+   * Terminate every PTY and wait until every helper is gone.
    *
    * @returns A promise that settles once every helper has exited.
    */
-  dispose(): Promise<void> {
-    const exits: Promise<void>[] = []
-    for (const record of this.#terminals.values()) {
-      record.closed = true
-      if (record.child.exitCode === null && record.child.signalCode === null) {
-        exits.push(new Promise<void>(resolveExit => {
-          record.child.once('exit', () => resolveExit())
-          // A helper that ignores SIGHUP must not hang the caller.
-          setTimeout(resolveExit, 2_000)
-        }))
-      }
-      record.child.kill('SIGHUP')
-    }
+  async dispose(): Promise<void> {
+    const closing = [...this.#terminals.values()]
     this.#terminals.clear()
-    return Promise.all(exits).then(() => undefined)
+    await Promise.all(closing.map(record => {
+      record.closed = true
+      return this.#terminate(record)
+    }))
+  }
+
+  /**
+   * Ask one helper to stop and resolve once it has.
+   *
+   * The only place a helper is signalled, so `close` and `dispose` cannot drift
+   * apart. The backstop keeps a helper that ignores `SIGHUP` from hanging
+   * shutdown; it is `unref`'d so it never keeps the process alive on its own.
+   *
+   * @param record - the terminal whose helper should exit.
+   * @returns Fulfillment once the helper has exited, or the backstop elapsed.
+   */
+  #terminate(record: TerminalRecord): Promise<void> {
+    return new Promise<void>(resolveExit => {
+      const settle = (): void => {
+        clearTimeout(backstop)
+        resolveExit()
+      }
+      const backstop = setTimeout(settle, EXIT_BACKSTOP_MS)
+      backstop.unref()
+      record.child.once('exit', settle)
+      record.child.once('error', settle)
+      record.child.kill('SIGHUP')
+    })
   }
 
   #output(record: TerminalRecord, data: string): void {
