@@ -76,6 +76,18 @@ the old version while the operator believes the new one is deployed.
 So: build, let the plugin pack and push, and read the version back from the remote's `agent.json`
 before claiming a test result. Anything else risks measuring a build that is not running.
 
+### The profile the desktop app loads is `desktop`
+
+Local interactive testing runs against the **`desktop`** profile by default; that is the one the
+maintainer's DSH desktop app loads, and installing anywhere else has no effect on what they see. The
+same home also holds `web` and `headless`, and a package installed into those is invisible to the
+running app.
+
+Only go looking when the result does not match what was installed. The symptom is specific: the
+plugin reports the version you just built while the remote keeps running an older one, because a
+different profile is doing the provisioning. `~/.dsh/profiles/<name>/package.json` names the tarball
+each profile loads, so comparing them settles it in one step — no need to audit all three up front.
+
 Keep test workspaces (and their sessions) out of the sidebar with the test-only manifest at
 `$DSH_HOME/waypoint/test-visibility.json`. Hide them rather than deleting them, so the data stays
 available for review. The manifest format, when to hide at creation versus after the run, and the
