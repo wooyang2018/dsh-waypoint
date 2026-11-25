@@ -412,6 +412,42 @@ Three smaller decisions follow from the same shape:
   only the owner of the asked questions can check; the gateway validated the shape, not the
   correspondence to this call.
 
+#### The anchor, and why a timed mirror needs one
+
+Two mechanisms only run if the Session log declares the **timed** `ask_user_question` schema — one
+that carries a `timeout` parameter:
+
+- DSH's `userQuestions` projection ignores every `tool/call` until a `request/header` declares it
+  (`if (!fold.timed) return fold`), so without it the fold stays empty and no `continued` row ever
+  appears.
+- `askTimed` is only reachable through that schema.
+
+A mirrored Session almost never contains that header: the seed is a truncated tail capped by
+`mirrorMaxEvents`, while the header sits at the start of the conversation. Replaying the remote
+header verbatim is not the fix either — a local `request/header` describes the tools *this* Session's
+model can call, and no local model runs the remote's tools.
+
+So the mirror writes its own anchor (`declaresTimedQuestions` / `localQuestionHeader` in
+`src/mirror/service.ts`): when the snapshot window proves the remote asked timed questions, one local
+`request/header` is seeded ahead of every replayed event, listing **only** `ask_user_question`. Remote
+headers are stripped from the seed in both cases, for the same reason `toWireEvent` drops
+`developer/message` tool-change blocks. A window with no header at all is not evidence of a timed
+tool, so nothing is invented — the mirror simply keeps its previous behaviour.
+
+With the anchor in place, the remote's pending `tool/result` folds the call to `continued`, the
+projection publishes it, and the local card renders the state DSH already supports: `waitState:
+'continued'`, no countdown (`countdown` is `undefined` without a deadline, by design).
+
+#### Late answers
+
+When that window closes, `askTimed` has already returned `{ pending: true }` to the model and the turn
+moved on, but the question stays answerable. Resolving the original waterfall now would reach nobody.
+The agent therefore **parks** the record instead of dropping it (`#parkExpiredQuestion`) and delivers a
+later answer through `userQuestions.answer()`, which steers a `user-question-reply` message into the
+conversation — the documented path for a `continued` question (`#steerLateAnswer`). If DSH reports the
+call is no longer answerable, that is surfaced as a failure rather than acknowledged: a caller who
+believes an answer was delivered when it was not is worse off than one told to retype it.
+
 `intent` is copied verbatim in both directions. It names a presentation the *asking* host chose, and
 DSH's own rule is that a tag a UI does not recognise falls back to the generic option list, so
 dropping an unknown one would make version skew silently change the card.

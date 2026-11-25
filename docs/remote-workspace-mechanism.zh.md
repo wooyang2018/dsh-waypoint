@@ -359,6 +359,35 @@ tool result**，所以「当时没人在听」绝不能变成「用户拒绝了�
 - **不完整的批次会被拒绝。** `assertCompleteBatch` 要求每个问题恰好出现一次——只有「出题的那一方」能校验这件事；
   gateway 校验的是形状，不是与本 call 的对应关系。
 
+#### 锚点：为什么 timed 镜像需要它
+
+有两套机制只在日志声明了 **timed** 版 `ask_user_question` schema（带 `timeout` 参数）时才会运转：
+
+- DSH 的 `userQuestions` 投影在遇到这种 `request/header` 之前，会丢弃每一个 `tool/call`
+  （`if (!fold.timed) return fold`），所以没有它就不会出现任何 `continued` 行。
+- `askTimed` 也只能经由这套 schema 到达。
+
+而镜像会话几乎不会包含那个 header：seed 是被 `mirrorMaxEvents` 截断的尾部，header 却在对话开头。
+原样回放远端 header 也不对——本地 `request/header` 描述的是**本 Session 模型**能调用的工具，而本地模型
+并不执行远端那些工具。
+
+于是镜像写入自己的锚点（`declaresTimedQuestions` / `localQuestionHeader`）：当 snapshot 窗口证明远端用的是
+timed 提问时，就在所有回放事件之前 seed 一条本地 `request/header`，且**只列** `ask_user_question`。两种情况下
+远端 header 都会被剔除，理由与 `toWireEvent` 丢弃 `developer/message` 的工具变更块相同。窗口里完全没有
+header 并不构成「timed」的证据，所以不做任何猜测——镜像保持原有行为。
+
+锚点到位后，远端那条 pending `tool/result` 会把该 call 折叠成 `continued`，投影发布它，本地卡片于是渲染
+DSH 本就支持的状态：`waitState: 'continued'`、没有倒计时（无 deadline 时 `countdown` 就是 `undefined`，
+这是设计如此）。
+
+#### 迟到的答案
+
+窗口关闭时，`askTimed` 已经把 `{ pending: true }` 交给模型、turn 也继续了，但问题仍然可答。此时 resolve
+原来的瀑布是无人接收的。所以 agent 会**保留**该记录而不是丢弃（`#parkExpiredQuestion`），并把之后的答案通过
+`userQuestions.answer()` 交付——它会把一条 `user-question-reply` 消息 steer 进对话，这正是应答 `continued`
+问题的既定路径（`#steerLateAnswer`）。如果 DSH 报告该 call 已不可答，这会作为失败上报而不是假装成功：
+一个以为答案已送达、实际没送达的调用方，比一个被告知「请重填」的调用方处境更差。
+
 `intent` 在两个方向都原样透传。它声明的是**出题方**选择的呈现形态，而 DSH 自己的规则是「UI 不认识的 tag 回落到
 通用选项列表」，所以丢掉不认识的 tag 会让版本差异悄悄改变卡片形态。
 

@@ -110,6 +110,18 @@ interface PendingQuestion {
   readonly request: RemoteQuestionRequest
   resolve(outcome: RemoteQuestionOutcome): void
   readonly settled: () => boolean
+  /**
+   * The foreground window closed, but the question is still answerable.
+   *
+   * Set when DSH's own `askTimed` deadline passes: the model already received
+   * `{ pending: true }` and the turn moved on, while the Session projection
+   * keeps the call as `continued`. An answer arriving now must be *steered* into
+   * the conversation, not resolved into the abandoned waterfall — resolving a
+   * promise nobody awaits would silently drop it.
+   */
+  readonly expired: boolean
+  /** Live root Agent that asked, needed by the late-reply path. */
+  readonly agent: unknown
 }
 
 /** Service returned by the plugin and consumed by the HTTP adapter. */
@@ -590,13 +602,100 @@ export class RemoteAgentService {
    * `delegated` is accepted rather than rejected: it is the local side saying it
    * has no mirror for this Session, which is a normal state, not a protocol
    * error.
+   *
+   * An **expired** question is answered through DSH's own late-reply path
+   * instead of the waterfall: the foreground wait is gone, the model already saw
+   * `{ pending: true }`, and the only channel that still reaches it is the one
+   * `userQuestions.answer()` uses — a steered `user-question-reply` message.
+   * Reporting success for a resolve nobody awaits would drop the answer, which
+   * is the failure this branch exists to prevent.
    */
   answerQuestion(id: string, outcome: RemoteQuestionOutcome): AcceptedResult {
     const pending = this.#pendingQuestions.get(id)
-    if (pending === undefined || pending.settled()) {
+    if (pending === undefined) {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: `question ${id} is not pending` })
+    }
+    if (pending.expired) {
+      if (outcome.kind !== 'answer') {
+        // Nothing to withdraw and nobody to delegate to: the window is closed.
+        this.#pendingQuestions.delete(id)
+        return { accepted: true }
+      }
+      return this.#steerLateAnswer(pending, outcome.answers)
+    }
+    if (pending.settled()) {
       throw new RemoteProtocolError({ code: 'request/invalid', message: `question ${id} is not pending` })
     }
     pending.resolve(outcome)
+    return { accepted: true }
+  }
+
+  /**
+   * Keep an expired question answerable until the local card lets go of it.
+   *
+   * The record deliberately outlives the waterfall: `askTimed` has already
+   * returned `{ pending: true }`, so nothing awaits the original promise, but the
+   * Session projection still lists the call as `continued` and DSH still accepts
+   * a late reply for it. Dropping the record here is what used to turn a user's
+   * answer into `request/invalid`.
+   */
+  #parkExpiredQuestion(request: RemoteQuestionRequest, source: AskUserQuestionRequest): void {
+    this.#pendingQuestions.set(request.id, {
+      request,
+      // Never resolved through the waterfall again; the late-reply path owns it.
+      resolve: () => {},
+      settled: () => false,
+      expired: true,
+      agent: source.agent,
+    })
+  }
+
+  /**
+   * Deliver a late answer through the only channel that still reaches the model.
+   *
+   * `userQuestions.answer()` steers a `user-question-reply` message into the
+   * agent and is the documented way to answer a `continued` question. It returns
+   * `false` when the call is no longer answerable, which is reported as a failure
+   * rather than swallowed: a caller that believes its answer was delivered when
+   * it was not is worse off than one told to retype it.
+   */
+  #steerLateAnswer(
+    pending: PendingQuestion,
+    answers: readonly RemoteQuestionAnswerItem[],
+  ): AcceptedResult {
+    const agent = pending.agent as { id?: unknown } | undefined
+    const callId = pending.request.callId
+    if (agent === undefined || callId === undefined) {
+      this.#pendingQuestions.delete(pending.request.id)
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'the expired question has no live Agent to deliver a late answer to',
+      })
+    }
+    assertCompleteBatch(pending.request.questions, answers)
+    const userQuestions = (this.ctx as unknown as {
+      userQuestions?: {
+        answer(agent: unknown, callId: string, answer: { answers: readonly Record<string, unknown>[] }): boolean
+      }
+    }).userQuestions
+    if (userQuestions === undefined) {
+      throw new RemoteProtocolError({ code: 'internal', message: 'the remote host has no user-questions service' })
+    }
+    const delivered = userQuestions.answer(agent, callId, {
+      answers: answers.map(item => ({
+        id: item.id,
+        selected: [...item.selected],
+        ...item.custom === undefined ? {} : { custom: item.custom },
+      })),
+    })
+    if (!delivered) {
+      this.#pendingQuestions.delete(pending.request.id)
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'the question is no longer answerable; the remote Session no longer lists it as continued',
+      })
+    }
+    this.#pendingQuestions.delete(pending.request.id)
     return { accepted: true }
   }
 
@@ -679,18 +778,27 @@ export class RemoteAgentService {
         request: projected,
         resolve: finish,
         settled: () => settled,
+        get expired() { return timedOut },
+        agent: request.agent,
       })
       this.#questionEvents.emit('request', projected)
     })
+    // A timed question that expired is *not* a decision. `askTimed` has already
+    // returned `{ pending: true }` to the model and the turn moved on, but the
+    // question stays answerable in the projection as `continued` — so the
+    // record must survive here too, and a late answer must take the steer path
+    // rather than resolve a waterfall nobody is awaiting any more.
+    if (timedOut && projected.callId !== undefined) {
+      this.#parkExpiredQuestion(projected, request)
+      throw questionError('the question window closed; it remains answerable as a late reply', 'ASK_TIMED_OUT')
+    }
     if (outcome.kind === 'delegated') return await next()
     if (outcome.kind === 'cancelled') {
       // Two facts share the wire's `cancelled` kind but must not share a code:
       // a withdrawal says the user decided against the question, while an
       // expiry says the question was never seen. Reporting the second as
       // `ASK_CANCELLED` would have the model believe a human considered it.
-      throw timedOut
-        ? questionError('the question expired before it was answered', 'ASK_UNANSWERED')
-        : questionError('the user did not answer the question', 'ASK_CANCELLED')
+      throw questionError('the user did not answer the question', 'ASK_CANCELLED')
     }
     assertCompleteBatch(projected.questions, outcome.answers)
     return { answers: outcome.answers.map(toAnswerItem) }

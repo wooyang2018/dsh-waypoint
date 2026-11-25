@@ -3023,33 +3023,52 @@ export class RemoteMirrorService {
       }
     }
     const filtered = seedEvents.filter(event => !isMirrorNoise(event))
+    // Whether the remote agent can ask a *timed* question decides whether the
+    // local `userQuestions` projection can ever track this Session at all: that
+    // fold ignores every `tool/call` until a `request/header` declares an
+    // `ask_user_question` schema carrying a `timeout` parameter.
+    //
+    // The remote header is usually far outside this window (the tail is capped by
+    // `mirrorMaxEvents`), and replaying it verbatim would be wrong anyway — a
+    // local `request/header` describes the tools *this* Session's model sees, and
+    // no local model runs these. So the mirror writes its own anchor instead, and
+    // the anchor carries that single tool and nothing else.
+    const timedQuestions = declaresTimedQuestions(seedEvents)
+    // The remote's own headers are dropped from the seed either way. They
+    // describe the remote model's tool list, and replaying one would make the
+    // local Session claim tools it cannot call — the same reason `toWireEvent`
+    // strips `developer/message` tool-change blocks. When the remote is timed,
+    // the local anchor replaces them; when it is not, the mirror simply has no
+    // header, which is the pre-existing behaviour.
+    const withoutRemoteHeaders = filtered.filter(event => event.type !== 'request/header')
+    const questionAnchor = timedQuestions ? localQuestionHeader(withoutRemoteHeaders) : undefined
     // A subagent address is authorized by the descriptor in the child log. A
     // window that lost it (over-cap child, or a trim that cut the prefix)
     // cannot answer a subagent history read, so leave that child unmirrored
     // instead of publishing a Session the client would reject.
-    if (parentLocalId !== undefined && !filtered.some(event => event.type === 'subagent/descriptor')) {
+    if (parentLocalId !== undefined && !withoutRemoteHeaders.some(event => event.type === 'subagent/descriptor')) {
       this.#ctx.logger.warn(
         'dsh-waypoint: subagent %s has no descriptor in its mirror window; skipping its local mirror',
         remote.sessionId,
       )
       return undefined
     }
-    const seqMap = new Map(filtered.map((event, index) => [event.seq, index]))
+    const seqMap = new Map(withoutRemoteHeaders.map((event, index) => [event.seq, index]))
     let latestTurn = 0
-    for (const event of filtered) {
+    for (const event of withoutRemoteHeaders) {
       if (event.type !== 'turn/start') continue
       const turn = (event.data as { turn?: unknown }).turn
       if (typeof turn === 'number') latestTurn = Math.max(latestTurn, turn)
     }
     const remoteToLocalSeq = new Map<number, number>()
-    for (const [index, event] of filtered.entries()) remoteToLocalSeq.set(event.seq, index)
+    for (const [index, event] of withoutRemoteHeaders.entries()) remoteToLocalSeq.set(event.seq, index)
 
     // A seed never passes through `#appendEvent`, so the announcement turns
     // it would have recorded are collected here and handed to `#mountRuntime`.
     // Without them `changesEvent` cannot map a local seq to a remote turn and
     // the changed-files card is empty for every seeded mirror.
     const seededChanges = new Map<number, number>()
-    for (const [index, event] of filtered.entries()) {
+    for (const [index, event] of withoutRemoteHeaders.entries()) {
       if (event.type !== 'workspace/changes') continue
       const turn = (event.data as { turn?: unknown } | undefined)?.turn
       if (typeof turn === 'number') seededChanges.set(index, turn)
@@ -3092,7 +3111,11 @@ export class RemoteMirrorService {
       ?? (parentLocalId === undefined ? `session-${randomUUID()}` : remote.sessionId)
     let session: Session
     try {
-      const seed = filtered.map((event, index) => toSeedEvent(event, index, seqMap))
+      const seed = withoutRemoteHeaders.map((event, index) => toSeedEvent(event, index, seqMap))
+      // The anchor must precede every `tool/call` in the folded log, so it goes
+      // first. It is a local-only event: it is never sent to the remote and
+      // carries no remote seq, which is why it is not in `seqMap`.
+      if (questionAnchor !== undefined) seed.unshift(questionAnchor)
       const remoteCreatedAt = Date.parse(remote.createdAt)
       session = this.#sessions.create(localId as SessionId, {
         ...seed.length === 0 ? {} : { seed },
@@ -4193,6 +4216,77 @@ function remapRemoteEvent(
 function mergeDegraded(data: unknown, marker: MirrorDegradedEvent): unknown {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) return { ...marker, value: data }
   return { ...(data as Record<string, unknown>), ...marker }
+}
+
+/**
+ * Whether any header in this window declares the timed `ask_user_question` schema.
+ *
+ * Mirrors `isTimedAskUserQuestionSchema` in `@deepseek-ai/dsh-user-questions`
+ * rather than importing it: this package must not take a runtime dependency on a
+ * peer the host profile owns, and the rule is three lines of property checks.
+ * A header that declares the schema without a `timeout` parameter is the
+ * blocking legacy tool, which the projection deliberately ignores.
+ * @param events - the raw snapshot window, before noise filtering.
+ * @returns true when the remote asked questions under the timed schema.
+ */
+function declaresTimedQuestions(events: readonly RemoteSessionEvent[]): boolean {
+  for (const event of events) {
+    if (event.type !== 'request/header') continue
+    const tools = (event.data as { header?: { tools?: unknown } } | undefined)?.header?.tools
+    if (!Array.isArray(tools)) continue
+    for (const tool of tools) {
+      if (typeof tool !== 'object' || tool === null) continue
+      const candidate = tool as { name?: unknown; parameters?: { properties?: unknown } }
+      if (candidate.name !== 'ask_user_question') continue
+      const properties = candidate.parameters?.properties
+      if (typeof properties === 'object' && properties !== null && 'timeout' in properties) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Build the local `request/header` that lets the question projection fold.
+ *
+ * Only `ask_user_question` is listed. A local header normally describes every
+ * tool this Session's model can call, but no local model runs the remote's tools
+ * — they execute on the remote host — so listing them here would let other
+ * projections treat remote capabilities as local ones. The question fold matches
+ * by name and needs nothing else.
+ *
+ * `config` reuses the model this mirror already advertises so the header does not
+ * claim a different one.
+ * @param events - the filtered seed events, used to recover the model selection.
+ * @returns a seed-shaped event, or undefined when no local event type fits.
+ */
+function localQuestionHeader(events: readonly RemoteSessionEvent[]): SessionEvent | undefined {
+  const selection = modelOptions(events) ?? FALLBACK_MODEL
+  const event = {
+    type: 'request/header',
+    data: {
+      header: {
+        config: {
+          provider: selection.provider,
+          model: selection.model,
+          ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
+        },
+        tools: [{
+          name: 'ask_user_question',
+          description: 'Ask the user a question; the human may answer after the window closes.',
+          parameters: {
+            type: 'object',
+            properties: {
+              questions: { type: 'array' },
+              timeout: { type: 'number' },
+            },
+            required: ['questions'],
+          },
+        }],
+      },
+      reason: 'initial',
+    },
+  } as unknown as SessionEvent
+  return event
 }
 
 /**
