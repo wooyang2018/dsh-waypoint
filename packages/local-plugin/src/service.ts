@@ -875,9 +875,33 @@ export class RemoteHostsService {
     }
   }
 
-  /** Cancel a remote session's active turn. */
-  async cancelSession(id: string, sessionId: string): Promise<AcceptedResult> {
+  /**
+   * Read one durable attachment's bytes from the host that owns them.
+   *
+   * The inverse of {@link promptSession}'s attachment handling. A mirrored
+   * Session replays a remote event log, and that log names attachments by
+   * content-addressed reference; the bytes live only on the remote host. Without
+   * this a mirrored Session can draw a file card from the reference's metadata
+   * but cannot render an image at all, because an image *is* its bytes.
+   *
+   * @param id - host owning the attachment.
+   * @param request - attachment kind plus the durable reference from the log.
+   * @returns base64 bytes and the reference's display metadata.
+   */
+  async readAttachment(
+    id: string,
+    request: import('@dsh-waypoint/protocol').AttachmentReadRequest,
+  ): Promise<import('@dsh-waypoint/protocol').AttachmentReadResult> {
     const client = this.#requireClient(id)
+    try {
+      return await client.readAttachment(request)
+    } catch (error) {
+      throw this.#remoteFailure(id, error)
+    }
+  }
+
+  /** Cancel a remote session's active turn. */
+  async cancelSession(id: string, sessionId: string): Promise<AcceptedResult> {    const client = this.#requireClient(id)
     try {
       await client.cancelSession(sessionId)
       return { accepted: true }

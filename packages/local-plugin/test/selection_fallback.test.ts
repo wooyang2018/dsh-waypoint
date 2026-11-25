@@ -22,7 +22,17 @@ async function mounted() {
   const record = Object.values((await test.state()).sessions)
     .find(entry => entry.remoteSessionId === parent.sessionId)!
   const agent = test.liveAgents.get(record.localSessionId)!
-  return { ...test, agent, record }
+  /**
+   * The selection the mirror would forward for this Session.
+   *
+   * Read from the service rather than from `agent.model.current()`: that method
+   * deliberately answers `undefined` for a mirror, because local prompt
+   * admission must not try to resolve a model route that only the remote Host
+   * owns. `forwardedSelection` answers the question `#sendPrompt` actually asks,
+   * including the recorded-rejection filter these cases exercise.
+   */
+  const selection = () => test.service.forwardedSelection(record.localSessionId)
+  return { ...test, agent, record, selection }
 }
 
 function userMessage(text: string) {
@@ -57,7 +67,7 @@ describe('remote model-selection fallback', () => {
     withoutCatalog(test)
     try {
       test.agent.model.select(unavailable)
-      assert.deepEqual(test.agent.model.current(), unavailable)
+      assert.deepEqual(test.selection(), unavailable)
 
       test.agent.send(userMessage('first'))
       await new Promise(resolve => setTimeout(resolve, 50))
@@ -68,7 +78,7 @@ describe('remote model-selection fallback', () => {
       // next prompt falls back instead of repeating the rejected round trip.
       // (The turn stays open because this fixture does not drive the remote
       // event stream that would close it.)
-      assert.equal(test.agent.model.current(), undefined)
+      assert.equal(test.selection(), undefined)
     } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
   })
 
@@ -106,12 +116,12 @@ describe('remote model-selection fallback', () => {
       test.agent.send(userMessage('first'))
       await new Promise(resolve => setTimeout(resolve, 50))
       assert.equal(test.rejectedPrompts.length, 1)
-      assert.equal(test.agent.model.current(), undefined)
+      assert.equal(test.selection(), undefined)
 
       // The user picks the same model again (say, after installing it on the
       // host). That intent must win over the recorded rejection.
       test.agent.model.select(unavailable)
-      assert.deepEqual(test.agent.model.current(), unavailable)
+      assert.deepEqual(test.selection(), unavailable)
     } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
   })
 
@@ -163,14 +173,14 @@ describe('remote model-selection fallback', () => {
       test.agent.send(userMessage('first'))
       await new Promise(resolve => setTimeout(resolve, 50))
       assert.equal(test.rejectedPrompts.length, 1)
-      assert.equal(test.agent.model.current(), undefined)
+      assert.equal(test.selection(), undefined)
 
       // Installing the same selection through the remote menu must clear the
       // rejection, so the mirror advertises it again instead of skipping it.
       // (The open turn is not closed here: this fixture does not drive the
       // remote event stream that would end it, so a second prompt would queue.)
       test.service.setSelection(test.record.localSessionId, unavailable)
-      assert.deepEqual(test.agent.model.current(), unavailable)
+      assert.deepEqual(test.selection(), unavailable)
     } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
   })
 

@@ -27,6 +27,7 @@ export const PROTOCOL_ERROR_CODES = [
   'workspace-file/not-found',
   'workspace-file/not-regular-file',
   'workspace-file/not-text',
+  'attachment/not-found',
   'directory/unreadable',
   'git/unavailable',
   'git/rejected',
@@ -71,6 +72,7 @@ export function httpStatusForCode(code: ProtocolErrorCode): number {
     case 'workspace-file/not-found':
     case 'workspace-file/not-regular-file':
     case 'workspace-file/not-text':
+    case 'attachment/not-found':
     case 'directory/unreadable':
       return 404
     case 'session/not-live':

@@ -36,6 +36,8 @@ import type {
   PromptDeliveryMode,
 } from '@dsh-waypoint/protocol'
 import { resolveDshHome, type ResolvedConfig } from '../config.ts'
+import { LocalError } from '../errors.ts'
+import { syncRemoteAttachment } from '../remote/attachments.ts'
 import { singleFlight } from './inflight.ts'
 import { isTestHidden, loadTestVisibility, type TestVisibility } from './test-visibility.ts'
 import { abandonedTurnEnd } from './recovery.ts'
@@ -202,6 +204,19 @@ type ReasoningEffort = NonNullable<ModelSelection['reasoningEffort']>
  * names one — an empty remote tail on a session that never ran a request.
  */
 const FALLBACK_MODEL: MirrorModelSelection = { provider: 'deepseek-official', model: 'deepseek-flash' }
+
+/**
+ * Largest file this mirror forwards inline, in whole megabytes.
+ *
+ * The remote agent caps a prompt body at 12 MiB, and base64 costs 4/3 of the
+ * payload. 9 MiB is the largest whole megabyte that still fits, and expressing
+ * the limit in payload bytes rather than encoded bytes is what lets the failure
+ * name the user's file size instead of the wire size. A larger file needs a
+ * streaming upload route, which this protocol does not have: the prompt carries
+ * content, not a transfer.
+ */
+const MAX_FORWARDED_FILE_MB = 9
+const MAX_FORWARDED_FILE_BYTES = MAX_FORWARDED_FILE_MB * 1024 * 1024
 
 /**
  * A hole in the mirrored log, recorded as a local plugin record.
@@ -418,9 +433,28 @@ class RemoteMirrorAgent implements MirrorAgent {
     this.inbox = createMirrorInbox(runtime.session)
   }
 
-  // Record choices in the mirror log so the existing bridge forwards them to the remote.
+  /**
+   * The model this Agent reports to *its own* Host, which is deliberately none.
+   *
+   * A mirrored Session executes on the remote Host: the route that actually
+   * runs is the remote's, recorded in the remote log and forwarded by
+   * `#sendPrompt` through `RemoteMirrorService.selectionFor`. Reporting a
+   * remote route here made the local Host believe it owned that route, and the
+   * local prompt admission asks `ctx.llm` about whatever this returns. For a
+   * `direct`-mode host that provider exists only on the remote, so resolution
+   * threw `LlmError NO_ADAPTER`; prompt admission wraps an unrecognized throw as
+   * `session/agent-busy`, which is why an ordinary text prompt worked while any
+   * image prompt was rejected as "agent busy".
+   *
+   * `undefined` is the contract's honest answer — "this Agent expresses no local
+   * route" — and every local consumer already guards for it (prompt admission
+   * checks `current !== undefined` before resolving). Nothing is lost: the
+   * selector reads `modelDirectories` (fed by the remote catalog), and the
+   * forward path reads `selectionFor` directly, so neither consults this.
+   */
   readonly model = {
-    current: (): MirrorModelSelection | undefined => this.#mirror.selectionFor(this.#runtime),
+    current: (): MirrorModelSelection | undefined => undefined,
+    // Record choices in the mirror log so the existing bridge forwards them to the remote.
     select: (selection: MirrorModelSelection): void => {
       // An explicit choice supersedes an earlier rejection: the user may have
       // just installed that model on the remote, so retry the selection once
@@ -502,9 +536,15 @@ class LazyRemoteMirrorAgent implements MirrorAgent {
     this.#delegate = pending.delegate
   }
 
-  /** The preset is selected by the native blank-session surface, not here. */
+  /**
+   * No local route, for the same reason {@link RemoteMirrorAgent.model} has
+   * none: this Agent's Session runs on the remote Host, so the local admission
+   * must not try to resolve its model. The recorded choice still forwards —
+   * `#sendPrompt` reads it from the mirror record, not from here.
+   */
   readonly model = {
-    current: (): MirrorModelSelection | undefined => this.#mirror.selectionForBlank(this.session),
+    current: (): MirrorModelSelection | undefined => undefined,
+    /** The preset is selected by the native blank-session surface, not here. */
     select: (selection: MirrorModelSelection): void => {
       const previous = this.#mirror.selectionForBlank(this.session)
       if (previous?.provider === selection.provider && previous.model === selection.model
@@ -1021,6 +1061,81 @@ export class RemoteMirrorService {
     const hook = this.#changesPrefetch
     if (hook === undefined) return
     await hook(localSessionId, target)
+  }
+
+  /**
+   * Pull a user message's remote attachments into the local store.
+   *
+   * Prefetch, like {@link #prefetchChanges} and for a stronger reason: the
+   * transcript's image loader is *not* retried. `HistoricalImageCache` drops a
+   * failed entry and leaves the picture blank for the life of the Session, so a
+   * byte fetch started after the event is visible loses the race permanently.
+   * Warming the store before the projection is what makes the image render.
+   *
+   * A file does not strictly need this — its card renders from the reference's
+   * `name` and `bytes` — but fetching it here is what lets the user actually
+   * open the attachment, and it reuses the same round trip.
+   *
+   * Never throws: an unreachable host or a pruned object degrades that one
+   * attachment, and losing a whole event over it would be worse than a blank
+   * image.
+   * @param runtime - mirror that will project the event.
+   * @param event - the event about to be projected.
+   */
+  async #prefetchAttachments(runtime: MirrorRuntime, event: RemoteSessionEvent): Promise<void> {
+    if (event.type !== 'user/message') return
+    await this.#syncEventAttachments(runtime.record.hostId, event)
+  }
+
+  /** Seed-time counterpart of {@link #prefetchAttachments}, without a runtime. */
+  async #seedAttachments(hostId: string, events: readonly RemoteSessionEvent[]): Promise<void> {
+    for (const event of events) await this.#syncEventAttachments(hostId, event)
+  }
+
+  /**
+   * Sync every attachment one event references.
+   *
+   * Shared by the live and seed paths so the two cannot drift: attachment
+   * references appear in `user/message` only, and both paths must reach the same
+   * local store before the event becomes visible.
+   *
+   * Never throws — an unreachable host or a pruned object degrades that one
+   * attachment, and losing a whole event over it would be worse than a blank
+   * image.
+   * @param hostId - host owning the referenced bytes.
+   * @param event - candidate event.
+   */
+  async #syncEventAttachments(hostId: string, event: RemoteSessionEvent): Promise<void> {
+    if (event.type !== 'user/message') return
+    const content = (event.data as { content?: unknown }).content
+    if (!Array.isArray(content)) return
+    for (const part of content) {
+      if (typeof part !== 'object' || part === null) continue
+      const type = (part as { type?: unknown }).type
+      if (type !== 'image' && type !== 'file') continue
+      const ref = (part as { attachment?: unknown }).attachment
+      if (typeof ref !== 'object' || ref === null) continue
+      const attachmentId = (ref as { attachmentId?: unknown }).attachmentId
+      if (typeof attachmentId !== 'string') continue
+      const name = (ref as { name?: unknown }).name
+      const bytes = (ref as { bytes?: unknown }).bytes
+      const mediaType = (ref as { mediaType?: unknown }).mediaType
+      try {
+        await syncRemoteAttachment(this.#ctx, this.#hosts, hostId, type, {
+          attachmentId,
+          ...typeof name === 'string' ? { name } : {},
+          ...typeof bytes === 'number' ? { bytes } : {},
+          ...typeof mediaType === 'string' ? { mediaType } : {},
+        })
+      } catch (error) {
+        this.#ctx.logger.warn(
+          'dsh-waypoint: could not sync attachment %s from %s: %s',
+          attachmentId,
+          hostId,
+          String(error),
+        )
+      }
+    }
   }
 
   /** Resolve a local workspace anchor to its remote filesystem context. */
@@ -1563,7 +1678,7 @@ export class RemoteMirrorService {
     // the remote cannot serve, so it is the value to forward as-is.
     if (selection !== undefined) Object.assign(runtime.agent.options, selection)
     try {
-      const { text, content } = await this.#promptContent(message)
+      const { text, content } = await this.#promptContent(message, runtime)
       if (this.#detached(runtime)) throw new Error('remote mirror is no longer active')
       let candidate = selection
       // Skip a selection the remote catalog does not offer, so the common case
@@ -1650,32 +1765,86 @@ export class RemoteMirrorService {
     }
   }
 
-  async #promptContent(message: unknown): Promise<{ text: string; content: PromptContentPart[] }> {
+  /**
+   * Read every forwardable part of one prompt, as protocol content.
+   *
+   * Attachments are read from the *local* attachment store, where prompt
+   * admission put them, and carried inline to the remote: a staged receipt is
+   * per-Host authority and cannot cross the tunnel (see `PromptFilePart`).
+   *
+   * Two refusals rather than a silent drop:
+   *
+   * - A `file` part on a host without `session.file-attachment` fails here. An
+   *   older agent would `route/not-found` or drop it, and either way the local
+   *   transcript would already show the accepted message.
+   * - A file whose base64 payload cannot fit the prompt body fails with the
+   *   limit named, instead of a generic `request/too-large` from the agent's
+   *   framing layer. The 9 MiB figure is the 12 MiB body cap minus base64's
+   *   4/3 expansion; keeping both numbers in one place makes the reason clear.
+   *
+   * @param message - local user message.
+   * @param runtime - mirror that will forward the prompt.
+   * @returns flattened text plus ordered content.
+   */
+  async #promptContent(
+    message: unknown,
+    runtime: MirrorRuntime,
+  ): Promise<{ text: string; content: PromptContentPart[] }> {
     const content: PromptContentPart[] = []
+    const attachments = this.#ctx.get('attachments') as unknown as {
+      readImage(ref: unknown): Promise<{
+        data: Uint8Array
+        mediaType?: unknown
+        ref?: { mediaType?: unknown; name?: unknown }
+      }>
+      readFileStream(ref: unknown, signal?: AbortSignal): AsyncIterable<Uint8Array>
+    } | undefined
     for (const part of promptParts(message)) {
       if (part.type === 'text') {
         content.push({ type: 'text', text: part.text })
         continue
       }
-      const attachments = this.#ctx.get('attachments') as unknown as {
-        readImage(ref: unknown): Promise<{
-          data: Uint8Array
-          mediaType?: unknown
-          ref?: { mediaType?: unknown; name?: unknown }
-        }>
-      } | undefined
       if (attachments === undefined) throw new Error('本地附件服务不可用')
-      const stored = await attachments.readImage(part.attachment)
-      const mediaType = typeof stored.mediaType === 'string'
-        ? stored.mediaType
-        : typeof stored.ref?.mediaType === 'string' ? stored.ref.mediaType : undefined
-      if (mediaType === undefined) throw new Error('图片缺少 mediaType')
-      const name = part.name ?? (typeof stored.ref?.name === 'string' ? stored.ref.name : undefined)
+      if (part.type === 'image') {
+        const stored = await attachments.readImage(part.attachment)
+        const mediaType = typeof stored.mediaType === 'string'
+          ? stored.mediaType
+          : typeof stored.ref?.mediaType === 'string' ? stored.ref.mediaType : undefined
+        if (mediaType === undefined) throw new Error('图片缺少 mediaType')
+        const name = part.name ?? (typeof stored.ref?.name === 'string' ? stored.ref.name : undefined)
+        content.push({
+          type: 'image',
+          data: Buffer.from(stored.data).toString('base64'),
+          mediaType,
+          ...name === undefined ? {} : { name },
+        })
+        continue
+      }
+      // A file part needs the remote to admit bytes into its own store. Refuse
+      // before sending so the user sees a cause, not a message that arrived
+      // half-empty.
+      if (!this.#hosts.supportsAgent(runtime.record.hostId, 'session.file-attachment')) {
+        throw new LocalError('agent/unavailable', 'the remote agent cannot forward file attachments', {
+          retryable: false,
+          ui: { key: 'error.mirrorAttachmentUnsupported' },
+        })
+      }
+      const data = await readAllBytes(
+        attachments.readFileStream(part.attachment),
+        MAX_FORWARDED_FILE_BYTES,
+        () => new LocalError(
+          'request/invalid',
+          `attachment exceeds the ${String(MAX_FORWARDED_FILE_MB)} MB forward limit`,
+          {
+            retryable: false,
+            ui: { key: 'error.mirrorAttachmentTooLarge', params: { limit: MAX_FORWARDED_FILE_MB } },
+          },
+        ),
+      )
       content.push({
-        type: 'image',
-        data: Buffer.from(stored.data).toString('base64'),
-        mediaType,
-        ...name === undefined ? {} : { name },
+        type: 'file',
+        data: data.toString('base64'),
+        ...part.name === undefined ? {} : { name: part.name },
       })
     }
     const text = content
@@ -2114,6 +2283,21 @@ export class RemoteMirrorService {
   }
 
   /** Read the recorded mirror choice, optionally falling back to its initial options. */
+  /**
+   * The selection this mirror would forward for one local Session.
+   *
+   * The same question `#sendPrompt` answers, exposed for tests and diagnostics.
+   * It is deliberately separate from the Agent façade: a mirror's Agent reports
+   * no local route at all (see `RemoteMirrorAgent.model`), so the Agent can no
+   * longer be used to observe what a mirror chose.
+   * @param localSessionId - local mirror Session.
+   * @returns the selection to forward, or undefined when none applies.
+   */
+  forwardedSelection(localSessionId: string): { provider: string; model: string; reasoningEffort?: string } | undefined {
+    const runtime = this.#runtimes.get(localSessionId)
+    return runtime === undefined ? undefined : this.selectionFor(runtime)
+  }
+
   selectionFor(runtime: MirrorRuntime, fallbackToOptions = true): { provider: string; model: string; reasoningEffort?: string } | undefined {
     const projections = this.#ctx.get('sessionProjections') as unknown as {
       stateOf?: (session: Session, key: string) => unknown
@@ -2596,6 +2780,11 @@ export class RemoteMirrorService {
       const turn = (event.data as { turn?: unknown } | undefined)?.turn
       if (typeof turn === 'number') seededChanges.set(index, turn)
     }
+    // Seeded history carries attachment references too — the reason a mirrored
+    // Session opened after a restart showed blank images until now. There is no
+    // runtime yet, so these are fetched by coordinates and the failures are
+    // logged rather than thrown: one unreachable object must not stop the seed.
+    await this.#seedAttachments(host.id, filtered)
 
     if (reuse !== undefined) {
       // Re-attaching reuses the local Session, so the mapping must describe the
@@ -3019,6 +3208,10 @@ export class RemoteMirrorService {
         // is what makes "the summary is already present once the event is
         // visible" true rather than merely intended.
         await this.#prefetchChanges(runtime, event)
+        // Same ordering requirement as the summary above, and stricter: the
+        // image loader does not retry a miss, so these bytes have to be in the
+        // local store before any client can observe the message.
+        await this.#prefetchAttachments(runtime, event)
         this.#appendEvent(runtime, event)
       } catch (error) {
         // One event the local projection rejects must not freeze every event
@@ -3912,23 +4105,44 @@ function promptText(message: unknown): string {
     .join('\n')
 }
 
-function promptParts(message: unknown): Array<{ type: 'text'; text: string } | { type: 'image'; attachment: unknown; name?: string }> {
+/** One prompt part this mirror knows how to forward, in message order. */
+type MirrorPromptPart =
+  | { readonly type: 'text'; readonly text: string }
+  | { readonly type: 'image'; readonly attachment: unknown; readonly name?: string }
+  | { readonly type: 'file'; readonly attachment: unknown; readonly name?: string }
+
+/**
+ * Split a local prompt message into the parts worth forwarding.
+ *
+ * Every attachment kind must appear here. A kind missing from this function is
+ * dropped silently, which is worse than a refusal: the local transcript already
+ * shows the accepted message (prompt admission records it before the mirror is
+ * consulted), so an omission surfaces as "my file is in the session but the
+ * remote never saw it". `file` was that omission for every upload — see
+ * {@link RemoteMirrorService.#promptContent}.
+ *
+ * @param message - local user message handed to the Agent façade.
+ * @returns forwardable parts; empty when the message carries nothing to send.
+ */
+function promptParts(message: unknown): MirrorPromptPart[] {
   if (typeof message !== 'object' || message === null) return []
   const content = (message as { content?: unknown }).content
   if (!Array.isArray(content)) return []
-  const parts: Array<{ type: 'text'; text: string } | { type: 'image'; attachment: unknown; name?: string }> = []
+  const parts: MirrorPromptPart[] = []
   for (const part of content) {
-    if (typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'text') {
+    if (typeof part !== 'object' || part === null) continue
+    const type = (part as { type?: unknown }).type
+    if (type === 'text') {
       const text = (part as { text?: unknown }).text
       if (typeof text === 'string' && text.trim() !== '') parts.push({ type: 'text', text })
       continue
     }
-    if (typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'image') {
-      const attachment = (part as { attachment?: unknown }).attachment
-      if (attachment === undefined) continue
-      const name = (attachment as { name?: unknown }).name
-      parts.push({ type: 'image', attachment, ...typeof name === 'string' ? { name } : {} })
-    }
+    if (type !== 'image' && type !== 'file') continue
+    const attachment = (part as { attachment?: unknown }).attachment
+    if (attachment === undefined) continue
+    const name = (attachment as { name?: unknown }).name
+    const named = { attachment, ...typeof name === 'string' ? { name } : {} }
+    parts.push(type === 'image' ? { type: 'image', ...named } : { type: 'file', ...named })
   }
   return parts
 }
@@ -3977,6 +4191,34 @@ function canonicalPath(path: string): string {
 
 function key(hostId: string, sessionId: string): string {
   return `${hostId}:${sessionId}`
+}
+
+/**
+ * Collect one byte stream, refusing as soon as it passes `limit`.
+ *
+ * The limit is enforced while reading, not after: a file the caller cannot
+ * forward should not be buffered in full first. The provider streams in bounded
+ * chunks precisely so a caller can stop early, and stopping here releases the
+ * source through the iterator's own `return`.
+ *
+ * @param source - ordered chunks, typically `attachments.readFileStream`.
+ * @param limit - largest total the caller accepts.
+ * @param overflow - builds the error thrown when the stream exceeds `limit`.
+ * @returns the exact bytes.
+ */
+async function readAllBytes(
+  source: AsyncIterable<Uint8Array>,
+  limit: number,
+  overflow: () => Error,
+): Promise<Buffer> {
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for await (const chunk of source) {
+    total += chunk.byteLength
+    if (total > limit) throw overflow()
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
 }
 
 function safe(value: string): string {

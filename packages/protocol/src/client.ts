@@ -33,6 +33,8 @@ import { parseSseStream } from './sse.ts'
 import { isRemoteAssistantFrame } from './types.ts'
 import type {
   AcceptedResult,
+  AttachmentReadRequest,
+  AttachmentReadResult,
   ApprovalOutcome,
   RemoteApprovalFrame,
   RemoteAssistantFrame,
@@ -92,6 +94,7 @@ import {
   isSessionSnapshot,
   isSessionStreamFrame,
   isModelCatalogResult,
+  isAttachmentReadResult,
   isWebUrlResult,
   isRemoteDirectoryListing,
   isRemoteFileBytes,
@@ -413,6 +416,24 @@ export class RemoteAgentClient {
   /** List child directories for the workspace-creation picker. */
   listDirectories(path: string, signal?: AbortSignal): Promise<RemoteDirectoryListing> {
     return this.#request(directoryListPath(path), isRemoteDirectoryListing, { signal })
+  }
+
+  /**
+   * Read one durable attachment's exact bytes by reference.
+   *
+   * The reverse direction of prompt forwarding: a mirrored Session replays the
+   * remote log, whose attachment references name bytes that exist only on the
+   * remote host. Images cannot render without them.
+   * @param request - attachment kind plus the durable reference.
+   * @param signal - caller cancellation.
+   * @returns base64 bytes and the reference's display metadata.
+   */
+  readAttachment(request: AttachmentReadRequest, signal?: AbortSignal): Promise<AttachmentReadResult> {
+    return this.#request(AGENT_ROUTES.attachmentRead, isAttachmentReadResult, {
+      method: 'POST',
+      body: request as unknown as Record<string, unknown>,
+      signal,
+    })
   }
 
   /**

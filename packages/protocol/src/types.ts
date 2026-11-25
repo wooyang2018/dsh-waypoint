@@ -39,6 +39,24 @@ export type AgentCapability =
   | 'workspace.changes'
   | 'llm.catalog'
   | 'terminal'
+  /**
+   * The agent admits prompt `file` parts into its own attachment store.
+   *
+   * Advertised separately from `session.unarchive` rather than folded into
+   * `session.prompt`: a client must be able to refuse *before* sending, because
+   * an older agent would silently drop the part — the exact failure this
+   * capability exists to end. A file's bytes cross the tunnel either way, so a
+   * client that cannot see this capability must fail loudly instead.
+   */
+  | 'session.file-attachment'
+  /**
+   * The agent serves `/attachments/read` for durable attachment references.
+   *
+   * What makes a mirrored Session show the attachments a remote user sent. The
+   * reference is content-addressed and therefore portable, but the bytes are
+   * not: without this route the local transcript can only render the metadata.
+   */
+  | 'attachment.read'
 
 /** Identity and environment of the remote DSH host serving the agent API. */
 export interface HostInfo {
@@ -338,8 +356,29 @@ export interface PromptImagePart {
   readonly name?: string
 }
 
+/**
+ * One verbatim file part forwarded with a remote prompt.
+ *
+ * Carries the bytes rather than a receipt on purpose. A staged-upload receipt
+ * is authority minted by one Host and held against the exact `Session` object
+ * that received the upload, so it cannot cross machines: the remote resolves
+ * receipts against its own staging table and would answer `FILE_NOT_STAGED`.
+ * The remote therefore admits these bytes into its own attachment store and
+ * mints a receipt of its own before the prompt enters its Agent.
+ */
+export interface PromptFilePart {
+  readonly type: 'file'
+  /** Canonical base64 of the exact file bytes. */
+  readonly data: string
+  /** Optional display name; never interpreted as a path. */
+  readonly name?: string
+}
+
 /** Ordered prompt content sent to a remote session. */
-export type PromptContentPart = { readonly type: 'text'; readonly text: string } | PromptImagePart
+export type PromptContentPart =
+  | { readonly type: 'text'; readonly text: string }
+  | PromptImagePart
+  | PromptFilePart
 
 /** Request to send a prompt to a remote session. */
 export interface PromptSessionRequest {
@@ -362,6 +401,38 @@ export interface AcceptedResult {
 export interface SessionSnapshotOptions {
   /** Number of most-recent events to include. Defaults to 500; capped by the agent. */
   readonly limit?: number
+}
+
+/**
+ * Request one durable attachment's bytes by reference.
+ *
+ * The reference travels as JSON because it is what the remote Session log
+ * carries; the agent reads the object it names and returns the exact stored
+ * bytes. `kind` selects the store to read: an image is addressed by its
+ * normalized object (the local side must publish those bytes verbatim, since an
+ * image's id is their digest), while a file is addressed verbatim by contract.
+ */
+export interface AttachmentReadRequest {
+  readonly kind: 'image' | 'file'
+  /**
+   * Durable reference, structurally an `ImageAttachmentRef` or
+   * `FileAttachmentRef`. Declared as JSON-safe fields rather than importing
+   * either type: the protocol package deliberately mirrors those shapes instead
+   * of depending on the attachment package.
+   */
+  readonly ref: Record<string, unknown>
+}
+
+/** Bytes of one durable attachment, base64-encoded for the wire. */
+export interface AttachmentReadResult {
+  /** Canonical base64 of the exact stored bytes. */
+  readonly data: string
+  /** Byte length before encoding. */
+  readonly bytes: number
+  /** Media type for an image; absent for a verbatim file. */
+  readonly mediaType?: string
+  /** Display name recorded with the reference, when it has one. */
+  readonly name?: string
 }
 
 /** Dense process-local Assistant stream frame forwarded by the remote agent. */

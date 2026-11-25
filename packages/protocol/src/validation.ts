@@ -13,6 +13,7 @@ import type {
   AcceptedResult,
   ApiFailure,
   ApiSuccess,
+  AttachmentReadResult,
   CreateSessionResult,
   HostInfo,
   ListSessionsResult,
@@ -191,6 +192,23 @@ export function isAcceptedResult(value: unknown): value is AcceptedResult {
 /** Guard for `web.url`. */
 export function isWebUrlResult(value: unknown): value is WebUrlResult {
   return isRecord(value) && isString(value.path) && value.path.startsWith('/')
+}
+
+/**
+ * Guard for one durable attachment read.
+ *
+ * `bytes` is compared against the decoded payload rather than trusted on its
+ * own: the local side publishes these bytes under a digest taken from them, so a
+ * truncated transfer that still parses would be published as a corrupt object.
+ * Catching it here keeps the failure on the wire, where the cause is visible.
+ */
+export function isAttachmentReadResult(value: unknown): value is AttachmentReadResult {
+  if (!isRecord(value) || !isString(value.data) || typeof value.bytes !== 'number') return false
+  if (value.mediaType !== undefined && !isString(value.mediaType)) return false
+  if (value.name !== undefined && !isString(value.name)) return false
+  // base64 expands 3 bytes to 4 characters; the exact decoded length is checked
+  // by the caller that decodes. Here the framing itself must be consistent.
+  return value.bytes >= 0 && Math.ceil(value.bytes / 3) * 4 >= value.data.length
 }
 
 /**

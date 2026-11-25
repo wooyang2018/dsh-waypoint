@@ -39,6 +39,23 @@ describe('test-sandbox.mjs', () => {
     assert.match(SOURCE, /toLowerCase\(\)/u)
   })
 
+  it('hands the isolated home to every DSH CLI invocation, not only the host', () => {
+    // The guard above proves *this script* means to be isolated. It cannot make
+    // the CLI agree: `plugin add` resolves `~/.dsh` on its own, so a run that
+    // passed `DSH_HOME` only to the `web` child installed a development build
+    // into the operator's real profile. Every `run(dsh, …)` call must therefore
+    // carry the home explicitly.
+    const calls = [...SOURCE.matchAll(/run\(dsh,\s*\[[^\]]*\]([^\n]*)/gu)]
+    assert.ok(calls.length > 0, 'the script must invoke the DSH CLI')
+    for (const call of calls) {
+      assert.match(
+        call[1] ?? '',
+        /DSH_HOME:\s*testHome/u,
+        `a DSH CLI invocation omits DSH_HOME: ${call[0].trim()}`,
+      )
+    }
+  })
+
   it('never spawns through a shell', () => {
     // `shell: true` splits a path containing spaces: a Windows launcher at
     // `D:\...\DeepSeek Harness.exe` arrived as `'D:\deepseek-harness\DeepSeek'`.

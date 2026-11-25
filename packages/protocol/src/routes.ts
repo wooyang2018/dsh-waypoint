@@ -31,6 +31,7 @@ export const AGENT_ROUTES = {
   changesDiff: `${AGENT_API_PREFIX}/workspace-changes/diff`,
   terminals: `${AGENT_API_PREFIX}/terminals`,
   modelCatalog: `${AGENT_API_PREFIX}/llm/catalog`,
+  attachmentRead: `${AGENT_API_PREFIX}/attachments/read`,
 } as const
 
 /** One decoded agent route. */
@@ -62,6 +63,7 @@ export type AgentRoute =
   | { readonly kind: 'changes-summary' }
   | { readonly kind: 'changes-diff' }
   | { readonly kind: 'model-catalog' }
+  | { readonly kind: 'attachment-read' }
   | { readonly kind: 'terminals' }
   | { readonly kind: 'terminal-attach'; readonly terminalId: string }
   | { readonly kind: 'terminal-input'; readonly terminalId: string }
@@ -207,6 +209,8 @@ export function matchAgentRoute(pathname: string): AgentRoute | undefined {
       return { kind: 'changes-diff' }
     case AGENT_ROUTES.modelCatalog:
       return { kind: 'model-catalog' }
+    case AGENT_ROUTES.attachmentRead:
+      return { kind: 'attachment-read' }
     case AGENT_ROUTES.terminals:
       return { kind: 'terminals' }
   }

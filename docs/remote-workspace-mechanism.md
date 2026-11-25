@@ -295,8 +295,8 @@ remote context injection is not part of the mirror protocol yet.
 
 `#sendPrompt` is the single exit that carries local input to the remote (`#sendPrompt` in `service.ts`):
 
-1. Split text and images with `promptParts`; images are read through the local attachments service as
-   base64 (`#promptContent`).
+1. Split text, images, and files with `promptParts`; both attachment kinds are read through the local
+   attachments service as base64 (`#promptContent`).
 2. Check the current `provider/model` against the remote model catalog and drop the selection first if
    it is not routable (`#selectionUnavailable`).
 3. `POST /sessions/:id/prompt` with `mode`, `selection`, and `content`.
@@ -309,6 +309,60 @@ Step 5 is what prevents a duplicated bubble: the replayed remote `user/message` 
 and reuses the position of that local message instead of appending another (`appendRemoteEvent`).
 Images, model selection, and sandbox mode each have their own local-event → remote-call bypass as well
 (`#onLocalSessionEvent`).
+
+#### Attachments, and why a receipt cannot be forwarded
+
+A local prompt's attachments are uploaded to this Host's `fileUploads` service the moment the user
+picks them, and the resulting *receipt* is what a prompt normally cites. That receipt cannot cross the
+tunnel: it is authority held against the exact `Session` object that received the upload, so the remote
+resolves it through its own staging table and answers `FILE_NOT_STAGED`. `#promptContent` therefore
+reads the bytes back from the local store and sends them inline as a `file` part; the remote agent
+admits them into *its* store and mints a receipt of its own before the prompt enters its Agent
+(`RemoteAgentService.promptSession`).
+
+Two bounds follow. An agent without `session.file-attachment` is refused before anything is sent — an
+older agent would drop the part, and the local transcript would already show the message as accepted.
+And a prompt body is capped at 12 MiB, so an inline file tops out just under 9 MiB once base64 is
+applied; the plugin checks that itself so the failure names the file, not the wire size.
+
+#### Why a mirror's Agent reports no model
+
+`RemoteMirrorAgent.model.current()` returns `undefined`, and that is deliberate rather than an
+omission. Local prompt admission asks `ctx.llm` about whatever that method returns in order to reject an
+image prompt for a model without image input. For a `direct`-mode host the model exists only on the
+remote, so resolution threw `LlmError NO_ADAPTER` — and admission wraps an unrecognized throw as
+`session/agent-busy`, which is why a text prompt worked while any image prompt was rejected as "agent
+busy". Returning `undefined` states the truth the contract already accommodates ("this Agent expresses
+no local route"), and every consumer guards for it.
+
+Nothing is lost by it. The composer's selectors read `modelDirectories`, which is fed by the remote
+catalog through `installModelCatalogMerge`, and the forward path reads `RemoteMirrorService.selectionFor`
+directly. Neither consults the Agent façade, so the model menu and the forwarded selection are
+unaffected; `forwardedSelection` exposes the same answer for tests and diagnostics.
+
+#### The other direction: pulling an attachment a remote user sent
+
+The reverse case is a user typing into the remote Session directly. Its `user/message` carries durable
+attachment references, and those ids are digests of bytes that live only on the remote host, so a
+replayed reference alone cannot render anything. `remote/attachments.ts` fills the gap:
+`#syncEventAttachments` runs on **both** replay paths — the live stream and the seed — and calls
+`POST /attachments/read` for each reference the local store does not already hold.
+
+It is a prefetch, before the projection, and that ordering is load-bearing for the same reason it is for
+the changed-files card: `HistoricalImageCache` deletes a failed entry and never retries, so a byte fetch
+that started after the message became visible would leave that image blank for the life of the Session.
+
+The two kinds are stored differently on purpose:
+
+| Kind | Local write | Why |
+|---|---|---|
+| file | `attachments.saveFile` | stored verbatim, so its id is the sha256 of the bytes — re-saving reproduces the very same reference, with no mapping table |
+| image | verbatim publish at `objects/<sha256[0:2]>/<sha256>` | the id is the digest of an object that was *already* normalized remotely, so `saveImage` would re-encode it into a different digest and the reference would stop resolving |
+
+Both writes verify the digest before publishing, so a truncated transfer fails on arrival instead of
+becoming an object that every later read rejects as corrupt. A host without `attachment.read` yields
+`unsupported`, and a pruned object yields `missing`; either way the file card still draws from the
+reference's `name` and `bytes`, and only the image degrades to a placeholder.
 
 ### 5.5 Upward: SSE following, seq mapping, and gaps
 

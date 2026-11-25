@@ -11,7 +11,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { ApprovalOutcome } from '@dsh-waypoint/protocol'
+import type { ApprovalOutcome, AttachmentReadRequest } from '@dsh-waypoint/protocol'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   AGENT_API_PREFIX,
@@ -170,6 +170,9 @@ export async function handleAgentRequest(
         case 'changes-summary':
           sendJson(res, await summaryFor(ctx, asChangesSummaryRequest(body)))
           return
+        case 'attachment-read':
+          sendJson(res, await service.readAttachment(asAttachmentReadRequest(body)))
+          return
         case 'changes-diff':
           sendJson(res, await diffFor(ctx, asChangesDiffRequest(body), watchCancellation(req, res)))
           return
@@ -275,6 +278,7 @@ export async function handleAgentRequest(
       case 'session-prompt':
       case 'session-cancel':
       case 'session-archive':
+      case 'attachment-read':
       case 'approval-answer':
         throw new RemoteProtocolError({ code: 'request/invalid', message: 'POST is required', httpStatus: 405 })
       default:
@@ -525,15 +529,47 @@ function inferImageMediaType(data: string): string | undefined {
   return undefined
 }
 
+/**
+ * Validate one prompt body.
+ *
+ * A `file` part carries base64 bytes with no `mediaType`: its kind is the
+ * file's display name, and the bytes are stored verbatim, so there is no media
+ * type to verify. Images still require one.
+ *
+ * @param value - parsed JSON body.
+ * @returns a request with every content part normalized.
+ */
+/**
+ * Validate one durable-attachment read request.
+ * @param value - parsed JSON body.
+ * @returns kind plus the reference to read.
+ */
+function asAttachmentReadRequest(value: unknown): AttachmentReadRequest {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
+  }
+  const body = value as Record<string, unknown>
+  if (body.kind !== 'image' && body.kind !== 'file') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'kind must be image or file' })
+  }
+  if (typeof body.ref !== 'object' || body.ref === null || Array.isArray(body.ref)) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'ref must be an attachment reference object' })
+  }
+  return { kind: body.kind, ref: body.ref as Record<string, unknown> }
+}
+
 function asPromptRequest(value: unknown): PromptSessionRequest {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
   }
   const body = value as Record<string, unknown>
   const content = Array.isArray(body.content) ? body.content : undefined
-  const hasImage = content?.some(part => typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'image') === true
-  if ((typeof body.text !== 'string' || body.text.trim() === '') && !hasImage) {
-    throw new RemoteProtocolError({ code: 'request/invalid', message: 'text must be a non-empty string or content must include an image' })
+  // An attachment of any kind satisfies the non-empty requirement: a prompt may
+  // carry an image or a file with no text at all.
+  const hasAttachment = content?.some(part => typeof part === 'object' && part !== null
+    && ((part as { type?: unknown }).type === 'image' || (part as { type?: unknown }).type === 'file')) === true
+  if ((typeof body.text !== 'string' || body.text.trim() === '') && !hasAttachment) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'text must be a non-empty string or content must include an attachment' })
   }
   if (body.mode !== undefined && body.mode !== 'queue' && body.mode !== 'steer') {
     throw new RemoteProtocolError({ code: 'request/invalid', message: 'mode must be queue or steer' })
@@ -568,6 +604,17 @@ function asPromptRequest(value: unknown): PromptSessionRequest {
         type: 'image',
         data: record.data,
         mediaType,
+        ...typeof record.name === 'string' ? { name: record.name } : {},
+      })
+      continue
+    }
+    if (record.type === 'file') {
+      if (typeof record.data !== 'string') {
+        throw new RemoteProtocolError({ code: 'request/invalid', message: 'file content part is invalid' })
+      }
+      parts.push({
+        type: 'file',
+        data: record.data,
         ...typeof record.name === 'string' ? { name: record.name } : {},
       })
       continue

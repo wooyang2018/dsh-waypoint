@@ -383,6 +383,12 @@ The remote agent config remains available for advanced deployments:
 - A remote session longer than `mirrorMaxEvents` is mirrored from the first complete turn in the
   available tail; older history stays in the remote session. Increase the limit to mirror further
   back, or open the session on the remote host to read the rest.
+- An attachment sent from a mirrored session crosses the tunnel inline and is capped at about 9 MB per
+  file (a 12 MiB prompt body minus base64 overhead). Larger files need to be placed in the remote
+  workspace and referenced by path. Attachments a remote user sends are copied into the local
+  attachment store when the mirror replays them, so the first open of a long history fetches them
+  once; if the remote object has since been pruned, a file card still shows its name and size while
+  an image renders as a placeholder.
 - A forwarded dev-server port is published at `http://127.0.0.1:<port>/`; the sidebar browser's
   iframe policy (`X-Frame-Options`, mixed content) still applies, so a host that refuses to be
   embedded needs its own header change or the **Open in system browser** action. When the local port

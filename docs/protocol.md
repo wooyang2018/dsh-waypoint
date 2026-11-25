@@ -157,9 +157,10 @@ Read routes use `GET`. Write routes use `POST` with a JSON body:
 | `POST` | `/sessions` | `{ "workspaceId"?: "…", "cwd"?: "/abs/dir", "agentPreset"?: "…" }` | `CreateSessionResult` |
 | `POST` | `/sessions/:id/model` | `{ "provider": "…", "model": "…", "reasoningEffort"?: "…" }` | `{ "accepted": true }`; `session/model-unavailable` when the host cannot route it |
 | `POST` | `/sessions/:id/sandbox` | `{ "mode": "read-only" \| "workspace-write" \| "danger-full-access" }` | `{ "accepted": true }` |
-| `POST` | `/sessions/:id/prompt` | `{ "text": "…", "content"?: [{ "type": "text", "text": "…" } \| { "type": "image", "data": "<base64>", "mediaType": "image/png", "name"?: "…" }], "mode"?: "queue" \| "steer", "provider"?: "…", "model"?: "…", "reasoningEffort"?: "…" }` | `{ "accepted": true }` |
+| `POST` | `/sessions/:id/prompt` | `{ "text": "…", "content"?: [{ "type": "text", "text": "…" } \| { "type": "image", "data": "<base64>", "mediaType": "image/png", "name"?: "…" } \| { "type": "file", "data": "<base64>", "name"?: "…" }], "mode"?: "queue" \| "steer", "provider"?: "…", "model"?: "…", "reasoningEffort"?: "…" }` | `{ "accepted": true }` |
 | `POST` | `/sessions/:id/cancel` | `{}` | `{ "accepted": true }` |
 | `POST` | `/sessions/:id/archive` | `{ "stopActivity"?: true }` (default `true`) | `{ "accepted": true }` |
+| `POST` | `/attachments/read` | `{ "kind": "image" \| "file", "ref": { … } }` | `AttachmentReadResult`; `attachment/not-found` when the object is gone |
 | `POST` | `/approvals/answer` | `{ "id": "…", "outcome": "allowed-once" \| "rejected" \| "cancelled" \| "unavailable" }` | `{ "accepted": true }` |
 | `POST` | `/files/stat`, `/files/list`, `/files/read`, `/files/bytes` | `{ "path": "/abs/path", "offset"?, "limit"?, "length"? }` | file/list result |
 | `POST` | `/files/search` | `{ "path": "/abs/root", "query": "…", "excludedPaths"?, "includeHidden"?, "respectGitignore"? }` | `RemoteFileSearchResult` |
@@ -182,7 +183,8 @@ POST-only route, `POST` on a read route, and any method other than `GET` or `POS
 can therefore rely on the method check rather than treating a timeout as a possible answer.
 
 The HTTP write surface creates workspaces and sessions, submits prompts, cancels a turn, reads files
-for the native file tree/preview, and owns PTY terminals. File reads are read-only; the terminal
+for the native file tree/preview, stages a forwarded attachment, and owns PTY terminals. File reads are
+read-only; the terminal
 surface — both `POST /terminals` (which allocates the PTY and starts the login shell) and
 `POST /terminals/:id/input` — reaches a shell, and both are gated by the same bearer token. File and
 terminal traffic from the local UI travels over the existing SSH tunnel; no per-operation SSH
@@ -416,13 +418,49 @@ never logged or stored by the local plugin.
 - State files are written atomically with `0600`.
 - The protocol never carries model credentials.
 - The agent's write surface is session/workspace creation, prompts, cancel, archive, model and sandbox
-  selection, approval answers, and terminal input/rename/close. The native UI's file tree, previews,
+  selection, approval answers, attachment admission for a forwarded prompt, and terminal
+  input/rename/close. The native UI's file tree, previews,
   file watching, workspace search, and terminals are served by this same HTTP protocol over the
   existing SSH tunnel (`/files/*`, `/files/watch`, `/files/search`, `/terminals/*`); the local plugin
   never opens a per-operation SSH connection. `file.search` joins the capability set for the same
   reason as the others: an agent that predates it must be reinstalled rather than silently answering
   the panel's search from the wrong axis.
 - Adding another mutation verb requires a protocol revision and a re-review of this boundary.
+
+### Attachment transfer: two capabilities, one reason each
+
+Attachments cross this protocol in both directions, and each direction is gated by its own
+capability rather than being folded into `session.prompt` or `session.snapshot`:
+
+| Capability | Direction | Why it is separate |
+|---|---|---|
+| `session.file-attachment` | local → remote | A `file` prompt part carries base64 bytes, which the remote must admit into its own store. An agent that predates this silently drops the part, so a client must be able to see the capability *before* sending and refuse loudly instead. |
+| `attachment.read` | remote → local | Serves `POST /attachments/read` so a mirrored Session can materialize the bytes its replayed references name. |
+
+**A staged-upload receipt cannot cross this protocol.** `fileUploads` stages a receipt against the
+exact `Session` object that received the upload, so a receipt minted by the local Host is meaningless
+to the remote one: `sessionController.prompt` resolves receipts through its own staging table and
+answers `FILE_NOT_STAGED`. The `file` prompt part therefore carries **bytes**, and the remote mints a
+receipt of its own before the prompt enters its Agent.
+
+**Sizes.** A prompt body is capped at 12 MiB and base64 costs 4/3 of the payload, so an inline file
+tops out just under 9 MiB. The local plugin checks that bound itself so the failure names the user's
+file, not the wire size. A larger file needs a streaming upload route, which this protocol does not
+have — a prompt carries content, not a transfer.
+
+`POST /attachments/read` takes `{ "kind": "image" | "file", "ref": { … } }` and returns
+`{ "data": "<base64>", "bytes", "mediaType"?, "name"? }`. The `kind` decides which store answers,
+because the two differ in a way the caller must respect:
+
+- A **file** is stored verbatim, and its `attachmentId` is the sha256 of exactly those bytes, so
+  re-publishing them locally reproduces the same id.
+- An **image**'s `attachmentId` is the sha256 of its *normalized* object. These are the bytes that
+  must be published verbatim locally; routing them through a save path that re-encodes would change
+  the digest and the replayed reference would stop resolving.
+
+A reference whose object is gone answers `attachment/not-found` (HTTP 404) rather than `internal`:
+the store is content-addressed and may legitimately be pruned, so that is an ordinary outcome the
+client degrades from.
 
 ## Package surface: contract versus internals
 
@@ -431,12 +469,12 @@ only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
-`index.ts` exports 143 symbols in total. They split into 66 contract symbols and 77 symbols that no
+`index.ts` exports 147 symbols in total. They split into 67 contract symbols and 80 symbols that no
 other package consumes, of which 2 are referenced nowhere at all. Every name below is listed
 explicitly, and `scripts/check/protocol-surface.mjs` recomputes these numbers from the source tree; run it
 whenever you add or remove an export, and a test fails if the two disagree.
 
-**Import contract (66 symbols).** Consumed by another package's production code through a named
+**Import contract (67 symbols).** Consumed by another package's production code through a named
 import, or reached through `RemoteAgentClient`'s signatures. Changing or removing one of these is a
 cross-package change. Test files are not counted as consumers: a test that imports a path builder to
 build a URL does not make it part of the contract.
@@ -450,10 +488,10 @@ build a URL does not make it part of the contract.
 - Envelopes and errors (4): `ApiSuccess`, `ApiFailure`, `RemoteProtocolError`, `httpStatusForCode`
 - Host and workspace (5): `AgentCapability`, `HostInfo`, `RemoteWorkspace`, `CreateWorkspaceRequest`,
   `ListWorkspacesResult`
-- Sessions and prompts (13): `RemoteSessionSummary`, `RemoteSessionEvent`, `SessionSnapshot`,
+- Sessions and prompts (14): `RemoteSessionSummary`, `RemoteSessionEvent`, `SessionSnapshot`,
   `SessionStreamFrame`, `ListSessionsResult`, `RemoteAssistantFrame`, `AcceptedResult`,
   `CreateSessionRequest`, `CreateSessionResult`, `PromptSessionRequest`, `PromptContentPart`,
-  `PromptDeliveryMode`, `SelectModelRequest`
+  `PromptDeliveryMode`, `SelectModelRequest`, `AttachmentReadRequest`
 - Files (10): `RemoteFileStat`, `RemoteFileText`, `RemoteFileBytes`, `RemoteFileEntry`,
   `RemoteFileListing`, `RemoteFileWatchFrame`, `RemoteDirectoryListing`, `RemoteFileSearchRequest`,
   `RemoteFileSearchResult`, `RemoteFileSearchMatch`
@@ -466,13 +504,14 @@ build a URL does not make it part of the contract.
 - Approvals, JSON, and Web UI (5): `ApprovalOutcome`, `RemoteApprovalFrame`,
   `RemoteApprovalRequest`, `JsonValue`, `WebUrlResult`
 
-**Internal (77 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
+**Internal (80 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
 private: they carry no cross-package guarantee, and nothing outside `packages/protocol/src` should
 start importing them without promoting them to the contract above.
 
-*Used inside `packages/protocol/src` (75).*
+*Used inside `packages/protocol/src` (78).*
 
-- Guards (30): `isAcceptedResult`, `isApiFailure`, `isCreateSessionResult`, `isCursor`,
+- Guards (31): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`, `isCreateSessionResult`,
+  `isCursor`,
   `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`, `isModelCatalogResult`,
   `isProtocolSupported`, `isRecord`, `isRemoteApprovalFrame`, `isRemoteAssistantFrame`,
   `isRemoteChangesDiff`, `isRemoteChangesSummary`, `isRemoteDirectoryListing`, `isRemoteFileBytes`,
@@ -484,11 +523,12 @@ start importing them without promoting them to the contract above.
   `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionArchivePath`,
   `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`, `terminalAttachPath`,
   `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
-- Types, constants, and functions used inside the package (30): `RemoteFailure`,
+- Types, constants, and functions used inside the package (32): `RemoteFailure`,
   `RemoteTerminalListResult`, `SessionSnapshotOptions`, `SetSandboxModeRequest`,
   `DEFAULT_REQUEST_TIMEOUT_MS`, `parseSseStream`, `AgentRoute`, `CursorAcceptance`,
   `DISCOVERY_STATE_VERSION`, `JsonPrimitive`, `MAX_SUPPORTED_PROTOCOL_VERSION`,
-  `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`, `PromptImagePart`, `ProtocolErrorCode`,
+  `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`, `PromptImagePart`, `PromptFilePart`,
+  `AttachmentReadResult`, `ProtocolErrorCode`,
   `ProtocolNegotiation`, `RemoteAgentClientOptions`, `RemoteChangesDiffRequest`,
   `RemoteChangesSummaryRequest`, `RemoteDirectoryEntry`, `RemoteFileSearchEntryType`,
   `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteReasoningEffort`, `RemoteSandboxMode`,

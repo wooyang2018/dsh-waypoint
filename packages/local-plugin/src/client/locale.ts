@@ -61,6 +61,10 @@ export const zh = {
   'error.healthCheckFailed': '远端 agent 健康检查失败，可能正在重启或网络中断。',
   'error.tunnelExited': 'SSH 隧道已退出（code {code}，signal {signal}），正在尝试重连。',
   'error.workspaceRemoved': '这个工作区已在本地删除，请重新添加后再创建会话',
+  'error.mirrorAttachmentUnsupported':
+    '远端 agent 版本过旧，无法把附件转发到远端会话；请点击 Reinstall 更新后再发送。',
+  'error.mirrorAttachmentTooLarge':
+    '附件超过 {limit} MB，无法转发到远端会话；请改用更小的文件，或把它放到远端工作区后按路径引用。',
   'error.operationFailed': '操作失败',
   'error.unavailable': '无法连接本地远程宿主服务',
   'error.internal': '插件内部错误',
@@ -229,6 +233,10 @@ export const en: Record<CopyKey, string> = {
   'error.healthCheckFailed': 'The remote agent health check failed; it may be restarting or the network may be down.',
   'error.tunnelExited': 'The SSH tunnel exited (code {code}, signal {signal}); reconnecting.',
   'error.workspaceRemoved': 'This workspace was removed locally. Add it again before creating a session.',
+  'error.mirrorAttachmentUnsupported':
+    'The remote agent is too old to forward attachments to the remote Session; click Reinstall and send again.',
+  'error.mirrorAttachmentTooLarge':
+    'This attachment is over {limit} MB, which cannot be forwarded to the remote Session; use a smaller file, or place it in the remote workspace and reference its path.',
   'error.operationFailed': 'Operation failed',
   'error.unavailable': 'Cannot reach the local remote-host service',
   'error.internal': 'Plugin internal error',

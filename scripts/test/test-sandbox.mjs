@@ -148,7 +148,13 @@ if (tarball === '' || !existsSync(tarball)) {
 }
 
 progress(`installing into profile ${profile}`)
-run(dsh, ['plugin', '--profile', profile, 'add', tarball])
+// The isolated home must reach the CLI itself, not only the host this script
+// later starts. Without it `plugin add` resolves `~/.dsh` and installs the
+// development build into the operator's real profile — silently replacing
+// whatever version was there, in the one profile they did not mean to touch.
+// `assertIsolated` cannot catch that: the guard checks the home this script
+// hands over, while the CLI was free to pick its own.
+run(dsh, ['plugin', '--profile', profile, 'add', tarball], { DSH_HOME: testHome })
 
 // Hide this run's test workspaces from the sidebar rather than deleting them:
 // the data stays available for review. See docs/testing.md.
