@@ -85,6 +85,16 @@ export const REQUIRED_FS_METHODS = [
  */
 export const REQUIRED_WORKSPACE_CHANGES_METHODS = ['summary', 'diff'] as const
 
+/**
+ * The `workspaceRegistry` methods the archive interposer replaces.
+ *
+ * Both halves are required, because archiving a mirrored Session on the remote
+ * is only safe when it can be unarchived again — DSH's `ArchivedSessionGate`
+ * rejects every model step of an archived Session. A Host that renames either
+ * method must leave the plugin archiving locally only, never half a round trip.
+ */
+export const REQUIRED_WORKSPACE_REGISTRY_METHODS = ['archiveSession', 'unarchiveSession'] as const
+
 /** One expected method the service did not offer. */
 export interface MissingPatchMethod {
   readonly method: string

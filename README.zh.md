@@ -80,7 +80,7 @@ DSH 会从 npm 安装 bundle。这个包已经包含远端 agent 资源，不需
 如果 npmjs.com 对刚发布版本的 `latest` 解析仍旧滞后，可以改为安装当前的精确版本：
 
 ```text
-dsh-waypoint@1.1.2
+dsh-waypoint@1.1.3
 ```
 
 每次发新版本时同步更新这个版本号。

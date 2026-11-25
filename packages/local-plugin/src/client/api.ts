@@ -18,6 +18,7 @@ import {
   type HostCreateSessionResult,
   type HostApiPayloads,
   type HostApiValues,
+  type HostNotice,
   type MirrorFileResult,
   type MirrorTarget,
   type PublishPortResult,
@@ -112,7 +113,11 @@ export interface HostsApi {
 
   // --- Session creation and navigation (mirror UI) ---
   readonly startBlankSession: (hostId: string, input: { localWorkspaceId?: string; workspaceId?: string; agentPreset?: string }) => Promise<{ localSessionId: string }>
-  readonly claimOpenSession: (visibleSessionId?: string) => Promise<{ localSessionId?: string; sourceSessionId?: string }>
+  readonly claimOpenSession: (visibleSessionId?: string) => Promise<{
+    localSessionId?: string
+    sourceSessionId?: string
+    notices?: readonly HostNotice[]
+  }>
   readonly openSession: (sessionId: string) => void
 
   // --- Remote files (mirror UI) ---

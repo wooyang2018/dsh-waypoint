@@ -139,6 +139,10 @@ export function harness() {
   let createdPreset: string | undefined
   const attached: string[] = []
   const archived: string[] = []
+  /** Sessions the fixture was asked to unarchive. */
+  const unarchived: string[] = []
+  /** Durable archive set, as the real registry keeps it. */
+  const archivedSessionIds: string[] = []
   /** Remote Sessions whose active turn was cancelled. */
   const cancelled: string[] = []
   const remoteArchived: string[] = []
@@ -174,8 +178,17 @@ export function harness() {
       return workspace
     },
     async delete() {},
-    async archiveSession(id: string) { archived.push(id) },
-    async unarchiveSession() {},
+    async archiveSession(id: string) {
+      archived.push(id)
+      if (!archivedSessionIds.includes(id)) archivedSessionIds.push(id)
+    },
+    async unarchiveSession(id: string) {
+      unarchived.push(id)
+      const at = archivedSessionIds.indexOf(id)
+      if (at >= 0) archivedSessionIds.splice(at, 1)
+    },
+    /** Registry-global archive set; a sync pass reads it to skip archived mirrors. */
+    archivedSessionIds: archivedSessionIds as readonly string[],
   }
 
   /**
@@ -321,6 +334,8 @@ export function harness() {
     sessions,
     attached,
     archived,
+    unarchived,
+    archivedSessionIds,
     cancelled,
     remoteArchived,
     warnings,

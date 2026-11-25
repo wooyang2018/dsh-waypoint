@@ -40,12 +40,17 @@ import { singleFlight } from './inflight.ts'
 import { isTestHidden, loadTestVisibility, type TestVisibility } from './test-visibility.ts'
 import { abandonedTurnEnd } from './recovery.ts'
 import type { HostView } from '../hosts/types.ts'
+import type { HostNotice } from '../host-api/contract.ts'
 import type { RemoteHostsService } from '../service.ts'
 
 
 const MIRROR_VERSION = 1
 /** How long a client's last visible-Session report keeps approvals eligible to dispatch. */
 const VISIBLE_SESSION_TTL_MS = 5_000
+/** How long a queued notice waits for a client to collect it. */
+const NOTICE_TTL_MS = 60_000
+/** Cap on queued notices, so a failing host cannot flood the next poll. */
+const MAX_PENDING_NOTICES = 5
 const SURFACE_TYPES = new Set([
   'system/message',
   'developer/message',
@@ -91,6 +96,25 @@ interface MirrorState {
   workspaces: Record<string, WorkspaceRecord>
   /** Mirror keys hidden by the test-only manifest; used to restore on unhide. */
   testHidden: string[]
+}
+
+/**
+ * One thing the UI should tell the user, queued for the next client poll.
+ *
+ * These are memory-only and never persisted: a notice describes an action the
+ * user just took, so replaying one after a restart would be confusing rather
+ * than helpful. `kind` is a stable code, not prose — the client owns the
+ * translation, exactly as `messages.ts` documents for host-side text.
+ *
+ * The shape itself is declared in `host-api/contract.ts`, which the browser
+ * type graph also includes; re-exporting it keeps one definition instead of two
+ * that could drift.
+ */
+export type MirrorNotice = HostNotice
+
+/** A queued notice plus the moment it stops being worth showing. */
+interface QueuedNotice extends MirrorNotice {
+  readonly expiresAt: number
 }
 
 interface PendingUser {
@@ -624,8 +648,43 @@ export class RemoteMirrorService {
   #approvalStreams = new Map<string, AbortController>()
   #mirrorsInFlight = new Map<string, Promise<MirrorRecord | undefined>>()
   #pendingBlanks = new Map<string, PendingBlankSession>()
+  /**
+   * Session ids whose archive in flight is the plugin's own cleanup.
+   *
+   * Holds ids only for the duration of {@link #archive}. The host-side archive
+   * interposer reads it synchronously to keep internal cleanup from reaching
+   * the remote host, which no option on the registry call can express.
+   */
+  #localOnlyArchives = new Set<string>()
+  /**
+   * Session ids whose unarchive in flight is the plugin's own bookkeeping.
+   *
+   * The counterpart of {@link #localOnlyArchives}. Workspace restore runs an
+   * unarchive for every mirror in the re-added workspace; that is local
+   * reconciliation, not a user restoring one conversation, so it must not be
+   * forwarded to the remote host either.
+   */
+  #localOnlyUnarchives = new Set<string>()
+  /**
+   * Retirement work in flight, keyed by host and anchor.
+   *
+   * A workspace can be removed and re-added faster than the removal's archive
+   * loop finishes. Without this, the unarchive from the restore lands first and
+   * the removal's archive overwrites it, so the re-added mirrors stay archived
+   * and never remount. The restore awaits the matching entry instead.
+   */
+  #retirements = new Map<string, Promise<void>>()
   #openSessions: Array<{ localSessionId: string; sourceSessionId?: string; expiresAt: number }> = []
   #promotions = new Map<string, PromotionState>()
+  /**
+   * Notices waiting for a client poll.
+   *
+   * The archive path is fail-open: a local archive stands even when the remote
+   * one fails, and nothing retries it. Without this the user would never learn
+   * that the remote Session is still live, so the failure is queued for the next
+   * `host/session/open/claim` heartbeat instead of only being logged.
+   */
+  #notices: QueuedNotice[] = []
   #blankInFlight = new Map<string, Promise<{ localSessionId: string }>>()
   #syncing = false
   #saveQueue: Promise<void> = Promise.resolve()
@@ -1376,6 +1435,20 @@ export class RemoteMirrorService {
 
   async #retireWorkspace(record: WorkspaceRecord): Promise<void> {
     record.removed = true
+    // A restore may race this retirement: re-adding the workspace makes the
+    // archive loop below land after the unarchive, leaving a re-added mirror
+    // archived and therefore never remounted. Publishing the in-flight
+    // retirement lets `#restoreWorkspace` wait for it instead of guessing.
+    const retirement = this.#runRetirement(record)
+    this.#retirements.set(`${record.hostId}\u0000${record.anchor}`, retirement)
+    try {
+      await retirement
+    } finally {
+      this.#retirements.delete(`${record.hostId}\u0000${record.anchor}`)
+    }
+  }
+
+  async #runRetirement(record: WorkspaceRecord): Promise<void> {
     const persistence = this.#save()
     // Stop locally before awaiting persistence. Do not archive with stopActivity:
     // that path invokes the mirror Agent's cancel and would stop the remote loop.
@@ -1419,6 +1492,9 @@ export class RemoteMirrorService {
       record.hostId === hostId && record.remoteRoot === remote.path
       && (record.remoteWorkspaceId === null || this.#workspaceRemoved(record)))
     if (match === undefined || !this.#workspaceRemoved(match)) return
+    // Let the removal finish archiving first. Its archive loop would otherwise
+    // land after the unarchive below and leave the restored mirrors archived.
+    await this.#retirements.get(`${hostId}\u0000${match.anchor}`)
     // Explicit add may register a cwd or replace a remote workspace id. Keep its
     // anchor and local Session ids, rather than duplicating history.
     const oldRef = Object.entries(this.#state.workspaces).find(([, record]) => record === match)?.[0]
@@ -1430,10 +1506,16 @@ export class RemoteMirrorService {
     for (const [sessionRef, session] of Object.entries(this.#state.sessions)) {
       if (session.hostId === hostId && session.anchor === match.anchor) {
         this.#state.sessions[sessionRef] = { ...session, remoteWorkspaceId: remote.workspaceId }
+        // Local-only, like the archive side: re-adding a workspace must not
+        // reach into the remote host. A mirror archived by an earlier delete is
+        // restored locally, and the sync below decides what to remount.
+        this.#localOnlyUnarchives.add(session.localSessionId)
         try {
           await this.#workspaceRegistry.unarchiveSession(session.localSessionId as SessionId)
         } catch {
           // The local Session may no longer exist; the next sync will skip it.
+        } finally {
+          this.#localOnlyUnarchives.delete(session.localSessionId)
         }
       }
     }
@@ -2152,6 +2234,17 @@ export class RemoteMirrorService {
     }
     this.#ensureApprovalStream(host)
     await this.#reconcileTestHidden(host)
+    // Read once per pass: the getter returns the durable array, so consulting
+    // it per Session would be O(sessions x archived). Guarded rather than
+    // assumed: a registry whose startup has not published the archive set yet
+    // (or a test double that omits it) must not turn every sync into a no-op.
+    let archivedIds: readonly SessionId[] = []
+    try {
+      archivedIds = this.#workspaceRegistry.archivedSessionIds ?? []
+    } catch (error) {
+      this.#ctx.logger.debug('dsh-waypoint: archive set unavailable: %s', String(error))
+    }
+    const archived = new Set<string>(archivedIds.map(String))
     const workspaces = await this.#hosts.workspaces(host.id)
     const byPath = new Map<string, { workspace: Workspace; anchor: string }>()
     const hiddenPaths = new Set<string>()
@@ -2172,6 +2265,7 @@ export class RemoteMirrorService {
     const children: RemoteSessionSummary[] = []
     for (const summary of all.sessions) {
       if (this.isSessionWorkspaceRemoved(host.id, summary.workspaceId, summary.cwd)) continue
+      if (this.#archivedMirror(host.id, summary.sessionId, archived)) continue
       if (summary.origin === 'subagent') {
         subagents.add(summary.sessionId)
         children.push(summary)
@@ -2209,16 +2303,46 @@ export class RemoteMirrorService {
       if (deferred.length === pending.length) break
       pending = deferred
     }
-    await this.#pruneMirroredSubagents(host.id, subagents)
+    await this.#pruneMirroredSubagents(host.id, subagents, archived)
+  }
+
+  /**
+   * Whether the remote Session behind this mirror is archived locally.
+   *
+   * An archived mirror is a Session the user deliberately moved out of the
+   * sidebar, not one that disappeared. Re-mirroring it on the next sync is what
+   * made an archived mirror come back after a restart: the remote catalog still
+   * lists the Session, so reconciliation rebuilt the projection every launch.
+   *
+   * The projection is therefore left alone while it is archived. Nothing is
+   * deleted: the record and its log stay, so unarchiving still restores the
+   * conversation, and no historical record needs migrating.
+   * @param hostId - host owning the remote Session.
+   * @param remoteSessionId - remote Session the catalog reported.
+   * @param archived - the archive set read once for this sync pass.
+   * @returns true when this Session must be skipped for now.
+   */
+  #archivedMirror(hostId: string, remoteSessionId: string, archived: ReadonlySet<string>): boolean {
+    if (archived.size === 0) return false
+    const record = this.#state.sessions[key(hostId, remoteSessionId)]
+    return record !== undefined && archived.has(record.localSessionId)
   }
 
   /** Remove local mirrors of remote subagent Sessions the remote no longer reports. */
-  async #pruneMirroredSubagents(hostId: string, subagents: ReadonlySet<string>): Promise<void> {
+  async #pruneMirroredSubagents(
+    hostId: string,
+    subagents: ReadonlySet<string>,
+    archived: ReadonlySet<string> = new Set(),
+  ): Promise<void> {
     let changed = false
     for (const [ref, record] of Object.entries(this.#state.sessions)) {
       if (record.hostId !== hostId) continue
       if (record.parentSessionId === undefined || this.#anchorRemoved(hostId, record.anchor)) continue
       if (subagents.has(record.remoteSessionId)) continue
+      // An archived mirror keeps its record: dropping it would make the
+      // conversation unrecoverable, and the child is absent from `subagents`
+      // only because it was skipped as archived, not because it is gone.
+      if (archived.has(record.localSessionId)) continue
       const runtime = this.#runtimes.get(record.localSessionId)
       if (runtime !== undefined) {
         runtime.stopped = true
@@ -2354,6 +2478,161 @@ export class RemoteMirrorService {
         String(error),
       )
     }
+  }
+
+  /**
+   * Whether this host can complete a whole archive round trip.
+   *
+   * Both halves are required. Archiving the remote is only safe when the remote
+   * can be unarchived again: DSH's `ArchivedSessionGate` rejects every model
+   * step of an archived Session, so a remote archived by a plugin that cannot
+   * unarchive it would leave the local mirror restored-but-dead. When the agent
+   * predates either capability the plugin keeps the pre-fix behaviour and
+   * archives locally only.
+   * @param hostId - host owning the remote Session.
+   * @returns true when archive and unarchive can both be forwarded.
+   */
+  canArchiveRemote(hostId: string): boolean {
+    return this.#hosts.supportsAgent(hostId, 'session.archive')
+      && this.#hosts.supportsAgent(hostId, 'session.unarchive')
+  }
+
+  /**
+   * Archive the remote Session behind one local mirror, and stop its mirror.
+   *
+   * Called by the host-side archive interposer after the local archive has
+   * already been written, so the sidebar is consistent even if the remote call
+   * fails. A failure is reported, never thrown: the local archive stands, and
+   * the sync pass keeps an archived mirror from being recreated.
+   * @param localSessionId - the local mirror Session a user archived.
+   * @returns the remote Session id that was archived, when one was.
+   */
+  async archiveRemoteFor(localSessionId: string): Promise<string | undefined> {
+    const target = this.mirrorFor(localSessionId)
+    if (target === undefined) return undefined
+    if (target.remoteSessionId === '') {
+      // A blank mirror has no remote Session yet. Drop the pending entry so the
+      // first prompt cannot materialize one after the user archived it.
+      this.#abandonBlank(localSessionId)
+      return undefined
+    }
+    this.#stopRuntime(localSessionId)
+    try {
+      await this.#hosts.archiveSession(target.hostId, target.remoteSessionId)
+      return target.remoteSessionId
+    } catch (error) {
+      this.#ctx.logger.warn(
+        'dsh-waypoint: could not archive remote Session %s for local %s: %s',
+        target.remoteSessionId,
+        localSessionId,
+        String(error),
+      )
+      // The local archive stands, so the row is hidden and cannot be remounted,
+      // but the remote Session is still live and any running turn was not
+      // stopped. Nothing else will retry this, so the user is told instead of
+      // being left to discover it in the remote UI.
+      this.#queueNotice({ 
+        kind: 'remoteArchiveFailed',
+        localSessionId,
+        hostId: target.hostId,
+        remoteSessionId: target.remoteSessionId,
+      })
+      return undefined
+    }
+  }
+
+  /**
+   * Hand one pending notice to the next client poll.
+   *
+   * Notices ride the existing `host/session/open/claim` heartbeat rather than a
+   * new endpoint: the client already polls it twice a second while the page is
+   * visible, so a failure reaches a toast without adding protocol surface. Each
+   * entry is delivered once; a notice nobody collects ages out rather than
+   * greeting the user with ancient failures after a reconnect.
+   * @param notice - what happened, for the client to localize.
+   */
+  #queueNotice(notice: MirrorNotice): void {
+    const now = Date.now()
+    this.#notices = this.#notices.filter(entry => entry.expiresAt > now)
+    this.#notices.push({ ...notice, expiresAt: now + NOTICE_TTL_MS })
+    // A burst of failures must not become a wall of toasts.
+    if (this.#notices.length > MAX_PENDING_NOTICES) {
+      this.#notices.splice(0, this.#notices.length - MAX_PENDING_NOTICES)
+    }
+  }
+
+  /**
+   * Consume every notice the client has not seen yet.
+   *
+   * Called by the claim endpoint so delivery needs no extra request. The caller
+   * renders each entry with its own locale; this side never sends prose.
+   * @returns notices to show, oldest first.
+   */
+  takeNotices(): MirrorNotice[] {
+    const now = Date.now()
+    const ready = this.#notices.filter(entry => entry.expiresAt > now)
+    this.#notices = []
+    return ready
+  }
+
+  /**
+   * Unarchive the remote Session behind one local mirror.
+   *
+   * Runs before the local unarchive so a failure leaves both sides archived: a
+   * local Session whose remote is still archived would be restored into a state
+   * where every prompt is silently rejected. The remote call is idempotent, so
+   * no record of "who archived it" is needed here or in `mirrors.json`.
+   * @param localSessionId - the local mirror Session a user is restoring.
+   * @throws when the remote could not be unarchived; the local archive is kept.
+   */
+  async unarchiveRemoteFor(localSessionId: string): Promise<void> {
+    const target = this.mirrorFor(localSessionId)
+    if (target === undefined || target.remoteSessionId === '') return
+    try {
+      await this.#hosts.unarchiveSession(target.hostId, target.remoteSessionId)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      this.#ctx.logger.warn(
+        'dsh-waypoint: could not unarchive remote Session %s for local %s: %s',
+        target.remoteSessionId,
+        localSessionId,
+        detail,
+      )
+      throw error
+    }
+  }
+
+  /** Detach a blank mirror so it can never materialize a remote Session. */
+  #abandonBlank(localSessionId: string): void {
+    const pending = this.#pendingBlanks.get(localSessionId)
+    if (pending === undefined) return
+    this.#pendingBlanks.delete(localSessionId)
+    const registration = this.#registrations.get(localSessionId)
+    this.#registrations.delete(localSessionId)
+    if (registration !== undefined) {
+      void registration().catch(error => {
+        this.#ctx.logger.debug('dsh-waypoint: blank detach failed: %s', String(error))
+      })
+    }
+  }
+
+  /** Detach a mirror runtime without touching the native archive state. */
+  #stopRuntime(localSessionId: string): void {
+    const runtime = this.#runtimes.get(localSessionId)
+    if (runtime !== undefined) {
+      runtime.stopped = true
+      if (runtime.timer !== undefined) clearTimeout(runtime.timer)
+      runtime.stream?.abort()
+      runtime.assistant?.abort()
+      this.#setRunning(runtime, false)
+      this.#runtimes.delete(localSessionId)
+    }
+    const registration = this.#registrations.get(localSessionId)
+    if (registration === undefined) return
+    this.#registrations.delete(localSessionId)
+    void registration().catch(error => {
+      this.#ctx.logger.debug('dsh-waypoint: mirror detach failed: %s', String(error))
+    })
   }
 
   async #ensureUngroupedWorkspace(host: HostView, cwd: string): Promise<{ workspace: Workspace; anchor: string } | undefined> {
@@ -3553,13 +3832,59 @@ export class RemoteMirrorService {
     }
   }
 
+  /**
+   * Archive one local Session as part of the plugin's own cleanup.
+   *
+   * Every caller of this method is internal bookkeeping — a removed workspace,
+   * a pruned subagent mirror, a test-hidden mirror, an abandoned promotion — and
+   * none of them may reach the remote. The archive interposer in
+   * `remote/archive.ts` replaces the registry method itself, so the intent has
+   * to travel out of band: {@link #localOnlyArchives} marks the id for the
+   * duration of the call and {@link isLocalOnlyArchive} answers the interposer.
+   *
+   * `stopActivity` cannot carry that meaning. This method always passes `true`,
+   * so a flag read at the interposer could not tell a user's archive from this
+   * one. The actual reason archiving the remote would be wrong here is
+   * different per caller: `#retireWorkspace` has already detached the mirror
+   * Agent, and a remote archive of a Session the user only wanted hidden would
+   * be irreversible from the local UI.
+   */
   async #archive(sessionId: SessionId): Promise<void> {
+    this.#localOnlyArchives.add(String(sessionId))
     try {
       await this.#workspaceRegistry.archiveSession(sessionId, { stopActivity: true })
     } catch (error) {
       // Missing/active sessions are left alone; the new mirror is still usable.
       this.#ctx.logger.debug('dsh-waypoint: archive %s failed: %s', sessionId, String(error))
+    } finally {
+      this.#localOnlyArchives.delete(String(sessionId))
     }
+  }
+
+  /**
+   * Whether an archive of this Session in flight is the plugin's own cleanup.
+   *
+   * Read by the host-side archive interposer to decide whether the action may
+   * be forwarded to the remote host. Synchronous by design: the interposer
+   * consults it before any await, while the marking call still holds the id.
+   * @param localSessionId - the Session being archived.
+   * @returns true when this archive must stay local.
+   */
+  isLocalOnlyArchive(localSessionId: string): boolean {
+    return this.#localOnlyArchives.has(localSessionId)
+  }
+
+  /**
+   * Whether an unarchive of this Session in flight is the plugin's own bookkeeping.
+   *
+   * Read by the host-side interposer next to {@link isLocalOnlyArchive}, and for
+   * the same reason: a workspace restore unarchives its mirrors locally and must
+   * not wake the remote host.
+   * @param localSessionId - the Session being unarchived.
+   * @returns true when this unarchive must stay local.
+   */
+  isLocalOnlyUnarchive(localSessionId: string): boolean {
+    return this.#localOnlyUnarchives.has(localSessionId)
   }
 
   /** Repair sessions left orphaned by removals persisted before archival existed. */

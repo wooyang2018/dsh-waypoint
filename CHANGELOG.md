@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.1.3
+
+### Fixed
+
+- **Archiving a mirrored Session now archives its remote Session, and unarchiving restores it.** The
+  sidebar's Archive action went straight to the Host's `workspaceRegistry`, which knows nothing about
+  mirroring, so only the local projection was hidden: the remote Session stayed alive and listed, the
+  next reconciliation mirrored it again, and the archived conversation reappeared after every restart.
+  The plugin now interposes on the registry's `archiveSession`/`unarchiveSession` — the same one-layer
+  host-side replacement `remote/files.ts` uses for files — and forwards a user's archive to
+  `POST /sessions/:id/archive`, restoring through the new `POST /sessions/:id/unarchive` route and the
+  `session.unarchive` capability added in this release.
+
+  Both directions ship together and are required before the plugin touches the remote at all. DSH's
+  `ArchivedSessionGate` rejects every model step of an archived Session, so a remote archived by a
+  plugin that could not restore it would leave a mirror that opens, shows its history, and silently
+  refuses to answer. On an agent that does not advertise both capabilities the plugin archives locally
+  only, exactly as before; reinstall the remote agent to get the round trip.
+
+  The plugin's own cleanup — removing a workspace, pruning a subagent mirror, hiding a test workspace,
+  abandoning a promotion — never reaches the remote, because `stopActivity` cannot express that
+  distinction (the internal helper always passes `true`); those archives are marked in-process instead.
+  An archived mirror is also no longer recreated on restart, which is what makes the fix hold for
+  records archived before this release as well — nothing is deleted, so unarchiving still works.
+
+- **A failed remote archive is reported instead of failing silently.** The local archive is written
+  first, so a host that is offline or refuses the call leaves the row hidden and cannot resurrect it —
+  but the remote Session is still live, any running turn was never stopped, and nothing retries. The
+  client is now told: a short toast arrives through the heartbeat the page already polls, saying the
+  remote Session could not be archived and is still running. Unarchiving stays fail-closed by contrast;
+  a remote that cannot be restored keeps its local archive rather than handing back a conversation that
+  silently rejects every prompt.
+
 ## 1.1.2
 
 ### Changed

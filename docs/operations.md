@@ -269,7 +269,11 @@ remote environment manually.
 - Remote sessions longer than `mirrorMaxEvents` are mirrored from the first complete turn in the
   available tail; older history stays in the remote session. Increase the limit to mirror further
   back, or work on the remote host directly.
-- On plugin restart, old local mirrors are archived and recreated from the current remote log.
+- Archiving a mirrored Session archives its remote Session too, and unarchiving restores it. Both
+  directions need the agent to advertise `session.archive` and `session.unarchive`; without the pair the
+  plugin archives locally only, because a remote archived without a way back cannot run a model step.
+- An archived mirror is never recreated. Reconciliation skips any Session whose mirror is archived, so a
+  restart leaves it archived and nothing is deleted — unarchiving still restores the conversation.
 
 ## Configuration
 
@@ -435,7 +439,7 @@ upgrade.
 | Native session has no reply | No local key copied and remote has no credentials | Check **模型 Key 来源**; either switch the host to **本地 Key 代理** or configure credentials on the remote DSH |
 | `DeepSeek Messages request failed (404)` | Proxy upstream points at the wrong provider root/path | Set `credentialProxyUpstream: https://api.deepseek.com/anthropic`; the fixed proxy preserves the `/anthropic` prefix and tolerates it already being on the request path; reinstall the local plugin |
 | Approval appears locally but remote tool still fails | The decision was delivered but the tool failed remotely | Inspect the remote tool result |
-| Duplicate native session after restart | Old mirror archive failed | Archive the old session in the sidebar; new mirrors use fresh IDs |
+| Archived mirror comes back after a restart | The remote agent predates `session.unarchive`, so the plugin archived locally only | Reinstall the remote agent so the archive pair is advertised; the mirror then stays archived |
 | Tunnel drops after sleep | SSH reset | Plugin reconnects on its own; or click **Connect** |
 | Install fails while naming the npm global prefix | npm cannot write `<prefix>/lib/node_modules` or `<prefix>/bin` for this account, or `npm prefix -g` printed nothing | Set `remoteGlobalPrefix` to a directory you own (e.g. `~/npm-global`) and retry. There is deliberately no fallback install location. `doctor` distinguishes the two write targets |
 | `dsh` missing in the operator's own shell | The global prefix is not on that shell's `PATH` | Add the `export PATH=…` line the install log printed to that shell's startup file yourself; the installer never edits them |

@@ -128,6 +128,7 @@ export {
   sessionModelPath,
   sessionPath,
   sessionPromptPath,
+  sessionUnarchivePath,
   workspaceSessionsPath,
   directoryListPath,
   fileWatchPath,

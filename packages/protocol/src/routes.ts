@@ -47,6 +47,7 @@ export type AgentRoute =
   | { readonly kind: 'session-prompt'; readonly sessionId: string }
   | { readonly kind: 'session-cancel'; readonly sessionId: string }
   | { readonly kind: 'session-archive'; readonly sessionId: string }
+  | { readonly kind: 'session-unarchive'; readonly sessionId: string }
   | { readonly kind: 'workspace-sessions'; readonly workspaceId: string }
   | { readonly kind: 'web-url' }
   | { readonly kind: 'approval-events' }
@@ -101,6 +102,16 @@ export function sessionCancelPath(sessionId: string): string {
 /** Path that archives one remote session. */
 export function sessionArchivePath(sessionId: string): string {
   return `${sessionPath(sessionId)}/archive`
+}
+
+/**
+ * Path that unarchives one remote session.
+ *
+ * The counterpart of {@link sessionArchivePath}: archiving a mirrored Session is
+ * only safe when the remote can be restored again, so both travel together.
+ */
+export function sessionUnarchivePath(sessionId: string): string {
+  return `${sessionPath(sessionId)}/unarchive`
 }
 
 /** Path of one session's live event stream. */
@@ -242,6 +253,7 @@ export function matchAgentRoute(pathname: string): AgentRoute | undefined {
       if (parts[1] === 'prompt') return { kind: 'session-prompt', sessionId }
       if (parts[1] === 'cancel') return { kind: 'session-cancel', sessionId }
       if (parts[1] === 'archive') return { kind: 'session-archive', sessionId }
+      if (parts[1] === 'unarchive') return { kind: 'session-unarchive', sessionId }
     }
     return undefined
   }

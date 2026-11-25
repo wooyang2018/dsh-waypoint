@@ -162,6 +162,7 @@ export class RemoteAgentService {
         'session.prompt',
         'session.cancel',
         'session.archive',
+        'session.unarchive',
         'approval.follow',
         'approval.answer',
         'web.url',
@@ -310,6 +311,29 @@ export class RemoteAgentService {
         sessionId as never,
         stopActivity ? { stopActivity: true } : {},
       )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new RemoteProtocolError({
+        code: 'internal',
+        message,
+        httpStatus: 409,
+      })
+    }
+    return { accepted: true }
+  }
+
+  /**
+   * Restore one archived remote session.
+   *
+   * The counterpart of {@link archiveSession}. The local plugin archives a
+   * mirrored Session on the remote only when it can also unarchive it, because
+   * an archived Session runs no model step until it is restored — a mirror
+   * whose remote stayed archived would look usable and reject every prompt.
+   * Idempotent: DSH resolves an id that is not archived without writing.
+   */
+  async unarchiveSession(sessionId: string): Promise<AcceptedResult> {
+    try {
+      await this.ctx.workspaceRegistry.unarchiveSession(sessionId as never)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       throw new RemoteProtocolError({

@@ -83,8 +83,9 @@ not the artifact shape:
 | `ADDED_WORKSPACE_FILE_METHODS` | methods this plugin supplies when the Host lacks them |
 | `REQUIRED_SUBPROCESS_METHODS` | the `subprocess` methods the Forge panel's Git routing replaces |
 | `REQUIRED_SANDBOX_METHODS`, `REQUIRED_FS_METHODS`, `REQUIRED_WORKSPACE_CHANGES_METHODS` | the other interposed services |
+| `REQUIRED_WORKSPACE_REGISTRY_METHODS` | the `workspaceRegistry` archive pair the mirror's archive round trip replaces |
 
-Only two of the seven are checked, and each at a different strength:
+Only two of the eight are checked, and each at a different strength:
 
 - **Terminal — by a test.** `remote-terminal-controller.test.ts` compares the list against the Host's
   generated typert face, so an added method fails there instead of silently running on the local PTY.
@@ -93,14 +94,19 @@ Only two of the seven are checked, and each at a different strength:
 - **`workspaceFiles` — at runtime.** `checkPatchContract()` defaults to this list, and its result drives
   Settings. A missing method does not crash the Host: it turns file routing off and reports
   `bypassed (<method>: absent)` rather than an unexplained empty tree.
+- **`workspaceRegistry` — at startup, logged.** `checkArchiveContract()` gates the archive interposer
+  and logs a warning when either method is gone. It does not throw: archive is less critical than file
+  routing, and the degradation is the visible one — mirrored Sessions archive locally only, so an
+  archived mirror keeps coming back after a restart until the method list is adapted.
 - **The other five — not at all.** `ADDED_WORKSPACE_FILE_METHODS`,
   `REQUIRED_SUBPROCESS_METHODS`, `REQUIRED_SANDBOX_METHODS`, `REQUIRED_FS_METHODS` and
   `REQUIRED_WORKSPACE_CHANGES_METHODS` are never read outside their own declarations: their adapters
   call `replaceMethods()` and report nothing, so a renamed method in one of those services fails
   *silently*.
 
-Hence one manual pass after a baseline move — file panel, a remote terminal, the Forge panel — rather
-than a green unit suite. Playwright covers this; CI does not.
+Hence one manual pass after a baseline move — file panel, a remote terminal, the Forge panel, and one
+archive/unarchive round trip on a mirrored Session — rather than a green unit suite. Playwright covers
+this; CI does not.
 
 ## 4. Leave the peer range alone until the line is the baseline
 

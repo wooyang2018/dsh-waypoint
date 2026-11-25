@@ -211,15 +211,22 @@ describe('local remote-workspace removal', () => {
     try {
       await f.service.start()
       const id = f.service.localWorkspaceId(f.host.id, f.workspace.workspaceId)!
+      const localId = f.service.localSessionId(f.host.id, 'remote-session')!
       await f.registry.delete(id)
       const archiveDeadline = Date.now() + 2_000
       while (f.effects.archives === 0 && Date.now() < archiveDeadline) {
         await new Promise<void>(done => setTimeout(done, 5))
       }
       assert.equal(f.effects.archives > 0, true)
+      assert.equal(f.archivedSessionIds.includes(localId), true)
+      // The state an install older than archival left behind: the removal is
+      // persisted, but its Sessions were never archived. Startup has to repair
+      // exactly this, which is what `#archiveRemovedSessions` exists for.
+      f.archivedSessionIds.length = 0
       f.effects.archives = 0
       await f.restart()
-      assert.equal(f.effects.archives > 0, true)
+      assert.equal(f.effects.archives > 0, true, 'startup must archive the orphaned mirrors')
+      assert.equal(f.archivedSessionIds.includes(localId), true)
     } finally { await f.close() }
   })
 

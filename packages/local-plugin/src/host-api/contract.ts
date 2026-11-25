@@ -68,6 +68,21 @@ export interface MirroredWorkspace {
   readonly title: string
 }
 
+/**
+ * One transient message the UI should show, delivered by the claim heartbeat.
+ *
+ * Declared here rather than imported from the mirror service: this module is
+ * part of the browser bundle's type graph (`tsconfig.client.json` includes it),
+ * and the mirror service pulls in Node-only modules. `kind` is a stable code and
+ * the client owns the wording, matching `messages.ts`.
+ */
+export interface HostNotice {
+  readonly kind: 'remoteArchiveFailed'
+  readonly localSessionId: string
+  readonly hostId: string
+  readonly remoteSessionId: string
+}
+
 /** Browser-safe state snapshot. */
 export interface RemoteHostsState {
   readonly protocolVersion: number
@@ -255,7 +270,7 @@ export interface HostApiValues {
   'host/sessions': SessionsResult
   'host/session': SessionSnapshot
   'host/session/create': HostCreateSessionResult
-  'host/session/open/claim': { localSessionId?: string; sourceSessionId?: string }
+  'host/session/open/claim': { localSessionId?: string; sourceSessionId?: string; notices?: readonly HostNotice[] }
   'host/session/blank': { localSessionId: string }
   'host/session/prompt': AcceptedResult
   'host/session/cancel': AcceptedResult

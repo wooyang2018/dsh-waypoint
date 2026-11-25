@@ -19,6 +19,7 @@ import { installNativeWorkspaceRouting } from './routing.ts'
 import { installModelCatalogMerge } from './model-catalog-merge.ts'
 import { installLoopbackLinkRouting } from './link-forwarding.ts'
 import { NS, en, zh, type LocaleFace } from './locale.ts'
+import { showToast } from './toast.ts'
 import { installWorkspaceAddMenu } from './workspace-add.ts'
 import { installWorkspaceDeleteCopy } from './workspace-delete-copy.ts'
 
@@ -60,6 +61,13 @@ export function apply(ctx: Context): void {
         // dispatches approvals while a client shows the mirrored Session.
         const claimed = await api.claimOpenSession(currentSessionId())
         backoff = STEADY_MS
+        // A failed remote archive is reported here rather than on the action
+        // itself: the host writes the local archive first and the remote call
+        // can take up to the request timeout, so the toast must not block the
+        // click. The heartbeat collects whatever is waiting.
+        for (const notice of claimed.notices ?? []) {
+          if (notice.kind === 'remoteArchiveFailed') showToast(t('toast.remoteArchiveFailed'))
+        }
         if (active && claimed.localSessionId !== undefined) {
           // Do not steal focus if the user moved on to another Session while
           // the remote Session was being created. uiSession is the public

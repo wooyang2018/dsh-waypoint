@@ -16,6 +16,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { HostsApi } from './api.ts'
 import { localizedError } from './errors.ts'
 import type { Translate } from './locale.ts'
+import { showToast } from './toast.ts'
 
 interface StartSessionOptions {
   readonly agentPreset?: string
@@ -118,12 +119,4 @@ async function route(
     throw error
   }
   return 'handled'
-}
-
-function showToast(text: string): void {
-  const toast = document.createElement('div')
-  toast.textContent = text
-  toast.style.cssText = 'position:fixed;z-index:9999;left:50%;bottom:28px;transform:translateX(-50%);max-width:min(560px,90vw);padding:10px 14px;border-radius:10px;background:rgba(30,30,32,.96);color:#fff;font:13px/1.5 system-ui,-apple-system,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.35)'
-  document.body.append(toast)
-  window.setTimeout(() => { toast.remove() }, 6000)
 }

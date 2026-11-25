@@ -61,6 +61,7 @@ export const UI_TEXT_KEYS = [
   'error.portInvalid',
   'error.portForwardFailed',
   'error.workspaceRemoved',
+  'error.remoteUnarchiveFailed',
   'error.agentVersionMismatch',
   'error.agentStartTimeout',
   'error.agentInstallFailed',

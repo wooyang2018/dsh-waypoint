@@ -369,6 +369,61 @@ uses the client's 500 ms `host/session/open/claim` request as a visibility heart
 request is queued and dispatched once it is opened. This is not laziness — it avoids dumping a dozen
 historical approvals onto the screen after one reconnect.
 
+### 5.7 Archive: one decision, two logs
+
+Archiving a mirrored Session has to reach the remote Session, and restoring it has to come back the
+same way. Both halves are installed together, for a reason that is easy to miss.
+
+**Why one direction alone is a bug.** DSH's `ArchivedSessionGate`
+(`@deepseek-ai/dsh-api-session-controller`, `archived-session-gate.ts`) rejects every `agent/pre-step`
+of an archived Session until it is unarchived. A remote archived by a plugin that cannot restore it
+would therefore leave a mirror that opens fine, shows its history, and silently refuses to answer —
+the worst possible outcome, because nothing tells the user why. So the plugin only forwards an archive
+to a host whose agent advertises **both** `session.archive` and `session.unarchive`
+(`canArchiveRemote` in `src/mirror/service.ts`). An agent one feature behind keeps the pre-fix
+behaviour: archive locally only.
+
+**Where the interception sits.** The sidebar's Archive/Unarchive actions resolve through the Host's
+`workspaceRegistry.archiveSession` / `unarchiveSession`, so `installRemoteSessionArchive`
+(`src/remote/archive.ts`) replaces those two methods on the live service instance — the same one-layer
+interposition `remote/files.ts` documents, and for the same reason: a browser-side adapter cannot see
+that resolution. Ordering differs per direction on purpose:
+
+- **Archive**: local write first, then the remote. DSH itself archives before stopping, and the
+  sidebar must be consistent even if the remote call fails.
+- **Unarchive**: remote first, then the local. If the remote cannot be restored the local Session stays
+  archived and the action reports an error — never a restored-but-dead conversation.
+
+That ordering makes the two directions fail in opposite ways, deliberately. Archiving is
+**fail-open**: a failed remote archive still leaves the row hidden, and the sync pass keeps it from
+coming back. Unarchiving is **fail-closed**, for the reason above. Because fail-open would otherwise be
+silent, a failed remote archive is queued as a `remoteArchiveFailed` notice and delivered on the next
+`host/session/open/claim` heartbeat, which the client already polls twice a second; the client renders
+it as a toast naming the consequence (the remote Session is still running and still listed). Notices are
+memory-only, delivered once, and capped, so a burst of failures cannot become a wall of toasts — and
+nothing retries the archive afterwards, which is exactly why the user has to be told.
+
+**Distinguishing the plugin's own archive work.** The plugin archives and unarchives local Sessions for
+its own cleanup — a removed workspace, a pruned subagent mirror, a test-hidden mirror, an abandoned
+promotion, and the unarchive sweep a workspace re-add performs — and none of that may touch the remote.
+`stopActivity` cannot express the difference: `#archive` always passes `true`, so a flag read at the
+interposer could not tell the two apart. The intent travels as a marker instead: `#archive` and the
+restore path register the id in `#localOnlyArchives` / `#localOnlyUnarchives` for the duration of the
+call, and the interposer reads `isLocalOnlyArchive` / `isLocalOnlyUnarchive` synchronously.
+
+**One ordering hazard worth naming.** A workspace can be removed and re-added faster than the removal's
+archive loop finishes. The removal's archive then lands *after* the re-add's unarchive and leaves the
+restored mirrors archived, so they never remount — a bug that only appears once both directions exist.
+`#retireWorkspace` publishes its in-flight work in `#retirements`, keyed by host and anchor, and
+`#restoreWorkspace` awaits that entry before unarchiving.
+
+**Why an archived mirror does not come back.** The remote catalog still lists an archived Session, so
+reconciliation used to rebuild its projection on every launch; that is the whole of the reported bug.
+`#syncHost` now reads `workspaceRegistry.archivedSessionIds` once per pass and skips any Session whose
+mirror record points at an archived local Session (`#archivedMirror`). Nothing is deleted: the record
+and its log stay, so unarchiving restores the conversation, and old records archived before this
+behaviour existed need no migration — they are simply left alone.
+
 ## 6. Files and terminals: two adapters that pick an outlet per session
 
 ### 6.1 Files

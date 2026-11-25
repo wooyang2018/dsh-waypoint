@@ -20,6 +20,7 @@ import {
   sessionSandboxModePath,
   sessionPath,
   sessionPromptPath,
+  sessionUnarchivePath,
   workspaceSessionsPath,
   directoryListPath,
   fileWatchPath,
@@ -254,6 +255,20 @@ export class RemoteAgentClient {
     await this.#request(sessionArchivePath(sessionId), isAcceptedResult, {
       method: 'POST',
       body: { stopActivity },
+    })
+  }
+
+  /**
+   * Unarchive a remote session so it appears again.
+   *
+   * Idempotent: a session that is not archived resolves without a write, which
+   * is what lets the caller forward every local unarchive without first
+   * tracking who archived the remote Session.
+   */
+  async unarchiveSession(sessionId: string): Promise<void> {
+    await this.#request(sessionUnarchivePath(sessionId), isAcceptedResult, {
+      method: 'POST',
+      body: {},
     })
   }
 

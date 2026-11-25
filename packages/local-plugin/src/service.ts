@@ -931,6 +931,21 @@ export class RemoteHostsService {
     }
   }
 
+  /**
+   * Restore a remote Session archived by {@link archiveSession}.
+   *
+   * Paired with the archive call on purpose: a remote archived without a way
+   * back leaves a restored mirror that cannot run a model step.
+   */
+  async unarchiveSession(id: string, sessionId: string): Promise<void> {
+    const client = this.#requireClient(id)
+    try {
+      await client.unarchiveSession(sessionId)
+    } catch (error) {
+      throw this.#remoteFailure(id, error)
+    }
+  }
+
   /** Resolve the remote Web UI behind this host's tunnel. */
   async webUrl(id: string): Promise<{ url: string }> {
     const client = this.#requireClient(id)

@@ -160,6 +160,7 @@ Read routes use `GET`. Write routes use `POST` with a JSON body:
 | `POST` | `/sessions/:id/prompt` | `{ "text": "…", "content"?: [{ "type": "text", "text": "…" } \| { "type": "image", "data": "<base64>", "mediaType": "image/png", "name"?: "…" }], "mode"?: "queue" \| "steer", "provider"?: "…", "model"?: "…", "reasoningEffort"?: "…" }` | `{ "accepted": true }` |
 | `POST` | `/sessions/:id/cancel` | `{}` | `{ "accepted": true }` |
 | `POST` | `/sessions/:id/archive` | `{ "stopActivity"?: true }` (default `true`) | `{ "accepted": true }` |
+| `POST` | `/sessions/:id/unarchive` | `{}` | `{ "accepted": true }` |
 | `POST` | `/approvals/answer` | `{ "id": "…", "outcome": "allowed-once" \| "rejected" \| "cancelled" \| "unavailable" }` | `{ "accepted": true }` |
 | `POST` | `/files/stat`, `/files/list`, `/files/read`, `/files/bytes` | `{ "path": "/abs/path", "offset"?, "limit"?, "length"? }` | file/list result |
 | `POST` | `/files/search` | `{ "path": "/abs/root", "query": "…", "excludedPaths"?, "includeHidden"?, "respectGitignore"? }` | `RemoteFileSearchResult` |
@@ -407,6 +408,11 @@ never logged or stored by the local plugin.
 - The bearer token grants session-writing capability, read access to any file the remote account can
   read, and a login shell on the remote host. Treat it as a secret and keep the agent on loopback.
 - `session.cancel` only cancels the active turn of an existing live session.
+- `session.archive` and `session.unarchive` are a pair, and the local plugin only forwards
+  `session.archive` to a host advertising both. An archived Session runs no model step until it is
+  restored, so archiving remotely without a way back would leave a mirror that looks usable and
+  rejects every prompt. `session.unarchive` only removes an id from the archive set — it grants no
+  new write surface, and it is idempotent for a Session that is not archived.
 
 ## Security notes
 
@@ -415,14 +421,18 @@ never logged or stored by the local plugin.
   disabling it; a direct public port cannot.
 - State files are written atomically with `0600`.
 - The protocol never carries model credentials.
-- The agent's write surface is session/workspace creation, prompts, cancel, archive, model and sandbox
-  selection, approval answers, and terminal input/rename/close. The native UI's file tree, previews,
+- The agent's write surface is session/workspace creation, prompts, cancel, archive, unarchive, model
+  and sandbox selection, approval answers, and terminal input/rename/close. The native UI's file tree, previews,
   file watching, workspace search, and terminals are served by this same HTTP protocol over the
   existing SSH tunnel (`/files/*`, `/files/watch`, `/files/search`, `/terminals/*`); the local plugin
   never opens a per-operation SSH connection. `file.search` joins the capability set for the same
   reason as the others: an agent that predates it must be reinstalled rather than silently answering
   the panel's search from the wrong axis.
-- Adding another mutation verb requires a protocol revision and a re-review of this boundary.
+- Adding another mutation verb requires a declaration in the capability set and a re-review of this
+  boundary. `session.unarchive` was added that way: it is advertised as its own capability rather than
+  folded into `session.archive`, so a client can require the pair before archiving remotely at all,
+  and `PROTOCOL_VERSION` stays at `1` — a capability a client checks is what protects an older agent,
+  while a version bump would instead refuse every call to an agent one release behind.
 
 ## Package surface: contract versus internals
 
@@ -431,7 +441,7 @@ only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
-`index.ts` exports 143 symbols in total. They split into 66 contract symbols and 77 symbols that no
+`index.ts` exports 144 symbols in total. They split into 66 contract symbols and 78 symbols that no
 other package consumes, of which 2 are referenced nowhere at all. Every name below is listed
 explicitly, and `scripts/check/protocol-surface.mjs` recomputes these numbers from the source tree; run it
 whenever you add or remove an export, and a test fails if the two disagree.
@@ -466,11 +476,11 @@ build a URL does not make it part of the contract.
 - Approvals, JSON, and Web UI (5): `ApprovalOutcome`, `RemoteApprovalFrame`,
   `RemoteApprovalRequest`, `JsonValue`, `WebUrlResult`
 
-**Internal (77 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
+**Internal (78 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
 private: they carry no cross-package guarantee, and nothing outside `packages/protocol/src` should
 start importing them without promoting them to the contract above.
 
-*Used inside `packages/protocol/src` (75).*
+*Used inside `packages/protocol/src` (76).*
 
 - Guards (30): `isAcceptedResult`, `isApiFailure`, `isCreateSessionResult`, `isCursor`,
   `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`, `isModelCatalogResult`,
@@ -480,10 +490,10 @@ start importing them without promoting them to the contract above.
   `isRemoteFileWatchFrame`, `isRemoteGitResult`, `isRemoteTerminalFrame`, `isRemoteTerminalInfo`,
   `isRemoteTerminalListResult`, `isRemoteWorkspace`, `isRetryableCode`, `isSessionSnapshot`,
   `isSessionStreamFrame`, `isWebUrlResult`
-- Path builders (15): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
+- Path builders (16): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
   `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionArchivePath`,
-  `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`, `terminalAttachPath`,
-  `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
+  `sessionUnarchivePath`, `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`,
+  `terminalAttachPath`, `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
 - Types, constants, and functions used inside the package (30): `RemoteFailure`,
   `RemoteTerminalListResult`, `SessionSnapshotOptions`, `SetSandboxModeRequest`,
   `DEFAULT_REQUEST_TIMEOUT_MS`, `parseSseStream`, `AgentRoute`, `CursorAcceptance`,

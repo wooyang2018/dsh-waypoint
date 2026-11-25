@@ -328,6 +328,48 @@ running 标记，以及「inbox 里的下一条 prompt 何时放行」。远端 
 里那段 poll），服务端维护 5 秒窗口（`service.ts` 的 `VISIBLE_SESSION_TTL_MS`、`reportVisibleSession`）；
 不可见时请求先入队，等会话被打开再派发。这不是省事，而是避免一次重连把十几个历史审批同时倒到界面上。
 
+### 5.7 归档：一个动作，两个日志
+
+归档一个影子会话必须打到远端真实会话，恢复时也必须原路返回。两个方向是一起安装的，原因很容易被漏掉。
+
+**为什么只做一个方向反而是 bug。** DSH 的 `ArchivedSessionGate`
+（`@deepseek-ai/dsh-api-session-controller` 的 `archived-session-gate.ts`）会拒绝已归档会话的每一次
+`agent/pre-step`，直到它被取消归档。因此若插件把远端归档了却没有能力恢复，就会留下一个
+「打得开、看得到历史、但发什么都不回」的影子——这是最糟的结果，因为用户完全不知道原因。
+所以插件只对**同时**宣告 `session.archive` 与 `session.unarchive` 的 agent 转发归档
+（`src/mirror/service.ts` 的 `canArchiveRemote`）。落后一个版本的 agent 保持修复前的行为：只归档本地。
+
+**拦截点在哪。** 侧栏的归档/取消归档走的是 Host 的
+`workspaceRegistry.archiveSession` / `unarchiveSession`，因此 `installRemoteSessionArchive`
+（`src/remote/archive.ts`）替换的是活服务实例上的这两个方法——这正是 `remote/files.ts` 记录的那一层拦截，
+理由也一样：浏览器侧适配器看不到那次方法解析。两个方向的顺序是**刻意不同**的：
+
+- **归档**：先写本地，再打远端。DSH 自己也是先写归档再停活，且即使远端调用失败，侧栏也必须保持一致。
+- **取消归档**：先打远端，再动本地。远端恢复不了时，本地保持归档并报错——绝不给一个「恢复了但用不了」的会话。
+
+这个次序让两个方向的失败表现**刻意相反**。归档是 **fail-open**：远端失败时本地照样隐藏，同步也不会让它复活；
+取消归档则是 **fail-closed**，理由如上。正因为 fail-open 否则会完全静默，远端归档失败会作为
+`remoteArchiveFailed` 通知入队，由客户端本来就在每秒轮询两次的 `host/session/open/claim` 心跳带回，
+客户端再以 toast 说明后果（远端会话仍在运行、远端界面仍列着它）。通知只存在内存、只投递一次、且有条数上限，
+一波失败不会变成满屏 toast——另外，之后**没有任何重试**，这正是必须告知用户的原因。
+
+**怎么区分插件自己的归档工作。** 插件会为自己的清理工作归档和取消归档本地会话——删除工作区、回收子代理影子、
+测试隐藏、放弃的升格，以及重新添加工作区时那趟取消归档——这些一律不能碰远端。
+`stopActivity` 表达不了这个区别：`#archive` 永远传 `true`，拦截器读这个标志根本分不开两者。
+于是改用标记传递意图：`#archive` 与恢复路径在调用期间把 id 登记进
+`#localOnlyArchives` / `#localOnlyUnarchives`，拦截器同步读
+`isLocalOnlyArchive` / `isLocalOnlyUnarchive`。
+
+**一个值得点名的次序陷阱。** 工作区被删除后可能比删除的归档循环更快地被重新添加。此时删除的归档会落在
+重新添加的取消归档**之后**，让恢复出来的影子又变回已归档、于是永远不再挂载——只有两个方向都存在时才会出现。
+`#retireWorkspace` 把在途工作登记进 `#retirements`（按 host 与 anchor 索引），
+`#restoreWorkspace` 在取消归档前先 await 对应条目。
+
+**为什么已归档的影子不会复活。** 远端目录里仍然列着已归档的会话，所以过去每次启动的对账都会把投影重建出来——
+这就是用户报告的 bug 的全部。现在 `#syncHost` 每轮读一次 `workspaceRegistry.archivedSessionIds`，
+凡影子记录指向的本地会话已归档就跳过（`#archivedMirror`）。什么都不删：记录和日志都留着，
+所以取消归档仍能恢复对话；而本行为出现之前就已归档的旧记录也不需要迁移——它们只是不再被重建。
+
 ## 6. 文件与终端：两个「按 Session 决定出口」的适配器
 
 ### 6.1 文件

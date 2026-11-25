@@ -216,7 +216,14 @@ async function dispatch(
     case 'host/session/open/claim': {
       const body = payload === undefined ? undefined : requireRecord(payload)
       mirrors?.reportVisibleSession(body === undefined ? undefined : optionalStringField(body, 'visibleSessionId'))
-      return mirrors?.takeOpenSession() ?? {}
+      // Notices ride this heartbeat so no extra request is needed to surface a
+      // failed remote archive. They are additive: the claim itself still drives
+      // navigation exactly as before.
+      const notices = mirrors?.takeNotices() ?? []
+      return {
+        ...mirrors?.takeOpenSession() ?? {},
+        ...notices.length === 0 ? {} : { notices },
+      }
     }
     case 'host/session/blank': {
       if (mirrors === undefined) throw new LocalError('agent/unavailable', 'remote mirror service is unavailable')

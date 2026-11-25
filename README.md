@@ -88,7 +88,7 @@ If npmjs.com still resolves an older `latest` tag for a newly published release,
 current version instead:
 
 ```text
-dsh-waypoint@1.1.2
+dsh-waypoint@1.1.3
 ```
 
 Keep this pinned version in sync with each release.

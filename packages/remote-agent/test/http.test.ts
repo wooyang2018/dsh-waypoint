@@ -12,6 +12,7 @@ import {
   sessionCancelPath,
   sessionModelPath,
   sessionPromptPath,
+  sessionUnarchivePath,
   terminalClosePath,
   terminalInputPath,
   terminalRenamePath,
@@ -27,12 +28,17 @@ describe('agent HTTP file and terminal surface', () => {
   const manager = new RemoteTerminalManager()
   const token = 'http-test-token'
   const archiveCalls: Array<{ sessionId: string; stopActivity: boolean }> = []
+  const unarchiveCalls: Array<{ sessionId: string }> = []
   const service = {
     admitsPeer: () => true,
     token,
     terminals: manager,
     async archiveSession(sessionId: string, stopActivity: boolean) {
       archiveCalls.push({ sessionId, stopActivity })
+      return { accepted: true }
+    },
+    async unarchiveSession(sessionId: string) {
+      unarchiveCalls.push({ sessionId })
       return { accepted: true }
     },
   } as unknown as RemoteAgentService
@@ -81,6 +87,22 @@ describe('agent HTTP file and terminal surface', () => {
 
   it('rejects GET on the archive route', async () => {
     const response = await fetch(`${baseUrl}${sessionArchivePath('s1')}`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-dsh-waypoint-protocol': '1',
+      },
+    })
+    assert.equal(response.status, 405)
+  })
+
+  it('unarchives a session through the agent route', async () => {
+    const client = new RemoteAgentClient({ baseUrl, token })
+    await client.unarchiveSession('s1')
+    assert.deepEqual(unarchiveCalls, [{ sessionId: 's1' }])
+  })
+
+  it('rejects GET on the unarchive route', async () => {
+    const response = await fetch(`${baseUrl}${sessionUnarchivePath('s1')}`, {
       headers: {
         authorization: `Bearer ${token}`,
         'x-dsh-waypoint-protocol': '1',

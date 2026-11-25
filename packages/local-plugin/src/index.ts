@@ -13,6 +13,7 @@ import type {} from '@deepseek-ai/dsh-client-connection'
 import { Config, resolveConfig, type Config as LocalConfig } from './config.ts'
 import { registerHostApi } from './host-api/handler.ts'
 import { RemoteMirrorService } from './mirror/service.ts'
+import { installRemoteSessionArchive, checkArchiveContract } from './remote/archive.ts'
 import { installRemoteWorkspaceFiles } from './remote/files.ts'
 import { installRemoteConfine } from './remote/sandbox.ts'
 import { installRemoteSandboxPolicy } from './remote/sandbox-policy.ts'
@@ -153,6 +154,19 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
   ctx.inject(['tools'], child => {
     registerRemoteTools(child, service)
   })
+
+  // Archiving a mirrored Session must reach its remote Session. The interposer
+  // replaces the Host registry's own methods, because the sidebar's archive and
+  // unarchive actions resolve through them and no client adapter can see that.
+  ctx.effect(() => {
+    const registry = ctx.get('workspaceRegistry')
+    if (registry !== undefined && !checkArchiveContract(registry).active) {
+      ctx.logger.warn(
+        'dsh-waypoint: mirrored Session archiving is inactive; local archives will not reach the remote host',
+      )
+    }
+    return installRemoteSessionArchive(ctx, mirrors)
+  }, 'dsh-waypoint: remote session archive')
 
   ctx.logger.info(
     'dsh-waypoint: %d host(s), state in %s',

@@ -16,6 +16,7 @@ import {
   sessionAssistantEventsPath,
   sessionEventsPath,
   sessionPath,
+  sessionUnarchivePath,
   workspaceSessionsPath,
 } from '../src/index.ts'
 
@@ -129,6 +130,7 @@ describe('RemoteAgentClient', () => {
   let server: Server
   let baseUrl: string
   let archivedPath: string | undefined
+  let unarchivedPath: string | undefined
   const token = 'test-token'
 
   before(async () => {
@@ -201,6 +203,16 @@ describe('RemoteAgentClient', () => {
         })
         return
       }
+      if (url.pathname === sessionUnarchivePath('s1')) {
+        unarchivedPath = url.pathname
+        json(res, 200, {
+          ok: true,
+          protocolVersion: PROTOCOL_VERSION,
+          serverTime: new Date().toISOString(),
+          data: { accepted: true },
+        })
+        return
+      }
       if (url.pathname === sessionEventsPath('s1').split('?')[0]) {
         res.writeHead(200, { 'content-type': 'text/event-stream' })
         res.write(': hi\n\n')
@@ -248,6 +260,17 @@ describe('RemoteAgentClient', () => {
     const client = new RemoteAgentClient({ baseUrl, token })
     await client.archiveSession('s1')
     assert.equal(archivedPath, sessionArchivePath('s1'))
+  })
+
+  it('unarchives a remote session through the agent route', async () => {
+    const client = new RemoteAgentClient({ baseUrl, token })
+    await client.unarchiveSession('s1')
+    assert.equal(unarchivedPath, sessionUnarchivePath('s1'))
+  })
+
+  it('routes an unarchive path distinctly from an archive path', () => {
+    assert.deepEqual(matchAgentRoute(sessionUnarchivePath('s1')), { kind: 'session-unarchive', sessionId: 's1' })
+    assert.deepEqual(matchAgentRoute(sessionArchivePath('s1')), { kind: 'session-archive', sessionId: 's1' })
   })
 
   it('surfaces stable auth errors', async () => {

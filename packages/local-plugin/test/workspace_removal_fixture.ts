@@ -6,6 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { RemoteApprovalRequest, RemoteSessionSummary, RemoteWorkspace, SessionSnapshot } from '@dsh-waypoint/protocol'
 import type { ResolvedConfig } from '../src/config.ts'
 import { RemoteMirrorService } from '../src/mirror/service.ts'
+import { installRemoteSessionArchive } from '../src/remote/archive.ts'
 import type { RemoteHostsService } from '../src/service.ts'
 
 export function deferred<T>() {
@@ -23,6 +24,8 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
   const sessions = new Map<string, ReturnType<typeof makeSession>>()
   const agents = new Map<string, { id: string; cancel(): void; send(message: unknown): void }>()
   const effects = { cancellations: 0, prompts: 0, snapshots: 0, archives: 0, unarchives: 0, starts: 0, aborts: 0 }
+  /** Durable archive set, as the real registry keeps it. */
+  const archivedSessionIds: string[] = []
   let flushGate: Promise<void> | undefined
   let flushEntered: (() => void) | undefined
   let rowSeq = 0
@@ -53,8 +56,23 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
       if (existed) ctx.emit('domain/changed', { domain: 'workspace', table: 'workspaces', key: id, operation: 'deleted' })
       return existed
     },
-    async archiveSession() { effects.archives++ },
-    async unarchiveSession() { effects.unarchives++ },
+    /**
+     * The registry-global archive set.
+     *
+     * Real DSH keeps this durably and the mirror reads it on every sync pass to
+     * leave archived mirrors alone, so the fake has to carry it too — otherwise
+     * the restart case cannot distinguish "recreated" from "never recreated".
+     */
+    archivedSessionIds: archivedSessionIds as readonly string[],
+    async archiveSession(id: string) {
+      effects.archives++
+      if (!archivedSessionIds.includes(id)) archivedSessionIds.push(id)
+    },
+    async unarchiveSession(id: string) {
+      effects.unarchives++
+      const at = archivedSessionIds.indexOf(id)
+      if (at >= 0) archivedSessionIds.splice(at, 1)
+    },
   }
   ctx.provide('sessions', {
     get: (id: string) => sessions.get(id),
@@ -100,6 +118,22 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
     return pending
   }
   const answers: Array<{ hostId: string; requestId: string; outcome: string }> = []
+  /** Remote Sessions the plugin archived through the host service. */
+  const remoteArchived: Array<{ hostId: string; sessionId: string }> = []
+  /** Remote Sessions the plugin unarchived through the host service. */
+  const remoteUnarchived: Array<{ hostId: string; sessionId: string }> = []
+  /**
+   * Capabilities the fake agents advertise.
+   *
+   * The archive pair is the interesting one: a host missing either half must
+   * keep the plugin from touching the remote at all, because a remote archived
+   * without a way back cannot run a model step.
+   */
+  const capabilities = new Set<string>(['session.archive', 'session.unarchive'])
+  /** When set, a remote unarchive fails so the fail-closed path is observable. */
+  let failUnarchive: Error | undefined
+  /** When set, a remote archive fails so the fail-open path is observable. */
+  let failArchive: Error | undefined
   async function* follow(signal: AbortSignal, event?: unknown) {
     effects.starts++
     const aborted = deferred<void>()
@@ -134,11 +168,42 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
     async setSandboxMode() {},
     async cancelSession() { effects.cancellations++ },
     async promptSession() { effects.prompts++ },
+    supportsAgent(_hostId: string, capability: string) { return capabilities.has(capability) },
+    async archiveSession(hostId: string, sessionId: string) {
+      if (failArchive !== undefined) throw failArchive
+      remoteArchived.push({ hostId, sessionId })
+    },
+    async unarchiveSession(hostId: string, sessionId: string) {
+      if (failUnarchive !== undefined) throw failUnarchive
+      remoteUnarchived.push({ hostId, sessionId })
+    },
   } as unknown as RemoteHostsService
   const config = { stateDir, mirrorMaxEvents: 2000, mirrorPollMs: 500, mirrorSessions: true } as ResolvedConfig
   let service = new RemoteMirrorService(ctx, hosts, config)
+  /**
+   * Install the real archive interposer over the fake registry.
+   *
+   * The suite drives the same `workspaceRegistry.archiveSession` /
+   * `unarchiveSession` calls DSH's sidebar makes, so installing the shipped
+   * interposer is what makes these cases cover the production path instead of a
+   * test-only shortcut. It is reinstalled after each `restart()`, because a new
+   * mirror service has to answer for the new instance.
+   */
+  let uninstallArchive = installRemoteSessionArchive(ctx, service)
   return {
     ctx, host, hostB, workspace, stateDir, rows, sessions, agents, registry, effects, warnings, snapshots, answers,
+    archivedSessionIds,
+    remoteArchived,
+    remoteUnarchived,
+    /** Advertise exactly these agent capabilities from now on. */
+    setCapabilities(next: readonly string[]) {
+      capabilities.clear()
+      for (const capability of next) capabilities.add(capability)
+    },
+    /** Make the next remote unarchive reject with this error. */
+    setFailUnarchive(error: Error | undefined) { failUnarchive = error },
+    /** Make the next remote archive reject with this error. */
+    setFailArchive(error: Error | undefined) { failArchive = error },
     async requestApproval(hostId: string, request: RemoteApprovalRequest) {
       nextApproval(hostId).resolve(request)
       await new Promise(done => setImmediate(done))
@@ -155,9 +220,15 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
       await service.dispose()
       await beforeStart?.()
       service = new RemoteMirrorService(ctx, hosts, config)
+      uninstallArchive()
+      uninstallArchive = installRemoteSessionArchive(ctx, service)
       await service.start()
     },
     async add(hostId = host.id, remote = workspace) { await ctx.parallel('dsh-waypoint/workspace-added', hostId, remote) },
-    async close() { await service.dispose(); await rm(stateDir, { recursive: true, force: true }) },
+    async close() {
+      uninstallArchive()
+      await service.dispose()
+      await rm(stateDir, { recursive: true, force: true })
+    },
   }
 }

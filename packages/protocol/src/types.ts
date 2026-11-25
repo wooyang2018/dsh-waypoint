@@ -25,6 +25,7 @@ export type AgentCapability =
   | 'session.prompt'
   | 'session.cancel'
   | 'session.archive'
+  | 'session.unarchive'
   | 'approval.follow'
   | 'approval.answer'
   | 'web.url'
