@@ -62,6 +62,8 @@ export const UI_TEXT_KEYS = [
   'error.portForwardFailed',
   'error.workspaceRemoved',
   'error.remoteUnarchiveFailed',
+  'error.mirrorAttachmentUnsupported',
+  'error.mirrorAttachmentTooLarge',
   'error.agentVersionMismatch',
   'error.agentStartTimeout',
   'error.agentInstallFailed',

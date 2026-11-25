@@ -13,7 +13,7 @@ async function mounted(children = false) {
   if (children) test.setSnapshot(child.sessionId, descriptorSnapshot())
   await test.service.start()
   const record = Object.values((await test.state()).sessions).find(record => record.remoteSessionId === parent.sessionId)!
-  return { ...test, agent: test.liveAgents.get(record.localSessionId)! }
+  return { ...test, agent: test.liveAgents.get(record.localSessionId)!, record }
 }
 
 function deferred() {
@@ -29,28 +29,39 @@ describe('mirror Agent integration', () => {
       const choice = { provider: 'fixture', model: 'model', reasoningEffort: 'high' }
       test.agent.model.select(choice)
       choice.model = 'mutated-by-caller'
-      assert.deepEqual(test.agent.model.current(), { provider: 'fixture', model: 'model', reasoningEffort: 'high' })
+      assert.deepEqual(test.service.forwardedSelection(test.record.localSessionId), {
+        provider: 'fixture',
+        model: 'model',
+        reasoningEffort: 'high',
+      })
       test.agent.model.select({ provider: 'fixture', model: 'model', reasoningEffort: 'high' })
       assert.equal(test.selections.length, 1)
       test.agent.model.select({ provider: 'fixture', model: 'model' })
       assert.equal(test.selections.length, 2)
-      assert.equal(test.agent.model.current().reasoningEffort, undefined)
-      const read = test.agent.model.current()
+      assert.equal(test.service.forwardedSelection(test.record.localSessionId)?.reasoningEffort, undefined)
+      // A read is detached: mutating it must not reach the recorded choice.
+      const read = test.service.forwardedSelection(test.record.localSessionId)
+      assert.ok(read !== undefined)
       read.model = 'mutated-read'
-      assert.equal(test.agent.model.current().model, 'model')
+      assert.equal(test.service.forwardedSelection(test.record.localSessionId)?.model, 'model')
+      // The Agent façade itself never advertises a local route for a mirror.
+      assert.equal(test.agent.model.current(), undefined)
     } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
   })
 
   it('persists an explicit choice matching initial options and prefers recorded model state', async () => {
     const test = await mounted()
     try {
-      const initial = test.agent.model.current()
+      const initial = test.service.forwardedSelection(test.record.localSessionId)
+      assert.ok(initial !== undefined)
       test.agent.model.select(initial)
       assert.equal(test.selections.length, 1)
       const recorded = { provider: 'remote-provider', model: 'remote-model' }
       test.ctx.provide('sessionProjections', { stateOf: () => ({ pending: null, lastUsed: recorded }) } as never)
-      assert.deepEqual(test.agent.model.current(), recorded)
-      test.agent.model.current().model = 'mutated-read'
+      assert.deepEqual(test.service.forwardedSelection(test.record.localSessionId), recorded)
+      const read = test.service.forwardedSelection(test.record.localSessionId)
+      assert.ok(read !== undefined)
+      read.model = 'mutated-read'
       assert.equal(recorded.model, 'remote-model')
       test.agent.model.select(initial)
       assert.equal(test.selections.length, 2, 'an older log choice must not hide a different recorded model')

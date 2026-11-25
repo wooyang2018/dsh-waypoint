@@ -266,7 +266,8 @@ composer 全部按普通 Agent 对待它。`inject()` 是空实现——远端�
 
 `#sendPrompt` 是唯一把本地输入送到远端的出口（`service.ts` 的 `#sendPrompt`）：
 
-1. 先按 `promptParts` 拆出文本/图片，图片走本地 attachments 服务读成 base64（`#promptContent`）；
+1. 先按 `promptParts` 拆出文本/图片/文件，两种附件都走本地 attachments 服务读成 base64
+   （`#promptContent`）；
 2. 用远端模型目录检查当前 `provider/model` 是否可路由，不可路由就先剔除（`#selectionUnavailable`）；
 3. `POST /sessions/:id/prompt`，带 `mode`、`selection`、`content`；
 4. 若远端回 `session/model-unavailable`，**去掉 selection 重发一次**，并记住这个选择不可用
@@ -276,6 +277,52 @@ composer 全部按普通 Agent 对待它。`inject()` 是空实现——远端�
 第 5 步是「不出现重复气泡」的关键：远端回放的 `user/message` 会消费 `pendingUsers`，直接复用本地那条
 消息的位置，而不是再追加一条（`appendRemoteEvent`）。图片、模型选择、沙箱模式也各有一条本地事件 →
 远端调用的旁路（`#onLocalSessionEvent`）。
+
+#### 附件：为什么收据不能转发
+
+本地 prompt 带附件时，字节在用户选中的那一刻就已经上传到本机的 `fileUploads`，prompt 正常情况下只需
+引用它换来的**收据**。但收据过不了隧道：它是绑定到接收该上传的那个 `Session` 对象上的授权，远端只会
+用它自己的暂存表去解析，结果必然是 `FILE_NOT_STAGED`。所以 `#promptContent` 改为把字节从本地存储读出来、
+以 `file` 部分内联发出；远端 agent 把字节收进**它自己的**存储、换成本地收据，然后才交给自己的 Agent
+（`RemoteAgentService.promptSession`）。
+
+由此有两条边界。远端没有 `session.file-attachment` 时，在发送前就明确拒绝——老 agent 会静默丢掉这个
+部分，而本地会话早已把这条消息显示为已接受。另外 prompt body 上限 12 MiB，base64 膨胀 4/3，所以内联
+文件上限略低于 9 MiB；这个上限由插件自己检查，报错说的是用户的文件而不是线上字节数。
+
+#### 为什么镜像的 Agent 不报告模型
+
+`RemoteMirrorAgent.model.current()` 返回 `undefined`，这是刻意的，不是遗漏。本地 prompt admission 会拿
+这个方法的返回值去问 `ctx.llm`，目的是在模型不支持图片输入时拒掉带图片的 prompt。对 `direct` 模式的
+主机，这个模型只存在于远端，本地解析必然抛 `LlmError NO_ADAPTER`——而 admission 把无法识别的异常包成
+`session/agent-busy`，这正是「纯文字没问题、带图片就被 agent busy 拒绝」的由来。返回 `undefined` 说的是
+契约本来就容许的实话（「这个 Agent 不表达任何本地路由」），而且每一处消费方都对它做了判空。
+
+这样做不丢任何东西：composer 的选择器读的是 `modelDirectories`（由 `installModelCatalogMerge` 用远端目录
+喂），转发路径直接读 `RemoteMirrorService.selectionFor`，两者都不经过 Agent façade。所以模型菜单和转发
+出去的选择都不受影响；`forwardedSelection` 把同一个答案暴露给测试与诊断用。
+
+#### 反方向：把远端用户发的附件拉回来
+
+另一种情况是用户直接在远端会话里操作。远端 `user/message` 携带的是持久化附件引用，而这些 id 是**只存在于
+远端**的那些字节的摘要，所以光有引用什么都渲染不出来。`remote/attachments.ts` 补上了这一段：
+`#syncEventAttachments` 在**两条**回放路径上都会运行——实时流和 seed——对本地还不存在的引用调用
+`POST /attachments/read`。
+
+它是**先取后投影**的预取，顺序同样是承重的：`HistoricalImageCache` 失败后会删掉条目且永不重试，所以
+一条在消息可见之后才开始的字节请求，会让那张图在这个 Session 的生命周期里一直空着。
+
+两类附件的本地写入方式不同，这是刻意的：
+
+| 类型 | 本地写入 | 原因 |
+|---|---|---|
+| 文件 | `attachments.saveFile` | 逐字保存，id 就是这些字节的 sha256，重存得到**同一个**引用，不需要任何映射表 |
+| 图片 | 按 digest 原样发布到 `objects/<sha256[0:2]>/<sha256>` | id 是远端**已经归一化过**的对象的摘要，走 `saveImage` 会再编码一次、digest 变化，引用随即失效 |
+
+两种写入都在发布前校验 digest，所以截断的传输在到达时就失败，而不是变成一个「每次读取都判定损坏」的对象。
+远端没有 `attachment.read` 时返回 `unsupported`，对象已被清理时返回 `missing`；无论哪种，文件卡片仍能靠
+引用里的 `name`/`bytes` 正常显示，只有图片退化为占位。
+
 
 ### 5.5 往上收：SSE 跟随、seq 映射与缺口
 

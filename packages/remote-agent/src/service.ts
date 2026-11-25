@@ -22,8 +22,7 @@ import {
   PROTOCOL_VERSION,
   RemoteProtocolError,
   type AcceptedResult,
-  type RemoteApprovalRequest,
-  type RemoteAssistantFrame,
+  type RemoteApprovalRequest,  type RemoteAssistantFrame,
   type CreateSessionRequest,
   type CreateSessionResult,
   type CreateWorkspaceRequest,
@@ -42,6 +41,8 @@ import {
   type SessionSnapshot,
   type SessionStreamFrame,
   type WebUrlResult,
+  type AttachmentReadRequest,
+  type AttachmentReadResult,
 } from '@dsh-waypoint/protocol'
 import { isLoopbackAddress } from './auth.ts'
 import {
@@ -79,6 +80,37 @@ const COLD_SCAN_LIMIT = 100_000
 interface PendingApproval {
   readonly request: RemoteApprovalRequest
   resolve(outcome: ApprovalOutcome): void
+}
+
+/**
+ * The slice of the Host's `fileUploads` service a forwarded attachment needs.
+ *
+ * Declared structurally rather than imported: the service is reached through
+ * `ctx.get` and only two members matter here. The `agent` parameter is typed
+ * `never` at the call site because this package does not depend on the Agent
+ * package's nominal type, and Typert already resolved the same dependency from
+ * the Agent scope for every browser upload.
+ */
+interface ForwardedFileUploads {
+  upload(
+    agent: never,
+    request: { readonly data: string; readonly name?: string },
+    signal: AbortSignal,
+  ): Promise<{ readonly receiptId: unknown }>
+}
+
+/**
+ * The slice of the Host's attachment store reverse synchronization reads.
+ *
+ * `readImage` returns the *normalized* bytes, and that matters: an image's
+ * `attachmentId` is the sha256 of exactly those bytes, so the local side must
+ * publish them verbatim. Re-encoding on the way in would change the digest and
+ * the reference would stop resolving. `readFileStream` is verbatim by contract
+ * for the same reason, which is why a file survives the trip unchanged.
+ */
+interface ForwardedAttachmentStore {
+  readImage(ref: never, signal?: AbortSignal): Promise<{ readonly data: Uint8Array }>
+  readFileStream(ref: never, signal?: AbortSignal): AsyncIterable<Uint8Array>
 }
 
 /** Service returned by the plugin and consumed by the HTTP adapter. */
@@ -177,6 +209,12 @@ export class RemoteAgentService {
         'workspace.changes',
         'llm.catalog',
         'terminal',
+        // Both attachment capabilities describe services this Host may not
+        // compose. Advertising one it cannot serve would turn a missing plugin
+        // into a mid-prompt failure instead of a capability the client can read
+        // before sending anything.
+        ...this.#fileUploadsService() === undefined ? [] : ['session.file-attachment' as const],
+        ...this.#attachmentStore() === undefined ? [] : ['attachment.read' as const],
       ],
       workspaceCount: this.ctx.workspaceRegistry.list().length,
       modelBaseUrl: process.env.DEEPSEEK_BASE_URL ?? null,
@@ -387,19 +425,38 @@ export class RemoteAgentService {
     return { accepted: true }
   }
 
-  /** Send a prompt to one remote session. */
+  /**
+   * Send a prompt to one remote session.
+   *
+   * A `file` part arrives as raw bytes, not as a receipt, because a receipt is
+   * authority held by the Host that minted it against the exact `Session` object
+   * it staged the upload for — it cannot survive the tunnel. Each file is
+   * therefore admitted into this host's own attachment store first, which mints
+   * a local receipt; only then does the prompt cite it. Skipping that step would
+   * hand `sessionController.prompt` an id its staging table has never seen, and
+   * admission answers `FILE_NOT_STAGED`.
+   */
   async promptSession(sessionId: string, request: PromptSessionRequest): Promise<AcceptedResult> {
     const text = request.text.trim()
     const content = request.content === undefined || request.content.length === 0
       ? text === '' ? [] : [{ type: 'text' as const, text }]
-      : request.content.map(part => part.type === 'image'
-        ? {
+      : await Promise.all(request.content.map(async part => {
+        if (part.type === 'image') {
+          return {
             type: 'image' as const,
             data: part.data,
             mediaType: part.mediaType,
             ...part.name === undefined ? {} : { name: part.name },
           }
-        : { type: 'text' as const, text: part.text })
+        }
+        if (part.type === 'file') {
+          return {
+            type: 'file' as const,
+            receiptId: await this.#admitForwardedFile(sessionId, part.data, part.name),
+          }
+        }
+        return { type: 'text' as const, text: part.text }
+      }))
     if (content.length === 0) {
       throw new RemoteProtocolError({ code: 'request/invalid', message: 'prompt content must not be empty' })
     }
@@ -420,6 +477,134 @@ export class RemoteAgentService {
       content: content as never,
     }, new AbortController().signal)
     return { accepted: true }
+  }
+
+  /**
+   * Admit bytes forwarded by the local plugin and return this host's receipt.
+   *
+   * Goes through `fileUploads.upload` rather than `attachments.saveFile` so the
+   * upload is staged under the receiving Agent exactly as a browser upload is:
+   * the mirror forwards what a composer sent, and the remote must end up in the
+   * same state it would have reached had the file been picked there. A direct
+   * `saveFile` would store the bytes but leave nothing for prompt admission to
+   * resolve, and the resulting `FILE_NOT_STAGED` reads as a client bug.
+   *
+   * The Agent, not just its Session, is required: staging is keyed by the exact
+   * `Session` object the Agent owns, so a lookup that only proved the Session
+   * exists would mint a receipt under an entry admission never reads.
+   *
+   * @param sessionId - Session the forwarded prompt targets.
+   * @param data - canonical base64 of the exact file bytes.
+   * @param name - optional display name.
+   * @returns the receipt prompt admission resolves.
+   */
+  async #admitForwardedFile(sessionId: string, data: string, name: string | undefined): Promise<string> {
+    this.assertLiveSession(sessionId)
+    const agent = this.ctx.agents.get(sessionId as SessionId)
+    if (agent === undefined) {
+      throw new RemoteProtocolError({
+        code: 'session/not-live',
+        message: `session ${sessionId} has no live Agent to admit an attachment`,
+        details: { sessionId },
+      })
+    }
+    const uploads = this.#fileUploadsService()
+    if (uploads === undefined) {
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'this host cannot stage forwarded file attachments',
+      })
+    }
+    try {
+      const stored = await uploads.upload(
+        agent as never,
+        { data, ...name === undefined ? {} : { name } },
+        new AbortController().signal,
+      )
+      return String(stored.receiptId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new RemoteProtocolError({ code: 'request/invalid', message: `attachment was refused: ${message}` })
+    }
+  }
+
+  /**
+   * The Host's file-upload service, when this profile composes it.
+   *
+   * Reached through `ctx.get` rather than `ctx.fileUploads` for two reasons: a
+   * profile that omits `file-upload` must still run this agent for sessions and
+   * terminals, so it cannot be a static `inject` entry; and Cordis refuses a
+   * direct property read for a service the fiber never declared — it throws
+   * "cannot get property without inject" instead of answering `undefined`.
+   */
+  #fileUploadsService(): ForwardedFileUploads | undefined {
+    return this.ctx.get('fileUploads') as ForwardedFileUploads | undefined
+  }
+
+  /**
+   * The Host's attachment store, when this profile composes it.
+   *
+   * Same reasoning as {@link #fileUploadsService}: prompt images already depend
+   * on it, but the reverse-sync route must be able to say "not supported" rather
+   * than failing a mirrored Session's whole history.
+   */
+  #attachmentStore(): ForwardedAttachmentStore | undefined {
+    return this.ctx.get('attachments') as ForwardedAttachmentStore | undefined
+  }
+
+  /**
+   * Read one durable attachment's bytes for reverse synchronization.
+   *
+   * A mirrored Session replays the remote log, and that log carries attachment
+   * *references* — content-addressed ids whose bytes live only here. Rendering
+   * the local transcript therefore needs this route: a file card draws from the
+   * reference alone, but an image is the bytes, so without them the local
+   * Session shows a permanently unloadable picture.
+   *
+   * Returns the stored bytes exactly as they are on disk. That is load-bearing
+   * for images: an image's id is the sha256 of its normalized object, so the
+   * local side must publish these bytes verbatim — any re-encode changes the
+   * digest and the reference stops resolving.
+   *
+   * @param request - `kind` selecting the store, plus the reference to read.
+   * @returns base64 bytes and the metadata the reference already carries.
+   */
+  async readAttachment(request: AttachmentReadRequest): Promise<AttachmentReadResult> {
+    const store = this.#attachmentStore()
+    if (store === undefined) {
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'this host has no attachment store',
+      })
+    }
+    const name = typeof request.ref.name === 'string' ? request.ref.name : undefined
+    try {
+      if (request.kind === 'image') {
+        const stored = await store.readImage(request.ref as never)
+        const mediaType = typeof request.ref.mediaType === 'string' ? request.ref.mediaType : undefined
+        return {
+          data: Buffer.from(stored.data).toString('base64'),
+          bytes: stored.data.byteLength,
+          ...mediaType === undefined ? {} : { mediaType },
+          ...name === undefined ? {} : { name },
+        }
+      }
+      const chunks: Uint8Array[] = []
+      for await (const chunk of store.readFileStream(request.ref as never)) chunks.push(chunk)
+      const data = Buffer.concat(chunks)
+      return { data: data.toString('base64'), bytes: data.byteLength, ...name === undefined ? {} : { name } }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // A reference whose bytes are gone is an ordinary outcome — the store is
+      // content-addressed and may have been pruned — not an internal fault, so
+      // the client can answer with the card it can still draw.
+      throw new RemoteProtocolError({
+        code: 'attachment/not-found',
+        message: `attachment is not readable on this host: ${message}`,
+        details: { kind: request.kind },
+        httpStatus: 404,
+      })
+    }
   }
 
   /** Pending approval questions, replayed when a follower connects. */

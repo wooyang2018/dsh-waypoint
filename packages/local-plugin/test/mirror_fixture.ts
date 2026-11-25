@@ -117,9 +117,37 @@ export function harness() {
   const liveAgents = new Map<string, FixtureAgent>()
   const selections: unknown[] = []
   const remoteCreates: Array<{ workspaceId?: string; cwd?: string; agentPreset?: string }> = []
-  const prompts: Array<{ sessionId: string; text: string; selection?: { provider: string; model: string } }> = []
+  const prompts: Array<{
+    sessionId: string
+    text: string
+    selection?: { provider: string; model: string }
+    /**
+     * Ordered content the mirror forwarded.
+     *
+     * Captured because an attachment is not observable from `text`: a forwarded
+     * file travels as its own content part, and a prompt admission that dropped
+     * one would still look identical by text alone.
+     */
+    content?: readonly { readonly type: string; readonly [key: string]: unknown }[]
+  }> = []
   /** Prompts the fixture refused because the selection was "unavailable". */
   const rejectedPrompts: Array<{ sessionId: string; text: string }> = []
+  /**
+   * Capabilities the fixture host advertises.
+   *
+   * Starts at the shipped agent's own set so an ordinary test never trips the
+   * negotiation guards by accident; `setCapabilities` narrows it to exercise an
+   * older agent.
+   */
+  let capabilities: string[] = [
+    'health', 'host.info', 'session.list', 'session.snapshot', 'session.follow',
+    'session.prompt', 'session.cancel', 'session.archive', 'file.read',
+    'llm.catalog', 'session.file-attachment', 'attachment.read',
+  ]
+  /** Durable objects the fake remote can serve for reverse synchronization. */
+  const remoteAttachments = new Map<string, Buffer>()
+  /** Requests the mirror made to read a remote attachment. */
+  const attachmentReads: Array<{ kind: string; ref: Record<string, unknown> }> = []
   let rejectSelection: { provider: string; model: string } | undefined
   /** Whether the fixture reports the rejection the way a pre-fix agent did. */
   let legacyRejection = false
@@ -217,6 +245,33 @@ export function harness() {
   ctx.provide('sessions', store as never)
   ctx.provide('workspaceRegistry', registry as never)
   ctx.provide('agents', agents as never)
+  /**
+   * Local attachment store the forward path reads bytes from.
+   *
+   * Keyed by the object a prompt part carries, exactly as the real store is
+   * keyed by its reference: the mirror only passes the reference through, so a
+   * fixture that keyed by anything else would not prove the reference survived.
+   */
+  const localAttachments = new Map<unknown, { data: Uint8Array; mediaType?: string; name?: string }>()
+  ctx.provide('attachments', {
+    async readImage(ref: unknown) {
+      const stored = localAttachments.get(ref)
+      if (stored === undefined) throw new Error('attachment not found')
+      return { data: stored.data, mediaType: stored.mediaType, ref: { mediaType: stored.mediaType, name: stored.name } }
+    },
+    async *readFileStream(ref: unknown) {
+      const stored = localAttachments.get(ref)
+      if (stored === undefined) throw new Error('attachment not found')
+      // Two chunks, so a caller that only reads the first is observable.
+      const half = Math.ceil(stored.data.byteLength / 2)
+      yield stored.data.subarray(0, half)
+      if (stored.data.byteLength > half) yield stored.data.subarray(half)
+    },
+    async saveFile(input: { data: Uint8Array; name?: string }) {
+      const { createHash } = await import('node:crypto')
+      return { attachmentId: `sha256:${createHash('sha256').update(input.data).digest('hex')}` }
+    },
+  } as never)
   ctx.logger.warn = (message: unknown, ...args: unknown[]) => { warnings.push([message, ...args].map(String).join(' ')) }
   // Debug is captured separately: the mirror filters some events by design and
   // logs that at debug, so a test must be able to tell a routine filter from a
@@ -265,6 +320,24 @@ export function harness() {
     async *followSessionEvents() {},
     async *followAssistantFrames() {},
     async setSandboxMode() {},
+    /**
+     * Report one capability set for every host.
+     *
+     * Defaults to the full set the shipped agent advertises, so a test that does
+     * not care about negotiation is not accidentally exercising the
+     * "unsupported" path. `setCapabilities` narrows it.
+     */
+    supportsAgent: (_hostId: string, capability: string) => capabilities.includes(capability),
+    async readAttachment(_hostId: string, request: { kind: string; ref: Record<string, unknown> }) {
+      attachmentReads.push(request)
+      const stored = remoteAttachments.get(String(request.ref.attachmentId))
+      if (stored === undefined) {
+        throw new LocalError('agent/error', 'attachment is gone', {
+          details: { remoteCode: 'attachment/not-found' },
+        })
+      }
+      return { data: stored.toString('base64'), bytes: stored.byteLength }
+    },
     /** Cancel the active turn; the fixture records it so tests can assert it. */
     async cancelSession(_host: string, sessionId: string) { cancelled.push(sessionId) },
     async selectModel(_host: string, _session: string, selection: unknown) { selections.push(selection) },
@@ -300,14 +373,26 @@ export function harness() {
         failures: [],
       }
     },
-    async promptSession(_host: string, sessionId: string, text: string, _mode?: unknown, selection?: { provider: string; model: string }) {
+    async promptSession(
+      _host: string,
+      sessionId: string,
+      text: string,
+      _mode?: unknown,
+      selection?: { provider: string; model: string },
+      content?: readonly { readonly type: string; readonly [key: string]: unknown }[],
+    ) {
       if (failPrompt) throw new Error('remote prompt failed')
       if (selection !== undefined && rejectSelection !== undefined
         && selection.provider === rejectSelection.provider && selection.model === rejectSelection.model) {
         rejectedPrompts.push({ sessionId, text })
         throw selectionRejection(selection, legacyRejection)
       }
-      prompts.push({ sessionId, text, ...selection === undefined ? {} : { selection } })
+      prompts.push({
+        sessionId,
+        text,
+        ...selection === undefined ? {} : { selection },
+        ...content === undefined ? {} : { content },
+      })
       return { accepted: true }
     },
   } as unknown as RemoteHostsService
@@ -326,6 +411,7 @@ export function harness() {
     service,
     newService,
     ctx,
+    hosts,
     liveAgents,
     selections,
     remoteCreates,
@@ -348,6 +434,15 @@ export function harness() {
     /** Report an empty catalog so the prompt path cannot pre-check. */
     disableCatalog() { catalogDisabled = true; catalog = undefined },
     get catalogCalls() { return catalogCalls },
+    /** Narrow what the fake host advertises, to exercise an older agent. */
+    setCapabilities(next: string[]) { capabilities = next },
+    /** Publish bytes the fake remote will serve for one attachment id. */
+    setRemoteAttachment(attachmentId: string, data: Buffer) { remoteAttachments.set(attachmentId, data) },
+    /** Register local attachment bytes under the object a prompt part carries. */
+    setLocalAttachment(ref: unknown, value: { data: Uint8Array; mediaType?: string; name?: string }) {
+      localAttachments.set(ref, value)
+    },
+    attachmentReads,
     rejectedPrompts,
     setFailEnter(value: boolean) { failEnter = value },
     setHostPhase(value: 'connected' | 'disconnected') { host.phase = value },

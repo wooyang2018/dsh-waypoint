@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **An attachment sent from a mirrored Session now reaches the remote Session.** A file was dropped
+  silently: `promptParts` recognised only `text` and `image`, so a file-only prompt returned before
+  anything was sent and a mixed prompt arrived without it. The local transcript had already shown the
+  message as accepted, so the symptom was "my file is in the session but the remote never saw it". A
+  `file` part now travels as its own `content` entry, and a host without `session.file-attachment`
+  refuses before sending instead of losing it.
+- **An image prompt in a mirrored Session was rejected as "agent busy".** Local prompt admission
+  resolves the model through `ctx.llm` whenever the content carries an image, and a `direct`-mode
+  host's model exists only on the remote — so resolution threw `LlmError NO_ADAPTER`, which admission
+  wraps as `session/agent-busy`. Text prompts never reach that check, which is why only attachments
+  failed. `RemoteMirrorAgent.model.current()` now reports no local route, which is the truth: the
+  model runs on the remote Host. The composer's selectors read the remote catalog and the forward path
+  reads `selectionFor`, so neither was relying on it.
+- **A remote user's attachments now appear in the mirrored Session.** A replayed `user/message`
+  carries durable references whose bytes live only on the remote host. Nothing fetched them, so an
+  image rendered blank for the life of the Session, and a file could be seen but not opened. Both are
+  now copied into the local store before the message is projected — a prefetch, because the image
+  loader never retries a miss. Files are re-saved verbatim (same bytes, same content address);
+  images are published byte-for-byte under the id their digest names, because an image's id covers an
+  object that was already normalized remotely and re-encoding it would change the digest.
+
+### Added
+
+- `session.file-attachment` and `attachment.read` capabilities, plus `POST /attachments/read`, so a
+  client can tell before sending whether a host can carry attachments in either direction. An older
+  agent is refused with a Reinstall instruction rather than a silent drop.
+- `RemoteMirrorService.forwardedSelection`, the model a mirror would forward for one local Session.
+  It exists because the Agent façade can no longer answer that question, and it is what the
+  model-selection tests now assert on.
+
 ## 1.1.3
 
 ### Fixed
@@ -32,6 +66,7 @@
   remote Session could not be archived and is still running. Unarchiving stays fail-closed by contrast;
   a remote that cannot be restored keeps its local archive rather than handing back a conversation that
   silently rejects every prompt.
+
 
 ## 1.1.2
 

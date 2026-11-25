@@ -611,10 +611,14 @@ describe('the model a remote session actually used', () => {
       const agent = test.liveAgents.get(record.localSessionId)
       assert.ok(agent !== undefined)
       assert.deepEqual(
-        agent.model.current(),
+        test.service.forwardedSelection(record.localSessionId),
         { provider: 'remote-provider', model: 'remote-model', reasoningEffort: 'high' },
-        'the mirror advertises the model the remote ran',
+        'the mirror forwards the model the remote ran',
       )
+      // The Agent façade reports no local route: deciding whether a model can
+      // run is the remote Host's job, and a local answer for a `direct` host
+      // would name a provider this process cannot resolve.
+      assert.equal(agent.model.current(), undefined, 'a mirror expresses no local model route')
     } finally {
       await test.service.dispose()
     }
