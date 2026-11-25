@@ -28,6 +28,8 @@ export type AgentCapability =
   | 'session.unarchive'
   | 'approval.follow'
   | 'approval.answer'
+  | 'question.follow'
+  | 'question.answer'
   | 'web.url'
   | 'file.stat'
   | 'file.list'
@@ -102,6 +104,75 @@ export interface RemoteApprovalRequest {
 export type RemoteApprovalFrame =
   | { readonly type: 'ready' }
   | { readonly type: 'request'; readonly request: RemoteApprovalRequest }
+
+/** One selectable answer offered to the user. */
+export interface RemoteQuestionOption {
+  readonly label: string
+  readonly description?: string
+}
+
+/**
+ * One question in a request.
+ *
+ * `intent` travels unchanged. It names a presentation the asking host declared
+ * (`plan-review`, `approval`), and a local renderer that does not know the tag
+ * falls back to the generic option list — which is DSH's own rule for these
+ * tags, so the bridge never has to interpret or validate one.
+ */
+export interface RemoteQuestionItem {
+  readonly id: string
+  readonly question: string
+  readonly detail?: string
+  readonly header?: string
+  readonly options?: readonly RemoteQuestionOption[]
+  readonly multiSelect?: boolean
+  readonly intent?: Readonly<Record<string, JsonValue>>
+}
+
+/**
+ * One `ask_user_question` call waiting for a human.
+ *
+ * `id` is minted by the remote agent and stable for the life of the wait: a
+ * reconnecting stream replays the same id, which is what lets the local side
+ * dispatch one card per question rather than one per replay.
+ *
+ * `callId` is the remote tool call, forwarded so the local card can be keyed by
+ * it. There is deliberately no `wait` field: the `timed` variant would have the
+ * local client attach to a foreground wait stream that belongs to *this* Host's
+ * `userQuestions` service, which has never heard of a remote call. See
+ * `docs/remote-workspace-mechanism.md` — the countdown stays on the remote.
+ */
+export interface RemoteQuestionRequest {
+  readonly id: string
+  readonly sessionId: string
+  readonly callId?: string
+  readonly questions: readonly RemoteQuestionItem[]
+}
+
+/** Question stream frame: ready, then one request per pending question. */
+export type RemoteQuestionFrame =
+  | { readonly type: 'ready' }
+  | { readonly type: 'request'; readonly request: RemoteQuestionRequest }
+
+/** One answered question, as the asking host will hand it to the model. */
+export interface RemoteQuestionAnswerItem {
+  readonly id: string
+  readonly selected: readonly string[]
+  readonly custom?: string
+}
+
+/**
+ * What the local side decided about one remote question.
+ *
+ * `delegated` is not a failure: it reports that no local mirror could take the
+ * question (the workspace is gone, or no Session was mounted), so the remote
+ * must fall through to its own browser UI. It exists because a bridge that
+ * claims a question and then has nobody to answer it hangs the remote turn.
+ */
+export type RemoteQuestionOutcome =
+  | { readonly kind: 'answer'; readonly answers: readonly RemoteQuestionAnswerItem[] }
+  | { readonly kind: 'delegated' }
+  | { readonly kind: 'cancelled' }
 
 /** One workspace projected from `ctx.workspaceRegistry`. */
 export interface RemoteWorkspace {

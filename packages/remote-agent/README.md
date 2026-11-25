@@ -36,8 +36,8 @@ reports as `AGENT_VERSION` and in the `x-dsh-waypoint-agent-version` response he
 
 Read and write routes are documented in [`docs/protocol.md`](../../docs/protocol.md):
 
-- `GET /health`, `/host`, `/workspaces`, `/sessions`, `/sessions/:id`, `/sessions/:id/events`, `/sessions/:id/assistant-events`, `/web-url`, `/llm/catalog`, `/approvals/events`
-- `POST /workspaces`, `/sessions`, `/sessions/:id/model`, `/sessions/:id/sandbox`, `/sessions/:id/prompt`, `/sessions/:id/cancel`, `/sessions/:id/archive`, `/approvals/answer`
+- `GET /health`, `/host`, `/workspaces`, `/sessions`, `/sessions/:id`, `/sessions/:id/events`, `/sessions/:id/assistant-events`, `/web-url`, `/llm/catalog`, `/approvals/events`, `/questions/events`
+- `POST /workspaces`, `/sessions`, `/sessions/:id/model`, `/sessions/:id/sandbox`, `/sessions/:id/prompt`, `/sessions/:id/cancel`, `/sessions/:id/archive`, `/sessions/:id/unarchive`, `/approvals/answer`, `/questions/answer`
 - `POST /files/stat`, `/files/list`, `/files/read`, `/files/bytes`
 - `GET /files/watch`, `/directories`, `/terminals`, `/terminals/:id/attach`
 - `POST /terminals`, `/terminals/:id/input`, `/terminals/:id/rename`, `/terminals/:id/close`

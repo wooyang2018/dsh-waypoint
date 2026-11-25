@@ -65,6 +65,8 @@ Everything below works against a real SSH host, with no client fork:
 - Remote dev servers in the right-sidebar browser, through loopback port forwards (see below)
 - Agent tools for host/workspace/session operations
 - Approval prompts bridged into the local UI
+- `ask_user_question` cards bridged into the local UI too, so a remote agent that needs a decision
+  does not stall waiting for an answer that only ever appeared in the remote Web UI
 
 What is **not** supported — Windows remotes, relay/NAT traversal — is listed under
 [Known limits](#known-limits), together with the workaround when there is one.
@@ -88,7 +90,7 @@ If npmjs.com still resolves an older `latest` tag for a newly published release,
 current version instead:
 
 ```text
-dsh-waypoint@1.1.3
+dsh-waypoint@1.1.4
 ```
 
 Keep this pinned version in sync with each release.

@@ -15,6 +15,20 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { ApprovalRequestEvent } from '@deepseek-ai/dsh-user-approval/types'
+import type {
+  AskUserQuestionAnswer,
+  AskUserQuestionAnswerItem,
+  AskUserQuestionRequest,
+} from '@deepseek-ai/dsh-user-questions'
+// The `Events` augmentation for `user-questions/request` lives in this subpath,
+// not in the package entry: the entry only `import type`s it, so a package-level
+// import leaves `keyof Events` without the name and `ctx.on` rejects it. The
+// approval seam reads the same way through `dsh-user-approval/types`.
+//
+// Both imports are type-only on purpose. The seam package is a peer the host
+// profile supplies, so a value import here would crash on a host that has the
+// tool while this plugin loads, instead of the capability check doing its job.
+import type {} from '@deepseek-ai/dsh-user-questions/types'
 import type { Session, SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import type { Workspace, WorkspaceId } from '@deepseek-ai/dsh-workspace'
@@ -35,6 +49,10 @@ import {
   type RemoteModelFailure,
   type RemoteModelGroup,
   type RemoteModelReasoning,
+  type RemoteQuestionAnswerItem,
+  type RemoteQuestionItem,
+  type RemoteQuestionOutcome,
+  type RemoteQuestionRequest,
   type SelectModelRequest,
   type ListWorkspacesResult,
   type RemoteSessionSummary,
@@ -81,6 +99,19 @@ interface PendingApproval {
   resolve(outcome: ApprovalOutcome): void
 }
 
+/**
+ * One `ask_user_question` wait this agent is bridging.
+ *
+ * `resolve` is called with the local side's decision. `settled` guards the
+ * paths that would otherwise double-settle: a local answer racing the timeout,
+ * or a turn cancellation racing an in-flight answer.
+ */
+interface PendingQuestion {
+  readonly request: RemoteQuestionRequest
+  resolve(outcome: RemoteQuestionOutcome): void
+  readonly settled: () => boolean
+}
+
 /** Service returned by the plugin and consumed by the HTTP adapter. */
 export class RemoteAgentService {
   readonly ctx: Context
@@ -93,6 +124,24 @@ export class RemoteAgentService {
   #state: AgentState
   readonly #approvalEvents = new EventEmitter()
   readonly #pendingApprovals = new Map<string, PendingApproval>()
+  /**
+   * Questions waiting for the local bridge, replayed on reconnect.
+   *
+   * Keyed by the wire id, exactly like `#pendingApprovals`: the local side
+   * de-duplicates by that id, so a reconnect must replay the *same* id rather
+   * than mint a new one.
+   */
+  readonly #pendingQuestions = new Map<string, PendingQuestion>()
+  readonly #questionEvents = new EventEmitter()
+  /**
+   * Abort controllers of the question streams currently attached.
+   *
+   * The count, not the identity, is what matters: with no stream attached the
+   * local plugin is not listening at all, and claiming the question would leave
+   * the remote turn waiting for an answer nobody can give. See
+   * {@link RemoteAgentService.hasQuestionSubscriber}.
+   */
+  readonly #questionStreams = new Set<AbortController>()
 
   private constructor(ctx: Context, config: ResolvedConfig, state: AgentState, token: string, dshVersion: string) {
     this.ctx = ctx
@@ -113,6 +162,7 @@ export class RemoteAgentService {
     })
     const service = new RemoteAgentService(ctx, resolved, opened.state, opened.token, dshVersion)
     service.#bindApprovals()
+    service.#bindQuestions()
     await service.#bindListener()
     ctx.logger.info(
       'dsh-waypoint-agent: listening on %s (state: %s)',
@@ -165,6 +215,8 @@ export class RemoteAgentService {
         'session.unarchive',
         'approval.follow',
         'approval.answer',
+        'question.follow',
+        'question.answer',
         'web.url',
         'file.stat',
         'file.list',
@@ -493,12 +545,142 @@ export class RemoteAgentService {
     })
   }
 
+  /** Pending questions, replayed when a follower connects. */
+  questionRequests(): RemoteQuestionRequest[] {
+    return [...this.#pendingQuestions.values()].map(entry => entry.request)
+  }
+
+  /** Subscribe to new questions. */
+  onQuestionRequest(listener: (request: RemoteQuestionRequest) => void): () => void {
+    this.#questionEvents.on('request', listener)
+    return () => { this.#questionEvents.off('request', listener) }
+  }
+
+  /**
+   * Register one attached question stream.
+   *
+   * Registering is what makes {@link hasQuestionSubscriber} true, which in turn
+   * decides whether this agent claims a question at all. The disposer is
+   * idempotent so a stream whose socket closed twice cannot double-decrement.
+   * @returns a disposer that removes this stream from the count.
+   */
+  attachQuestionStream(): () => void {
+    const controller = new AbortController()
+    this.#questionStreams.add(controller)
+    return () => { this.#questionStreams.delete(controller) }
+  }
+
+  /** Whether any local bridge is attached and able to answer a question. */
+  hasQuestionSubscriber(): boolean {
+    return this.#questionStreams.size > 0
+  }
+
+  /**
+   * Answer, delegate or cancel one pending question.
+   *
+   * `delegated` is accepted rather than rejected: it is the local side saying it
+   * has no mirror for this Session, which is a normal state, not a protocol
+   * error.
+   */
+  answerQuestion(id: string, outcome: RemoteQuestionOutcome): AcceptedResult {
+    const pending = this.#pendingQuestions.get(id)
+    if (pending === undefined || pending.settled()) {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: `question ${id} is not pending` })
+    }
+    pending.resolve(outcome)
+    return { accepted: true }
+  }
+
+  #bindQuestions(): void {
+    // Same reasoning as `#bindApprovals`: `user-questions/request` is a
+    // waterfall, and `dsh-api-remotes` also listens to forward it to a browser
+    // carrier. Without `prepend` that carrier claims the question first and the
+    // local mirror never sees it. Prepending makes this bridge outermost while
+    // leaving `api-remotes` enabled for the remote Web UI.
+    this.ctx.effect(
+      () => this.ctx.on(
+        'user-questions/request',
+        async (request: AskUserQuestionRequest, next: () => Promise<AskUserQuestionAnswer>) =>
+          this.#askQuestion(request, next),
+        { prepend: true },
+      ),
+      'dsh-waypoint-agent: user-question bridge',
+    )
+  }
+
+  /**
+   * Bridge one question to the local mirror, or hand it back to the remote UI.
+   *
+   * Three decisions, in order:
+   *
+   * 1. **No subscriber** → `next()`. Claiming a question with nobody listening
+   *    would park the remote turn until the timeout for no benefit.
+   * 2. **Local side delegates** → `next()`. The mirror is gone or unmounted, so
+   *    the remote browser is the only place a human can answer.
+   * 3. **Local side answers** → resolve, after checking the batch names every
+   *    question exactly once.
+   *
+   * A timeout never fabricates an answer. Returning an empty batch would tell
+   * the model the user skipped the question, which is a different fact; the
+   * rejection instead surfaces as a tool error the model can read and react to.
+   */
+  async #askQuestion(
+    request: AskUserQuestionRequest,
+    next: () => Promise<AskUserQuestionAnswer>,
+  ): Promise<AskUserQuestionAnswer> {
+    if (!this.hasQuestionSubscriber()) return await next()
+    const id = randomUUID()
+    const projected: RemoteQuestionRequest = {
+      id,
+      sessionId: String(request.agent?.id ?? ''),
+      ...request.wait?.callId === undefined ? {} : { callId: String(request.wait.callId) },
+      questions: request.questions.map(toRemoteQuestionItem),
+    }
+    const outcome = await new Promise<RemoteQuestionOutcome>(resolve => {
+      let settled = false
+      const finish = (value: RemoteQuestionOutcome): void => {
+        if (settled) return
+        settled = true
+        if (timer !== undefined) clearTimeout(timer)
+        request.signal?.removeEventListener('abort', onAbort)
+        this.#pendingQuestions.delete(id)
+        resolve(value)
+      }
+      const onAbort = (): void => { finish({ kind: 'cancelled' }) }
+      // `0` means "wait for the person", which is the blocking tool's own
+      // semantics; cancellation still arrives through the tool signal above.
+      const timeout = this.config.questionTimeoutMs
+      const timer = timeout > 0
+        ? setTimeout(() => { finish({ kind: 'cancelled' }) }, timeout)
+        : undefined
+      // `unref` keeps a pending question from holding the process open during
+      // shutdown; the wait is bounded by the turn anyway.
+      timer?.unref?.()
+      if (request.signal?.aborted === true) {
+        finish({ kind: 'cancelled' })
+        return
+      }
+      request.signal?.addEventListener('abort', onAbort, { once: true })
+      this.#pendingQuestions.set(id, {
+        request: projected,
+        resolve: finish,
+        settled: () => settled,
+      })
+      this.#questionEvents.emit('request', projected)
+    })
+    if (outcome.kind === 'delegated') return await next()
+    if (outcome.kind === 'cancelled') {
+      throw questionError('the user did not answer the question', 'ASK_CANCELLED')
+    }
+    assertCompleteBatch(projected.questions, outcome.answers)
+    return { answers: outcome.answers.map(toAnswerItem) }
+  }
+
   /** Cancel the active turn of one remote session. */
   cancelSession(sessionId: string): AcceptedResult {
     this.ctx.sessionController.cancel({ sessionId: sessionId as SessionId })
     return { accepted: true }
   }
-
   /** Read the newest page of one session's event log. */
   async snapshotSession(hostId: string, sessionId: string, limit?: number): Promise<SessionSnapshot> {
     const bounded = Math.min(
@@ -897,6 +1079,94 @@ function toHeaderLike(header: SessionHeader): SessionHeaderLike {
   }
 }
 
+/**
+ * Project one DSH question onto its wire shape.
+ *
+ * `intent` is copied verbatim. It names a presentation the *asking* host chose,
+ * and the local renderer decides by tag whether it recognises one; interpreting
+ * it here would make the bridge reject a tag added by a newer DSH.
+ */
+function toRemoteQuestionItem(item: AskUserQuestionRequest['questions'][number]): RemoteQuestionItem {
+  return {
+    id: item.id,
+    question: item.question,
+    ...item.detail === undefined ? {} : { detail: item.detail },
+    ...item.header === undefined ? {} : { header: item.header },
+    ...item.options === undefined ? {} : {
+      options: item.options.map(option => ({
+        label: option.label,
+        ...option.description === undefined ? {} : { description: option.description },
+      })),
+    },
+    ...item.multiSelect === undefined ? {} : { multiSelect: item.multiSelect },
+    ...item.intent === undefined ? {} : { intent: item.intent as unknown as RemoteQuestionItem['intent'] },
+  }
+}
+
+/** Project one wire answer back onto the DSH answer item. */
+function toAnswerItem(answer: RemoteQuestionAnswerItem): AskUserQuestionAnswerItem {
+  return {
+    id: answer.id,
+    selected: [...answer.selected],
+    ...answer.custom === undefined ? {} : { custom: answer.custom },
+  }
+}
+
+/**
+ * Reject an answer batch that does not name each question exactly once.
+ *
+ * The owner of the asked questions is the only side that can check this: the
+ * gateway validated the shape from the type, not the batch's correspondence to
+ * this call. Delivering a partial batch would have the model treat an unanswered
+ * question as answered-by-omission.
+ */
+/**
+ * Build a failure the user-questions seam recognises without importing it.
+ *
+ * `UserQuestionError` is a plain `HarnessError` subclass whose meaning is its
+ * `name` and `code`: `ask()` restores an error that carries both, which is how a
+ * bridge rejection reaches the model as a typed tool failure rather than an
+ * anonymous crash. Constructing the shape directly keeps this package free of a
+ * *value* dependency on a peer the host profile owns — a value import would fail
+ * at load time on a host that has the tool installed under a different path,
+ * which is exactly the case the `question.follow` capability check exists for.
+ */
+function questionError(message: string, code: string): Error {
+  const error = new Error(message)
+  error.name = 'UserQuestionError'
+  return Object.assign(error, { code })
+}
+
+/**
+ * Reject an answer batch that does not name each question exactly once.
+ *
+ * The owner of the asked questions is the only side that can check this: the
+ * gateway validated the shape from the type, not the batch's correspondence to
+ * this call. Delivering a partial batch would have the model treat an unanswered
+ * question as answered-by-omission.
+ */
+function assertCompleteBatch(
+  questions: readonly RemoteQuestionItem[],
+  answers: readonly RemoteQuestionAnswerItem[],
+): void {
+  const answered = new Set(answers.map(answer => answer.id))
+  if (answered.size !== answers.length
+    || questions.length !== answers.length
+    || !questions.every(question => answered.has(question.id))) {
+    throw questionError(
+      `the answer batch must name each of its ${String(questions.length)} questions exactly once`,
+      'BAD_ANSWER',
+    )
+  }
+}
+
 /** Re-exported for tests that exercise the cold path without a real host. */
 export { COLD_SCAN_LIMIT }
 export { takeTail } from './projection.ts'
+/**
+ * Exported for tests that pin the two rules a bridged answer must satisfy.
+ *
+ * Reaching them through a live `RemoteAgentService` would require booting
+ * Cordis, a workspace registry, and a session store for what is a pure check.
+ */
+export { assertCompleteBatch, toRemoteQuestionItem }

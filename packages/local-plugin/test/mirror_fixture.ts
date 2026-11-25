@@ -262,12 +262,33 @@ export function harness() {
       }
     },
     async *followApprovals() {},
+    /**
+     * The question stream stays open like the real one, so a sync pass that
+     * starts it does not spin: an immediately-ending generator would be pulled
+     * again on every poll.
+     */
+    async *followQuestions(_host: string, signal: AbortSignal) {
+      const aborted = new Promise<void>(resolve => { signal.addEventListener('abort', () => resolve(), { once: true }) })
+      await aborted
+    },
+    async answerQuestion() { return { accepted: true } },
     async *followSessionEvents() {},
     async *followAssistantFrames() {},
     async setSandboxMode() {},
     /** Cancel the active turn; the fixture records it so tests can assert it. */
     async cancelSession(_host: string, sessionId: string) { cancelled.push(sessionId) },
     async selectModel(_host: string, _session: string, selection: unknown) { selections.push(selection) },
+    /**
+     * Advertise the question bridge so its stream is actually exercised.
+     *
+     * The mirror starts an optional stream only behind this check, so a fixture
+     * that answered `false` would silently skip the code these tests exist to
+     * guard. Capabilities the fixture does not care about stay off, which is
+     * also what an older agent reports.
+     */
+    supportsAgent(_host: string, capability: string) {
+      return capability === 'question.follow' || capability === 'question.answer'
+    },
     async createSession(_host: string, request: { workspaceId?: string; cwd?: string; agentPreset?: string }) {
       remoteCreates.push(request)
       blankRemoteSeq += 1

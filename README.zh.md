@@ -60,6 +60,8 @@
 - 右侧栏浏览器预览远端 dev server，经 loopback 端口转发（见下文）
 - 主机/工作区/Session 的 Agent 工具
 - 审批提示接入本地 UI
+- `ask_user_question` 提问卡片同样接入本地 UI：远端 agent 需要人做决定时，不会再因为「答案只出现在远端
+  Web UI」而一直卡住
 
 **不支持**的部分——Windows 远端、relay/NAT 穿透——列在[已知限制](#已知限制)里，并附有可用的替代做法。
 
@@ -80,7 +82,7 @@ DSH 会从 npm 安装 bundle。这个包已经包含远端 agent 资源，不需
 如果 npmjs.com 对刚发布版本的 `latest` 解析仍旧滞后，可以改为安装当前的精确版本：
 
 ```text
-dsh-waypoint@1.1.3
+dsh-waypoint@1.1.4
 ```
 
 每次发新版本时同步更新这个版本号。

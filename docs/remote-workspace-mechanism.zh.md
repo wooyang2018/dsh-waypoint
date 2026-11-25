@@ -328,7 +328,38 @@ running 标记，以及「inbox 里的下一条 prompt 何时放行」。远端 
 里那段 poll），服务端维护 5 秒窗口（`service.ts` 的 `VISIBLE_SESSION_TTL_MS`、`reportVisibleSession`）；
 不可见时请求先入队，等会话被打开再派发。这不是省事，而是避免一次重连把十几个历史审批同时倒到界面上。
 
-### 5.7 归档：一个动作，两个日志
+### 5.7 提问：同一条桥，但多一个判断
+
+`ask_user_question` 需要和审批一样的处理，做法也照抄：远端 agent 用 `{ prepend: true }` 挂到 DSH 的
+`user-questions/request` waterfall 上（`#bindQuestions`），把待答集合通过 `GET /questions/events` 重放给本地；
+本地再用 `scopeTarget(runtime.agent, runtime.agent)` 重建一次 waterfall，最后把结果 POST 到
+`/questions/answer`（`#ensureQuestionStream` / `#dispatchQuestion`，`streamQuestions`）。为什么是「重建」而不是
+「转发」，理由和 5.6 完全一致：`dsh-api-remotes` 确实负责把请求转给浏览器，但只对携带其 scoped Agent 的请求生效，
+而那个 Agent 是本地的 façade，只有本地这一侧能提供。
+
+有两条规则没有审批的先例。
+
+**流的存在本身就是「认领」。** 认领之前，agent 先检查有没有提问流挂着（`hasQuestionSubscriber`）。没有就调
+`next()`，远端 Web UI 照常回答。审批可以「先认领、再回 `unavailable`」——那读作拒绝；但提问的结果会变成**模型会据以行动的
+tool result**，所以「当时没人在听」绝不能变成「用户拒绝了」。
+
+**「让回」是第三种结局。** `delegated` 表示本地没有任何镜像能显示这个问题（工作区已删除，或 Session 没挂载），
+远端应当回落到自己的界面。本地正是在这种情况下发 `delegated` 而不是 `cancelled`，远端收到后直接 `next()`。
+
+同一条结构还决定三个小判断：
+
+- **wire 上不带 `wait`。** 只传 call id。带 `timed: true` 会让本地卡片去挂*本机* `userQuestions` 服务上的前台等待流，
+  而它从没听说过远端 call，所以倒计时留在远端，卡片按阻塞式渲染。
+- **超时绝不编造答案。** `questionTimeoutMs`（默认 30 分钟，`0` 表示不限）以 `ASK_CANCELLED` 拒绝；回一个空批次
+  等于告诉模型「用户跳过了这个问题」，那是另一个事实。它和审批的 10 分钟分开配置，因为没答的审批已经闭合，
+  而没答的提问还卡着一个正在等它的模型。
+- **不完整的批次会被拒绝。** `assertCompleteBatch` 要求每个问题恰好出现一次——只有「出题的那一方」能校验这件事；
+  gateway 校验的是形状，不是与本 call 的对应关系。
+
+`intent` 在两个方向都原样透传。它声明的是**出题方**选择的呈现形态，而 DSH 自己的规则是「UI 不认识的 tag 回落到
+通用选项列表」，所以丢掉不认识的 tag 会让版本差异悄悄改变卡片形态。
+
+### 5.8 归档：一个动作，两个日志
 
 归档一个影子会话必须打到远端真实会话，恢复时也必须原路返回。两个方向是一起安装的，原因很容易被漏掉。
 

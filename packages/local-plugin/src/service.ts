@@ -19,6 +19,8 @@ import {
   type AcceptedResult,
   type ApprovalOutcome,
   type RemoteApprovalFrame,
+  type RemoteQuestionFrame,
+  type RemoteQuestionOutcome,
   type RemoteAssistantFrame,
   type CreateSessionRequest,
   type CreateSessionResult,
@@ -916,6 +918,26 @@ export class RemoteHostsService {
     const client = this.#requireClient(id)
     try {
       return await client.answerApproval(approvalId, outcome)
+    } catch (error) {
+      throw this.#remoteFailure(id, error)
+    }
+  }
+
+  /** Follow remote `ask_user_question` requests for one host. */
+  async *followQuestions(id: string, signal: AbortSignal): AsyncGenerator<RemoteQuestionFrame> {
+    const client = this.#requireClient(id)
+    try {
+      yield* client.followQuestions(signal)
+    } catch (error) {
+      throw this.#remoteFailure(id, error)
+    }
+  }
+
+  /** Answer, delegate or cancel one pending remote question. */
+  async answerQuestion(id: string, questionId: string, outcome: RemoteQuestionOutcome): Promise<AcceptedResult> {
+    const client = this.#requireClient(id)
+    try {
+      return await client.answerQuestion(questionId, outcome)
     } catch (error) {
       throw this.#remoteFailure(id, error)
     }

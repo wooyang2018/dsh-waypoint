@@ -20,6 +20,8 @@ import type {
   ModelCatalogResult,
   RemoteApprovalFrame,
   RemoteApprovalRequest,
+  RemoteQuestionFrame,
+  RemoteQuestionRequest,
   RemoteSessionEvent,
   RemoteSessionSummary,
   RemoteWorkspace,
@@ -97,6 +99,47 @@ export function isRemoteApprovalFrame(value: unknown): value is RemoteApprovalFr
   if (!isRecord(value)) return false
   if (value.type === 'ready') return true
   return value.type === 'request' && isApprovalRequest(value.request)
+}
+
+function isQuestionOption(value: unknown): boolean {
+  return isRecord(value) && isString(value.label)
+    && (value.description === undefined || isString(value.description))
+}
+
+/**
+ * Guard for one question.
+ *
+ * `intent` is checked only for being a record: a Host may add presentation tags
+ * this client has never heard of, and DSH's rule is that an unknown tag renders
+ * as the generic option list. Rejecting an unknown one would break the bridge
+ * against a newer remote for no benefit.
+ */
+function isQuestionItem(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  if (!isString(value.id) || !isString(value.question)) return false
+  if (value.detail !== undefined && !isString(value.detail)) return false
+  if (value.header !== undefined && !isString(value.header)) return false
+  if (value.multiSelect !== undefined && typeof value.multiSelect !== 'boolean') return false
+  if (value.options !== undefined && (!Array.isArray(value.options) || !value.options.every(isQuestionOption))) return false
+  if (value.intent !== undefined && !isRecord(value.intent)) return false
+  return true
+}
+
+function isQuestionRequest(value: unknown): value is RemoteQuestionRequest {
+  if (!isRecord(value)) return false
+  return isString(value.id)
+    && isString(value.sessionId)
+    && (value.callId === undefined || isString(value.callId))
+    && Array.isArray(value.questions)
+    && value.questions.length > 0
+    && value.questions.every(isQuestionItem)
+}
+
+/** Guard for one question stream frame. */
+export function isRemoteQuestionFrame(value: unknown): value is RemoteQuestionFrame {
+  if (!isRecord(value)) return false
+  if (value.type === 'ready') return true
+  return value.type === 'request' && isQuestionRequest(value.request)
 }
 
 export function isRemoteWorkspace(value: unknown): value is RemoteWorkspace {

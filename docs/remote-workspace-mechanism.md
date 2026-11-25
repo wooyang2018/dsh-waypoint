@@ -369,7 +369,48 @@ uses the client's 500 ms `host/session/open/claim` request as a visibility heart
 request is queued and dispatched once it is opened. This is not laziness — it avoids dumping a dozen
 historical approvals onto the screen after one reconnect.
 
-### 5.7 Archive: one decision, two logs
+### 5.7 Questions: the same bridge, one different decision
+
+`ask_user_question` needs the same treatment as an approval and gets it the same way: the remote
+agent prepends a listener to DSH's `user-questions/request` waterfall (`#bindQuestions`), replays the
+pending set over `GET /questions/events`, and the local side rebuilds the waterfall through
+`scopeTarget(runtime.agent, runtime.agent)` before posting the outcome to `POST /questions/answer`
+(`#ensureQuestionStream` / `#dispatchQuestion` in `service.ts`, `streamQuestions` in
+`packages/remote-agent/src/http.ts`). Why the rebuild rather than a forward is 5.6's reason twice
+over: `dsh-api-remotes` owns the forwarding to a browser, but only for a request carrying its scoped
+Agent, and that Agent is the local façade, which only this side can supply.
+
+Two rules have no approval analogue.
+
+**The stream's existence is the claim.** Before claiming, the agent checks whether any question
+stream is attached (`hasQuestionSubscriber`). Without one it calls `next()` and the remote Web UI
+answers as it always did. An approval can afford to claim and resolve `unavailable` — that reads as a
+refusal — but a question resolves into a **tool result the model acts on**, so "nobody was listening"
+must never become "the user declined".
+
+**Delegation is a third outcome.** `delegated` says no local mirror can show this question (the
+workspace was removed, or no Session is mounted), so the remote should fall through to its own UI.
+The local side sends it instead of `cancelled` for exactly that case, and the remote maps it straight
+to `next()`.
+
+Three smaller decisions follow from the same shape:
+
+- **No `wait` on the wire.** Only the call id travels. A `timed: true` wait would have the local card
+  attach to a foreground wait stream owned by *this* Host's `userQuestions` service, which has never
+  heard of a remote call, so the countdown stays remote and the card renders as blocking.
+- **The timeout never fabricates an answer.** `questionTimeoutMs` (default 30 minutes, `0` = wait)
+  rejects with `ASK_CANCELLED`; returning an empty batch would tell the model the user skipped the
+  question, which is a different fact. It is separate from the 10-minute approval window because an
+  unanswered approval is closed, while an unanswered question blocks a model that is waiting for it.
+- **A partial batch is rejected.** `assertCompleteBatch` requires each question exactly once, which
+  only the owner of the asked questions can check; the gateway validated the shape, not the
+  correspondence to this call.
+
+`intent` is copied verbatim in both directions. It names a presentation the *asking* host chose, and
+DSH's own rule is that a tag a UI does not recognise falls back to the generic option list, so
+dropping an unknown one would make version skew silently change the card.
+
+### 5.8 Archive: one decision, two logs
 
 Archiving a mirrored Session has to reach the remote Session, and restoring it has to come back the
 same way. Both halves are installed together, for a reason that is easy to miss.

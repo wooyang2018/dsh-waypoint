@@ -31,6 +31,16 @@ export interface Config {
    * execution world. A bare name is looked up on the agent's PATH.
    */
   readonly gitCommand?: string
+  /**
+   * How long a bridged `ask_user_question` waits for the local UI.
+   *
+   * Deliberately longer than the 10-minute approval window: an approval left
+   * unanswered is a refusal, while a question is a request for information the
+   * model is blocked on, so a person stepping away briefly should not lose it.
+   * `0` waits forever, which is the blocking tool's own semantics; cancellation
+   * still arrives through the tool's signal.
+   */
+  readonly questionTimeoutMs?: number
 }
 
 /** Schema validated by the Cordis Loader. */
@@ -42,6 +52,7 @@ export const Config: z<Config> = z.object({
   maxSnapshotEvents: z.number().min(1).max(10_000).default(2_000),
   heartbeatMs: z.number().min(1_000).max(300_000).default(15_000),
   gitCommand: z.string().default('git'),
+  questionTimeoutMs: z.number().min(0).max(86_400_000).default(1_800_000),
 })
 
 /** Config with every default materialized. */
@@ -53,6 +64,7 @@ export interface ResolvedConfig {
   readonly maxSnapshotEvents: number
   readonly heartbeatMs: number
   readonly gitCommand: string
+  readonly questionTimeoutMs: number
 }
 
 /** DSH home: explicit `$DSH_HOME`, otherwise `~/.dsh`. */
@@ -88,6 +100,7 @@ export function resolveConfig(config: Config = {}, env: NodeJS.ProcessEnv = proc
     maxSnapshotEvents,
     heartbeatMs: config.heartbeatMs ?? 15_000,
     gitCommand: normalizeGitCommand(config.gitCommand),
+    questionTimeoutMs: config.questionTimeoutMs ?? 1_800_000,
   }
 }
 

@@ -37,6 +37,8 @@ import type {
   ApprovalOutcome,
   RemoteApprovalFrame,
   RemoteAssistantFrame,
+  RemoteQuestionFrame,
+  RemoteQuestionOutcome,
   CreateSessionRequest,
   CreateSessionResult,
   CreateWorkspaceRequest,
@@ -83,6 +85,7 @@ import { isRemoteChangesDiff, isRemoteChangesSummary } from './workspace-changes
 import {
   isAcceptedResult,
   isRemoteApprovalFrame,
+  isRemoteQuestionFrame,
   isApiFailure,
   isCreateSessionResult,
   isHostInfoValue,
@@ -300,6 +303,44 @@ export class RemoteAgentClient {
   /** Answer one pending remote approval. */
   answerApproval(id: string, outcome: ApprovalOutcome): Promise<AcceptedResult> {
     return this.#request(AGENT_ROUTES.approvalAnswer, isAcceptedResult, {
+      method: 'POST',
+      body: { id, outcome },
+    })
+  }
+
+  /**
+   * Follow the remote question stream.
+   *
+   * The counterpart of {@link followApprovals}: the remote agent mints one
+   * request per pending `ask_user_question` call and replays every unanswered
+   * one on connect, so a reconnecting bridge sees the same questions again.
+   */
+  async *followQuestions(signal: AbortSignal): AsyncGenerator<RemoteQuestionFrame> {
+    const response = await this.#openStream(AGENT_ROUTES.questionEvents, signal)
+    const body = response.body
+    if (body === null) {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'remote agent returned an empty question stream' })
+    }
+    for await (const message of parseSseStream(body)) {
+      // Transport-level keepalives carry no question frame.
+      if (message.event === 'heartbeat') continue
+      if (message.data === '') continue
+      let frame: unknown
+      try {
+        frame = JSON.parse(message.data)
+      } catch (error) {
+        throw new RemoteProtocolError({ code: 'request/invalid', message: 'remote agent sent malformed question JSON', cause: error })
+      }
+      if (!isRemoteQuestionFrame(frame)) {
+        throw new RemoteProtocolError({ code: 'request/invalid', message: 'remote agent sent an unknown question frame' })
+      }
+      yield frame
+    }
+  }
+
+  /** Answer, delegate or cancel one pending remote question. */
+  answerQuestion(id: string, outcome: RemoteQuestionOutcome): Promise<AcceptedResult> {
+    return this.#request(AGENT_ROUTES.questionAnswer, isAcceptedResult, {
       method: 'POST',
       body: { id, outcome },
     })

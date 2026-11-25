@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.1.4
+
+### Added
+
+- **`ask_user_question` from a mirrored Session now shows its card locally instead of silently
+  disappearing.** Only `approval/request` was bridged, so a remote agent that asked a question waited
+  for an answer that never arrived: the card only ever existed in the remote Web UI, which is exactly
+  the context a mirror user does not have open. The plugin now bridges the second human-interaction
+  seam the same way it bridges the first — the remote agent prepends a listener to
+  `user-questions/request` (`#bindQuestions`), replays the pending set over the new
+  `GET /questions/events`, and the local side rebuilds the waterfall through
+  `scopeTarget(runtime.agent, …)` before returning the answer to `POST /questions/answer`.
+
+  Three rules differ from the approval bridge, and each one is a failure the naive port would have
+  caused. The agent only claims a question while a local stream is attached, because an approval can
+  resolve `unavailable` — which reads as a refusal — while a question resolves into a tool result the
+  model acts on, so "nobody was listening" must never become "the user declined". A new `delegated`
+  outcome reports that no local mirror can show the question, which hands it back to the remote UI
+  instead of reporting a decision a human never made. And the wire carries no `wait` field: a timed
+  wait would make the local card attach to a foreground stream owned by the *local* Host's
+  `userQuestions` service, which has never heard of a remote call.
+
+  The wait is bounded by `questionTimeoutMs` (default 30 minutes, `0` waits forever) and expires as
+  `ASK_CANCELLED` rather than an empty answer batch, because an empty batch would tell the model the
+  user skipped a question nobody saw. Both capabilities (`question.follow`, `question.answer`) are
+  required before the local side opens the stream, so an older remote agent keeps its current
+  behaviour and an older plugin keeps its current behaviour against a newer agent.
+
 ## 1.1.3
 
 ### Fixed

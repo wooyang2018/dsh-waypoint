@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { createScope, scopeTarget, type Scope } from '@deepseek-ai/dsh-scope'
 import type {} from '@deepseek-ai/dsh-user-approval'
+import type {} from '@deepseek-ai/dsh-user-questions/types'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-api-session-controller/types'
 import { appendPluginRecord } from '@deepseek-ai/dsh-session'
@@ -27,6 +28,9 @@ import type { Workspace, WorkspaceId, WorkspaceDomainState } from '@deepseek-ai/
 import type {
   ApprovalOutcome,
   RemoteApprovalRequest,
+  RemoteQuestionAnswerItem,
+  RemoteQuestionOutcome,
+  RemoteQuestionRequest,
   RemoteAssistantFrame,
   RemoteSessionEvent,
   RemoteSessionSummary,
@@ -646,6 +650,17 @@ export class RemoteMirrorService {
   #visibleSessions = new Map<string, number>()
   #registrations = new Map<string, () => Promise<void>>()
   #approvalStreams = new Map<string, AbortController>()
+  /**
+   * Questions waiting for a visible mirror, keyed by host and remote Session.
+   *
+   * The counterpart of {@link #pendingApprovals}: a question that arrives while
+   * its Session is not on screen waits rather than popping a card for a
+   * conversation nobody is reading.
+   */
+  #pendingQuestions = new Map<string, RemoteQuestionRequest[]>()
+  /** Question ids currently being dispatched, so a replayed id cannot double-dispatch. */
+  #answeringQuestions = new Set<string>()
+  #questionStreams = new Map<string, AbortController>()
   #mirrorsInFlight = new Map<string, Promise<MirrorRecord | undefined>>()
   #pendingBlanks = new Map<string, PendingBlankSession>()
   /**
@@ -821,6 +836,8 @@ export class RemoteMirrorService {
     this.#registrations.clear()
     for (const controller of this.#approvalStreams.values()) controller.abort()
     this.#approvalStreams.clear()
+    for (const controller of this.#questionStreams.values()) controller.abort()
+    this.#questionStreams.clear()
     this.#runtimes.clear()
     const pendingBlanks = [...this.#pendingBlanks.values()]
     this.#pendingBlanks.clear()
@@ -1335,7 +1352,10 @@ export class RemoteMirrorService {
     if (sessionId === undefined) return
     this.#visibleSessions.set(sessionId, now)
     const runtime = [...this.#runtimes.values()].find(item => item.record.localSessionId === sessionId)
-    if (runtime !== undefined) this.#flushPendingApprovals(runtime.record)
+    if (runtime !== undefined) {
+      this.#flushPendingApprovals(runtime.record)
+      this.#flushPendingQuestions(runtime.record)
+    }
   }
 
   /** Whether a connected client reported this Session visible within the freshness window. */
@@ -2233,6 +2253,7 @@ export class RemoteMirrorService {
       if (record.hostId === host.id) this.#workspaceRemoved(record)
     }
     this.#ensureApprovalStream(host)
+    this.#ensureQuestionStream(host)
     await this.#reconcileTestHidden(host)
     // Read once per pass: the getter returns the durable array, so consulting
     // it per Session would be O(sessions x archived). Guarded rather than
@@ -2763,11 +2784,169 @@ export class RemoteMirrorService {
     })
   }
 
+  #ensureQuestionStream(host: HostView): void {
+    if (this.#questionStreams.has(host.id)) return
+    // An agent that cannot answer has nothing to say; the remote browser keeps
+    // the question and this host behaves exactly as it did before the bridge.
+    // A hosts service that cannot answer the capability question at all (a test
+    // double, or a host whose info has not arrived) is treated the same way:
+    // the bridge is an addition, never a reason to fail a sync pass.
+    let supported = false
+    try {
+      supported = this.#hosts.supportsAgent(host.id, 'question.follow')
+    } catch {
+      supported = false
+    }
+    if (!supported) return
+    const controller = new AbortController()
+    this.#questionStreams.set(host.id, controller)
+    void (async () => {
+      try {
+        for await (const frame of this.#hosts.followQuestions(host.id, controller.signal)) {
+          if (frame.type === 'request') void this.#handleQuestion(host.id, frame.request)
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          this.#ctx.logger.warn('dsh-waypoint: question stream %s failed: %s', host.id, String(error))
+        }
+      } finally {
+        this.#questionStreams.delete(host.id)
+      }
+    })()
+  }
+
+  /**
+   * Dispatch one remote question at most once.
+   *
+   * A reconnecting stream replays every unanswered question, so the same id
+   * arrives again while its card may still be on screen. Dispatching it twice
+   * would stack a second card over the first and send two competing outcomes.
+   */
+  async #handleQuestion(hostId: string, request: RemoteQuestionRequest): Promise<void> {
+    const questionKey = `${hostId}\u0000${request.sessionId}\u0000${request.id}`
+    if (this.#answeringQuestions.has(questionKey)) return
+    this.#answeringQuestions.add(questionKey)
+    try {
+      await this.#dispatchQuestion(hostId, request)
+    } finally {
+      this.#answeringQuestions.delete(questionKey)
+    }
+  }
+
+  /**
+   * Bridge one remote question to the local question UI.
+   *
+   * The local waterfall is rebuilt rather than forwarded: `dsh-api-remotes`
+   * forwards `user-questions/request` to the browser for us, but only for a
+   * request carrying its scoped Agent, which only this side can supply.
+   *
+   * Three outcomes reach the remote, and the difference matters:
+   *
+   * - `answer` — the batch the local card produced.
+   * - `delegated` — no mirror can take it (removed workspace, unmounted
+   *   Session). The remote then falls through to its own browser UI instead of
+   *   parking the turn for a question this side will never show.
+   * - `cancelled` — the card was closed, or the local wait aborted.
+   */
+  async #dispatchQuestion(hostId: string, request: RemoteQuestionRequest): Promise<void> {
+    const runtime = [...this.#runtimes.values()].find(
+      item => item.record.hostId === hostId && item.record.remoteSessionId === request.sessionId,
+    )
+    if (runtime === undefined) {
+      const mirror = this.#state.sessions[key(hostId, request.sessionId)]
+      // A removed workspace will never show this Session again, so hand the
+      // question to the remote UI rather than queueing it forever.
+      const removed = mirror !== undefined && Object.values(this.#state.workspaces).some(workspace =>
+        workspace.hostId === hostId && workspace.anchor === mirror.anchor && workspace.removed)
+      if (removed) {
+        await this.#answerRemoteQuestion(hostId, request.id, { kind: 'delegated' })
+        return
+      }
+      // The mirror may not be mounted yet; hold it until a client shows it.
+      this.#enqueueQuestion(hostId, request)
+      return
+    }
+    if (!this.isSessionVisible(runtime.record.localSessionId)) {
+      this.#enqueueQuestion(hostId, request)
+      return
+    }
+    const local = new AbortController()
+    let outcome: RemoteQuestionOutcome = { kind: 'delegated' }
+    try {
+      const waterfall = this.#ctx.waterfall as unknown as (
+        thisArg: unknown,
+        name: string,
+        request: unknown,
+        next: () => Promise<unknown>,
+      ) => Promise<unknown>
+      const answer = await waterfall(
+        scopeTarget(runtime.agent as never, runtime.agent as never),
+        'user-questions/request',
+        {
+          questions: request.questions as never,
+          agent: runtime.agent as never,
+          signal: local.signal,
+          // `wait` carries the call id only. A `timed: true` here would have the
+          // local card attach to a foreground wait stream on *this* Host's
+          // userQuestions service, which never heard of a remote call, so the
+          // countdown stays on the remote and the card renders as blocking.
+          ...request.callId === undefined ? {} : { wait: { callId: request.callId as never } },
+        },
+        async () => {
+          throw noLocalAnswerer()
+        },
+      ) as { answers?: RemoteQuestionAnswerItem[] }
+      const answers = Array.isArray(answer?.answers) ? answer.answers : []
+      outcome = answers.length === 0
+        ? { kind: 'cancelled' }
+        : { kind: 'answer', answers }
+    } catch (error) {
+      // A closed card and a cancelled turn both surface here. Reporting
+      // `cancelled` is what lets the remote tool call finish instead of waiting
+      // out its own timeout for an answer that is never coming.
+      this.#ctx.logger.debug('dsh-waypoint: local question bridge ended: %s', String(error))
+      outcome = { kind: 'cancelled' }
+    }
+    if (runtime.stopped) return
+    await this.#answerRemoteQuestion(hostId, request.id, outcome)
+  }
+
+  /** Hold one question until its mirror runtime exists and a client shows it. */
+  #enqueueQuestion(hostId: string, request: RemoteQuestionRequest): void {
+    const pendingKey = key(hostId, request.sessionId)
+    const queued = this.#pendingQuestions.get(pendingKey)
+    if (queued === undefined) this.#pendingQuestions.set(pendingKey, [request])
+    else if (!queued.some(item => item.id === request.id)) queued.push(request)
+  }
+
+  /** Hand queued questions to the local UI once the mirror is mounted and visible. */
+  #flushPendingQuestions(record: MirrorRecord): void {
+    if (!this.isSessionVisible(record.localSessionId)) return
+    if (!this.#runtimes.has(record.localSessionId)) return
+    const pendingKey = key(record.hostId, record.remoteSessionId)
+    const queued = this.#pendingQuestions.get(pendingKey)
+    if (queued === undefined) return
+    this.#pendingQuestions.delete(pendingKey)
+    for (const request of queued) void this.#handleQuestion(record.hostId, request)
+  }
+
+  /** Report one question outcome, logging rather than throwing on failure. */
+  async #answerRemoteQuestion(
+    hostId: string,
+    questionId: string,
+    outcome: RemoteQuestionOutcome,
+  ): Promise<void> {
+    await this.#hosts.answerQuestion(hostId, questionId, outcome).catch(error => {
+      // The remote may have timed the wait out already; that is not retryable,
+      // because a resent answer would land on whatever question now holds the id.
+      this.#ctx.logger.warn('dsh-waypoint: question answer failed: %s', String(error))
+    })
+  }
+
   /**
    * Ensure exactly one local mirror per remote Session.
    *
-   * Creation is check-then-act across several awaits (workspace and session
-   * discovery, snapshot fetch), so a periodic sync and an on-demand
+   * Creation is check-then-act across several awaits (workspace and session   * discovery, snapshot fetch), so a periodic sync and an on-demand
    * `host/session/create` can both observe no mapping and each create a local
    * Session for the same remote Session. Coalesce every caller by remote
    * identity: the first one creates, the others await and share its result.
@@ -3104,6 +3283,7 @@ export class RemoteMirrorService {
     this.#runtimes.set(record.localSessionId, runtime)
     this.#registrations.set(record.localSessionId, async () => { detach(); await agent.scope.dispose() })
     this.#flushPendingApprovals(record)
+    this.#flushPendingQuestions(record)
     const localMode = this.#localSandboxMode(session)
     const remoteMode = latestRemoteSandboxMode(snapshot.events)
     if (localMode !== undefined && remoteMode !== undefined && localMode !== remoteMode) {
@@ -4039,6 +4219,20 @@ function isSessionLike(value: unknown): boolean {
     && typeof candidate.snapshotEvents === 'function'
     && typeof candidate.requestHeader === 'function'
     && typeof candidate.seq === 'number'
+}
+
+/**
+ * Signal that nobody on this side can answer a bridged question.
+ *
+ * The shape matters more than the class: `dsh-user-questions` restores an error
+ * carrying `name: 'UserQuestionError'` and a `code`, so a plain error in that
+ * shape reaches the caller as a typed `NO_PROVIDER` failure. Building it here
+ * keeps this package free of a value import on a peer the host profile owns.
+ */
+function noLocalAnswerer(): Error {
+  const error = new Error('no local answerer accepted the question')
+  error.name = 'UserQuestionError'
+  return Object.assign(error, { code: 'NO_PROVIDER' })
 }
 
 function isMirrorNoise(event: RemoteSessionEvent): boolean {

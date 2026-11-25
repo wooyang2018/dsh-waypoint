@@ -29,6 +29,8 @@ describe('agent HTTP file and terminal surface', () => {
   const token = 'http-test-token'
   const archiveCalls: Array<{ sessionId: string; stopActivity: boolean }> = []
   const unarchiveCalls: Array<{ sessionId: string }> = []
+  const questionAnswers: Array<{ id: string; outcome: unknown }> = []
+  let questionListener: ((request: unknown) => void) | undefined
   const service = {
     admitsPeer: () => true,
     token,
@@ -39,6 +41,20 @@ describe('agent HTTP file and terminal surface', () => {
     },
     async unarchiveSession(sessionId: string) {
       unarchiveCalls.push({ sessionId })
+      return { accepted: true }
+    },
+    attachQuestionStream: () => () => {},
+    questionRequests: () => [{
+      id: 'replayed-1',
+      sessionId: 's1',
+      questions: [{ id: 'q1', question: 'Replayed?' }],
+    }],
+    onQuestionRequest(listener: (request: unknown) => void) {
+      questionListener = listener
+      return () => { questionListener = undefined }
+    },
+    answerQuestion(id: string, outcome: unknown) {
+      questionAnswers.push({ id, outcome })
       return { accepted: true }
     },
   } as unknown as RemoteAgentService
@@ -99,6 +115,88 @@ describe('agent HTTP file and terminal surface', () => {
     const client = new RemoteAgentClient({ baseUrl, token })
     await client.unarchiveSession('s1')
     assert.deepEqual(unarchiveCalls, [{ sessionId: 's1' }])
+  })
+
+  it('replays a pending question when the stream connects', async () => {
+    const client = new RemoteAgentClient({ baseUrl, token })
+    const controller = new AbortController()
+    const frames = []
+    for await (const frame of client.followQuestions(controller.signal)) {
+      frames.push(frame)
+      if (frames.length >= 2) {
+        controller.abort()
+        break
+      }
+    }
+    assert.equal(frames[0]?.type, 'ready')
+    assert.ok(frames[1]?.type === 'request')
+    assert.equal(frames[1].request.id, 'replayed-1')
+  })
+
+  it('forwards live questions published after the stream opened', async () => {
+    const client = new RemoteAgentClient({ baseUrl, token })
+    const controller = new AbortController()
+    const frames: unknown[] = []
+    const consuming = (async () => {
+      try {
+        for await (const frame of client.followQuestions(controller.signal)) {
+          frames.push(frame)
+          if (frames.length >= 2) controller.abort()
+        }
+      } catch {
+        // Aborting the stream is how this test ends it; the frames are already read.
+      }
+    })()
+    // The replay frame arrives first; publish once the listener is registered.
+    for (let attempt = 0; attempt < 50 && questionListener === undefined; attempt += 1) {
+      await new Promise(done => setTimeout(done, 5))
+    }
+    questionListener?.({ id: 'live-1', sessionId: 's1', questions: [{ id: 'q1', question: 'Live?' }] })
+    await consuming
+    assert.ok(frames.length >= 2)
+  })
+
+  it('accepts a delegated question outcome', async () => {
+    const client = new RemoteAgentClient({ baseUrl, token })
+    await client.answerQuestion('q-1', { kind: 'delegated' })
+    assert.deepEqual(questionAnswers.at(-1), { id: 'q-1', outcome: { kind: 'delegated' } })
+  })
+
+  it('accepts an answer batch and a cancel outcome', async () => {
+    const client = new RemoteAgentClient({ baseUrl, token })
+    await client.answerQuestion('q-2', {
+      kind: 'answer',
+      answers: [{ id: 'q1', selected: ['fast'], custom: 'why not' }],
+    })
+    assert.deepEqual(questionAnswers.at(-1), {
+      id: 'q-2',
+      outcome: { kind: 'answer', answers: [{ id: 'q1', selected: ['fast'], custom: 'why not' }] },
+    })
+    await client.answerQuestion('q-3', { kind: 'cancelled' })
+    assert.deepEqual(questionAnswers.at(-1), { id: 'q-3', outcome: { kind: 'cancelled' } })
+  })
+
+  it('rejects a malformed question outcome instead of forwarding it', async () => {
+    const response = await fetch(`${baseUrl}${AGENT_ROUTES.questionAnswer}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-dsh-waypoint-protocol': '1',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ id: 'q-4', outcome: { kind: 'answer', answers: [] } }),
+    })
+    assert.equal(response.status, 400)
+  })
+
+  it('rejects GET on the question answer route', async () => {
+    const response = await fetch(`${baseUrl}${AGENT_ROUTES.questionAnswer}`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-dsh-waypoint-protocol': '1',
+      },
+    })
+    assert.equal(response.status, 405)
   })
 
   it('rejects GET on the unarchive route', async () => {
