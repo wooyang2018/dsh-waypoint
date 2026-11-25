@@ -16,7 +16,36 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
+import { Config, resolveConfig } from '../src/config.ts'
 import { assertCompleteBatch, toRemoteQuestionItem } from '../src/service.ts'
+
+describe('bridge timeouts', () => {
+  // Both seams wait indefinitely unless a deployment says otherwise, because
+  // that is what DSH itself does: neither `dsh-user-questions` nor
+  // `dsh-user-approval` contains a timer. A regression to any non-zero default
+  // would make this plugin the only part of the system that decides a person
+  // has taken too long.
+  it('defaults both waits to indefinite', () => {
+    const config = resolveConfig({})
+    assert.equal(config.questionTimeoutMs, 0)
+    assert.equal(config.approvalTimeoutMs, 0)
+  })
+
+  it('keeps an explicit bound without applying one by default', () => {
+    const config = resolveConfig({ questionTimeoutMs: 5_000, approvalTimeoutMs: 0 })
+    assert.equal(config.questionTimeoutMs, 5_000)
+    assert.equal(config.approvalTimeoutMs, 0)
+  })
+
+  it('declares the same indefinite default in the Loader schema', () => {
+    // `resolveConfig` and the Cordis schema are two separate materializations of
+    // the same default; only one of them runs when the plugin is loaded by DSH,
+    // so a change to one that misses the other is invisible in production.
+    const parsed = Config({}) as { questionTimeoutMs?: number; approvalTimeoutMs?: number }
+    assert.equal(parsed.questionTimeoutMs, 0)
+    assert.equal(parsed.approvalTimeoutMs, 0)
+  })
+})
 
 describe('question projection', () => {
   it('keeps the fields a local card renders', () => {

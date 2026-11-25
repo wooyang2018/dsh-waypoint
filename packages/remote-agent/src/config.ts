@@ -32,15 +32,31 @@ export interface Config {
    */
   readonly gitCommand?: string
   /**
-   * How long a bridged `ask_user_question` waits for the local UI.
+   * How long a bridged `ask_user_question` waits for the local UI. `0` — the
+   * default — waits indefinitely.
    *
-   * Deliberately longer than the 10-minute approval window: an approval left
-   * unanswered is a refusal, while a question is a request for information the
-   * model is blocked on, so a person stepping away briefly should not lose it.
-   * `0` waits forever, which is the blocking tool's own semantics; cancellation
-   * still arrives through the tool's signal.
+   * Indefinite is deliberately the default because it is what DSH itself does:
+   * the blocking `ask_user_question` tool is an `await` on the answerer waterfall
+   * with no timer anywhere in `dsh-user-questions`, and `dsh-user-approval` has
+   * none either. Adding a clock would make this bridge the only part of the
+   * system that decides a human has taken too long, and the answer it produces
+   * at that point is not an answer at all.
+   *
+   * A deployment that wants a guardrail can set one; when it expires the tool
+   * fails with `ASK_UNANSWERED`, a code distinct from cancellation, so the model
+   * can tell "nobody replied in time" from "the user withdrew the question".
    */
   readonly questionTimeoutMs?: number
+  /**
+   * How long a bridged approval waits before answering `unavailable`. `0` — the
+   * default — waits indefinitely, matching `dsh-user-approval`.
+   *
+   * This used to be a hard-coded ten minutes. That constant borrowed the
+   * `unavailable` outcome, whose meaning in DSH is "no answerer was reachable",
+   * to express "nobody replied yet" — a different fact, and one DSH never
+   * expresses.
+   */
+  readonly approvalTimeoutMs?: number
 }
 
 /** Schema validated by the Cordis Loader. */
@@ -52,7 +68,8 @@ export const Config: z<Config> = z.object({
   maxSnapshotEvents: z.number().min(1).max(10_000).default(2_000),
   heartbeatMs: z.number().min(1_000).max(300_000).default(15_000),
   gitCommand: z.string().default('git'),
-  questionTimeoutMs: z.number().min(0).max(86_400_000).default(1_800_000),
+  questionTimeoutMs: z.number().min(0).max(86_400_000).default(0),
+  approvalTimeoutMs: z.number().min(0).max(86_400_000).default(0),
 })
 
 /** Config with every default materialized. */
@@ -65,6 +82,7 @@ export interface ResolvedConfig {
   readonly heartbeatMs: number
   readonly gitCommand: string
   readonly questionTimeoutMs: number
+  readonly approvalTimeoutMs: number
 }
 
 /** DSH home: explicit `$DSH_HOME`, otherwise `~/.dsh`. */
@@ -100,7 +118,8 @@ export function resolveConfig(config: Config = {}, env: NodeJS.ProcessEnv = proc
     maxSnapshotEvents,
     heartbeatMs: config.heartbeatMs ?? 15_000,
     gitCommand: normalizeGitCommand(config.gitCommand),
-    questionTimeoutMs: config.questionTimeoutMs ?? 1_800_000,
+    questionTimeoutMs: config.questionTimeoutMs ?? 0,
+    approvalTimeoutMs: config.approvalTimeoutMs ?? 0,
   }
 }
 

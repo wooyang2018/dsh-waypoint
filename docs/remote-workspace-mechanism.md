@@ -398,10 +398,16 @@ Three smaller decisions follow from the same shape:
 - **No `wait` on the wire.** Only the call id travels. A `timed: true` wait would have the local card
   attach to a foreground wait stream owned by *this* Host's `userQuestions` service, which has never
   heard of a remote call, so the countdown stays remote and the card renders as blocking.
-- **The timeout never fabricates an answer.** `questionTimeoutMs` (default 30 minutes, `0` = wait)
-  rejects with `ASK_CANCELLED`; returning an empty batch would tell the model the user skipped the
-  question, which is a different fact. It is separate from the 10-minute approval window because an
-  unanswered approval is closed, while an unanswered question blocks a model that is waiting for it.
+- **Neither seam has a clock by default.** `questionTimeoutMs` and `approvalTimeoutMs` both default to
+  `0`, meaning wait indefinitely, because neither `dsh-user-questions` nor `dsh-user-approval` contains
+  a timer: their vocabulary is about *who* answered, not how long they took, and `unavailable` means
+  "no answerer was reachable". A deployment may opt into a bound. When a question's expires it fails
+  with `ASK_UNANSWERED`, deliberately not `ASK_CANCELLED` — the user withdrawing a question and the
+  question never being seen are different facts, and reporting the second as the first tells the model
+  a human considered it. An approval's expiry answers `unavailable`, which is the truthful vocabulary
+  for it.
+- **An expiry never fabricates an answer.** Returning an empty batch would tell the model the user
+  skipped the question, which is a different fact again.
 - **A partial batch is rejected.** `assertCompleteBatch` requires each question exactly once, which
   only the owner of the asked questions can check; the gateway validated the shape, not the
   correspondence to this call.

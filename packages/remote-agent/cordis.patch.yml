@@ -11,6 +11,7 @@
 # agent's approval bridge sees it. That ordering problem is fixed at its source
 # — the bridge now registers with `{ prepend: true }` (see `src/service.ts`),
 # so it always runs first and `api-remotes` still serves the browser surface.
+# `user-questions/request` is bridged the same way and for the same reason.
 
 # dsh-waypoint-agent is a host-only bundle. The row is inserted above the
 # dsh-base layer and is addressable by id from a later profile patch layer.
@@ -29,3 +30,9 @@
         defaultSnapshotEvents: 500
         maxSnapshotEvents: 2000
         heartbeatMs: 15000
+        # How long a bridged question waits for the local UI. 0 waits
+        # indefinitely, which is what DSH itself does; set a bound only if this
+        # deployment wants one, and expect `ASK_UNANSWERED` when it expires.
+        questionTimeoutMs: 0
+        # The same for a bridged approval; expiry answers `unavailable`.
+        approvalTimeoutMs: 0

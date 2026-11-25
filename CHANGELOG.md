@@ -22,11 +22,24 @@
   wait would make the local card attach to a foreground stream owned by the *local* Host's
   `userQuestions` service, which has never heard of a remote call.
 
-  The wait is bounded by `questionTimeoutMs` (default 30 minutes, `0` waits forever) and expires as
-  `ASK_CANCELLED` rather than an empty answer batch, because an empty batch would tell the model the
-  user skipped a question nobody saw. Both capabilities (`question.follow`, `question.answer`) are
-  required before the local side opens the stream, so an older remote agent keeps its current
-  behaviour and an older plugin keeps its current behaviour against a newer agent.
+  Neither bridged seam has a clock by default: `questionTimeoutMs` and `approvalTimeoutMs` both
+  default to `0`, meaning wait indefinitely, because neither `dsh-user-questions` nor
+  `dsh-user-approval` contains a timer. Adding one would make this plugin the only part of the system
+  that decides a person has taken too long, and the thing it produces at that point is not an answer.
+  A deployment may opt in; an expiring question then fails with `ASK_UNANSWERED` rather than
+  `ASK_CANCELLED`, because "the question was never seen" and "the user withdrew it" are different
+  facts. Both capabilities (`question.follow`, `question.answer`) are required before the local side
+  opens the stream, so an older remote agent keeps its current behaviour and an older plugin keeps
+  its current behaviour against a newer agent.
+
+### Fixed
+
+- **A bridged approval no longer gives up after a hard-coded ten minutes.** The remote agent used to
+  answer `unavailable` ten minutes into any approval nobody had replied to. `dsh-user-approval` has
+  no such timer, and its `unavailable` outcome means "no answerer was reachable" — so the constant
+  reported "nobody replied yet" in the vocabulary of "nobody could be asked". The wait is now
+  indefinite by default (`approvalTimeoutMs: 0`); a deployment that wants a bound sets one and gets
+  the same `unavailable` outcome, which is truthful once a timer is genuinely the explanation.
 
 ## 1.1.3
 

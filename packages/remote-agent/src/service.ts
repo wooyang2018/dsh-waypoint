@@ -528,20 +528,29 @@ export class RemoteAgentService {
       const finish = (outcome: ApprovalOutcome): void => {
         if (settled) return
         settled = true
-        clearTimeout(timer)
+        if (timer !== undefined) clearTimeout(timer)
         request.signal?.removeEventListener('abort', onAbort)
         this.#pendingApprovals.delete(id)
         resolve(outcome)
       }
       const onAbort = (): void => { finish('cancelled') }
-      const timer = setTimeout(() => { finish('unavailable') }, 10 * 60_000)
+      // No clock by default, because `dsh-user-approval` has none: its outcome
+      // vocabulary is about who answered, not how long they took, and
+      // `unavailable` means "no answerer was reachable" — which is exactly what
+      // a `next()` fall-through reports. A deployment may opt into a bound; it
+      // is the only case where a timer is the honest explanation.
+      this.#pendingApprovals.set(id, { request: projected, resolve: finish })
+      this.#approvalEvents.emit('request', projected)
+      const timeout = this.config.approvalTimeoutMs
+      const timer = timeout > 0
+        ? setTimeout(() => { finish('unavailable') }, timeout)
+        : undefined
+      timer?.unref?.()
       if (request.signal?.aborted === true) {
         finish('cancelled')
         return
       }
       request.signal?.addEventListener('abort', onAbort, { once: true })
-      this.#pendingApprovals.set(id, { request: projected, resolve: finish })
-      this.#approvalEvents.emit('request', projected)
     })
   }
 
@@ -636,6 +645,7 @@ export class RemoteAgentService {
       ...request.wait?.callId === undefined ? {} : { callId: String(request.wait.callId) },
       questions: request.questions.map(toRemoteQuestionItem),
     }
+    let timedOut = false
     const outcome = await new Promise<RemoteQuestionOutcome>(resolve => {
       let settled = false
       const finish = (value: RemoteQuestionOutcome): void => {
@@ -647,14 +657,18 @@ export class RemoteAgentService {
         resolve(value)
       }
       const onAbort = (): void => { finish({ kind: 'cancelled' }) }
-      // `0` means "wait for the person", which is the blocking tool's own
-      // semantics; cancellation still arrives through the tool signal above.
+      // No clock by default, for the same reason `dsh-user-questions` has none:
+      // the blocking tool is an `await`, and a bridge should not be the only
+      // party that decides a person has taken too long. A deployment may opt
+      // into a bound; `timedOut` then keeps that expiry distinguishable from a
+      // user withdrawing the question, which is what `cancelled` reports.
       const timeout = this.config.questionTimeoutMs
       const timer = timeout > 0
-        ? setTimeout(() => { finish({ kind: 'cancelled' }) }, timeout)
+        ? setTimeout(() => {
+            timedOut = true
+            finish({ kind: 'cancelled' })
+          }, timeout)
         : undefined
-      // `unref` keeps a pending question from holding the process open during
-      // shutdown; the wait is bounded by the turn anyway.
       timer?.unref?.()
       if (request.signal?.aborted === true) {
         finish({ kind: 'cancelled' })
@@ -670,7 +684,13 @@ export class RemoteAgentService {
     })
     if (outcome.kind === 'delegated') return await next()
     if (outcome.kind === 'cancelled') {
-      throw questionError('the user did not answer the question', 'ASK_CANCELLED')
+      // Two facts share the wire's `cancelled` kind but must not share a code:
+      // a withdrawal says the user decided against the question, while an
+      // expiry says the question was never seen. Reporting the second as
+      // `ASK_CANCELLED` would have the model believe a human considered it.
+      throw timedOut
+        ? questionError('the question expired before it was answered', 'ASK_UNANSWERED')
+        : questionError('the user did not answer the question', 'ASK_CANCELLED')
     }
     assertCompleteBatch(projected.questions, outcome.answers)
     return { answers: outcome.answers.map(toAnswerItem) }
