@@ -453,7 +453,6 @@ then follow `docs/operations.md` for moving the host registry and cleaning up th
 - [Wire protocol](docs/protocol.md)
 - [Remote workspace mechanism](docs/remote-workspace-mechanism.md) — how a remote directory becomes a
   local workspace: discovery, tunnel, the session mirror, files/terminal routing
-  ([中文版](docs/remote-workspace-mechanism.zh.md))
 - [Host routing for mirrored paths](docs/mirror-host-resolution.md) — why a remote path does not name
   a host, how ambiguity is refused instead of guessed, and what `spawn git ENOENT` actually means
 - [Operations guide](docs/operations.md)

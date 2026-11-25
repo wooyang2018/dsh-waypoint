@@ -347,8 +347,8 @@ dsh-remote-local-plugin`），避免同时出现两个设置分区；再按 `doc
 ## 文档
 
 - [Wire protocol](docs/protocol.md)
-- [远程工作区原理](docs/remote-workspace-mechanism.zh.md)——远端目录如何变成侧边栏里的工作区：
-  发现、隧道、会话镜像、文件与终端路由（英文正文：[remote-workspace-mechanism.md](docs/remote-workspace-mechanism.md)）
+- [远程工作区原理](docs/remote-workspace-mechanism.md)——远端目录如何变成侧边栏里的工作区：
+  发现、隧道、会话镜像、文件与终端路由
 - [Operations guide](docs/operations.md)
 - [Development](docs/development.md)
 - [Testing](docs/testing.md)
