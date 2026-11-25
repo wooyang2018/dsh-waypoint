@@ -15,23 +15,14 @@ This repository is intended to be public on GitHub.
 
 ## Where to work
 
-**Give a new feature its own worktree when the change is expected to be substantial. Do not pile
-features into the main checkout.** Several half-finished lines of work in one working tree compete for
-the same files, make `git status` unreadable, and force every commit to be sorted out of unrelated
-edits — and this repository's packages reference each other, so a build mid-way through two features
-can look broken for reasons that belong to neither.
+**Give a substantial feature its own worktree; do not pile features into the main checkout.** Several
+half-finished lines of work compete for the same files, and with inter-package references a
+mid-feature build looks broken for reasons that belong to neither.
 
-The trigger is the expected size, judged before starting:
-
-- **Own worktree** — a feature that touches several packages, changes a protocol or service surface,
-  or will take more than a few commits. `docs/protocol.md` plus `packages/protocol`, both behaviour
-  packages, and tests is the shape that always qualifies.
-- **Main checkout** — a single-file fix, a doc-only change, or a small correction that lands in one
-  commit. Creating a worktree for these costs more than it saves.
-
-Two practical notes. A worktree starts from a commit, so commit (or stash) outstanding work in the
-main checkout first — uncommitted files do not follow you into the new tree. And the existing
-worktrees live under `.agents/worktrees/<name>`, which is where the tooling expects them.
+Judged before starting: own worktree when the change touches several packages, moves a protocol or
+service surface, or spans more than a few commits. Keep single-file fixes and doc changes in the main
+checkout. Commit outstanding work first — uncommitted files do not follow you into the new tree; the
+tooling keeps worktrees under `.agents/worktrees/<name>`.
 
 ## Verification commands
 
@@ -61,48 +52,21 @@ node scripts/test/test-sandbox.mjs
 For a real remote test, point a second profile at throwaway directories under `/tmp` and use
 `remoteStart: nohup`; never create test workspaces in a production remote home.
 
-### Prefer the development build on the normal path
+### End-to-end runs go through the normal path
 
-When a change has to be exercised end to end, **install the local development build and let it run
-through the ordinary path** rather than hand-placing a tarball on the remote. The maintainer prefers
-this: it tests what users actually get, and it is the only path that catches provisioning behaviour.
-
-This matters because hand deployment is actively misleading here. A connected host's profile depends
-on the packed asset at a fixed path (`$DSH_HOME/waypoint-agent/agent-package.tgz`), and the plugin
-re-provisions that file and reinstalls the profile whenever it reconnects. A manually copied agent
-package is therefore reverted to the locally packed build within a minute, leaving the remote running
-the old version while the operator believes the new one is deployed.
-
-So: build, let the plugin pack and push, and read the version back from the remote's `agent.json`
-before claiming a test result. Anything else risks measuring a build that is not running.
-
-### The profile the desktop app loads is `desktop`
-
-Local interactive testing runs against the **`desktop`** profile by default; that is the one the
-maintainer's DSH desktop app loads, and installing anywhere else has no effect on what they see. The
-same home also holds `web` and `headless`, and a package installed into those is invisible to the
-running app.
-
-Only go looking when the result does not match what was installed. The symptom is specific: the
-plugin reports the version you just built while the remote keeps running an older one, because a
-different profile is doing the provisioning. `~/.dsh/profiles/<name>/package.json` names the tarball
-each profile loads, so comparing them settles it in one step — no need to audit all three up front.
+Install the local development build into the profile the desktop app loads and let the plugin
+provision the remote itself. Hand-placing an agent package on a host is reverted by re-provisioning,
+so it measures a build that is not running. `desktop` is that profile; `web` and `headless` are not.
+See [docs/testing.md](docs/testing.md#running-against-a-real-host) before an end-to-end run.
 
 Keep test workspaces (and their sessions) out of the sidebar with the test-only manifest at
 `$DSH_HOME/waypoint/test-visibility.json`. Hide them rather than deleting them, so the data stays
 available for review. The manifest format, when to hide at creation versus after the run, and the
 focused mirror regression checks are in [docs/testing.md](docs/testing.md).
 
-CI runs two things worth knowing about: a `verify` job that builds, typechecks, and tests against the
-DSH version in `.github/workflows/ci.yml` → `DSH_TARGET`, and no Playwright job. The Playwright suite
-(`pnpm test:e2e`) runs locally only, on macOS or Windows. See [docs/testing.md](docs/testing.md) for
-the job's exact steps.
-
-The fixture resolves the DSH CLI and a Chromium-family browser from the platform's standard install
-locations rather than hard-coding macOS paths, and it starts the Windows launcher by resolving what
-`dsh.cmd` runs (the Electron binary with `ELECTRON_RUN_AS_NODE` plus the CLI entry inside `app.asar`).
-`child_process` cannot start a `.cmd`, and going through a shell changes stdio, so the launcher path
-must not be spawned directly on Windows.
+CI runs one `verify` job against the DSH version in `.github/workflows/ci.yml` → `DSH_TARGET`; the
+Playwright suite (`pnpm test:e2e`) is local-only and never runs there. Both are described in
+[docs/testing.md](docs/testing.md).
 
 ## Adapting to a new DSH release
 
@@ -144,7 +108,10 @@ this repository:
   host, and why it never is: read this before touching
   `remoteContextForRemotePath`, `resolveHostForRemotePath`, or anything that turns
   a `cwd` into a host.
-- `docs/testing.md` — test workspace visibility, mirror regressions, CI steps.
+- `docs/testing.md` — every verification layer, from the isolated sandbox to real-host runs. Read
+  [Running against a real host](docs/testing.md#running-against-a-real-host) before an end-to-end run:
+  the desktop's own provisioning and the tunnel-only credentials both fail in ways that look like bugs
+  in this plugin.
 - `docs/development.md` — workspace layout, build scripts, the Windows
   package-manager shims this repository has to work around.
 
