@@ -284,6 +284,15 @@ async function dispatch(
       }
       return service.setModelSource(requireStringField(body, 'hostId'), source)
     }
+    case 'host/ask-user-mode': {
+      const body = requireRecord(payload)
+      const mode = requireStringField(body, 'mode')
+      if (mode !== 'blocking' && mode !== 'timed') {
+        throw new LocalError('request/invalid', 'mode must be "blocking" or "timed"')
+      }
+      const timeoutSeconds = optionalNumberField(body, 'timeoutSeconds')
+      return service.setAskUserMode(requireStringField(body, 'hostId'), mode, timeoutSeconds)
+    }
     case 'host/node-install':
       return service.installNode(requireStringField(payload, 'hostId'))
     case 'host/session/mirror': {

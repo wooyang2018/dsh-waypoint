@@ -25,7 +25,7 @@ function toJsonObject(value: unknown): JsonObject {
 }
 
 /** Host-writing tools that may connect over SSH or provision a remote runtime. */
-const HOST_WRITE_TOOLS = new Set(['remote_host_add', 'remote_host_connect', 'remote_host_provision', 'remote_host_restart'])
+const HOST_WRITE_TOOLS = new Set(['remote_host_add', 'remote_host_connect', 'remote_host_provision', 'remote_host_restart', 'remote_host_ask_user_mode'])
 
 /**
  * Require an explicit approval before model-facing host writes. These tools can
@@ -139,8 +139,37 @@ export function registerRemoteTools(ctx: Context, service: RemoteHostsService): 
   }))
 
   ctx.tools.register(defineTool({
-    name: 'remote_host_restart',
-    description: 'Restart the remote DSH service without reinstalling it, preserving installed remote plugins, then reconnect. Requires the installer-owned systemd user unit; use remote_host_provision for nohup installs.',
+    name: 'remote_host_ask_user_mode',
+    description: 'Choose the ask_user_question schema a remote host runs: "timed" gives the question a foreground window and lets the turn continue when it closes (the question stays answerable as a late reply); "blocking" is DSH\'s default and waits indefinitely. Re-provisions the host so the choice survives future installs.',
+    parameters: {
+      hostId: { type: 'string', required: true, description: 'Registered host id.' },
+      mode: {
+        type: 'string',
+        required: true,
+        enum: ['blocking', 'timed'],
+        description: 'Question schema for this host.',
+      },
+      timeoutSeconds: {
+        type: 'number',
+        description: 'Foreground window for "timed", in seconds. Defaults to 120; ignored for "blocking".',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { host: { type: 'object', additionalProperties: true, required: true } },
+      },
+      render: renderJson,
+    },
+    async execute(args) {
+      const mode = args.mode === 'timed' ? 'timed' : 'blocking'
+      return { host: toJsonObject(await service.setAskUserMode(args.hostId, mode, args.timeoutSeconds)) }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'remote_host_restart',    description: 'Restart the remote DSH service without reinstalling it, preserving installed remote plugins, then reconnect. Requires the installer-owned systemd user unit; use remote_host_provision for nohup installs.',
     parameters: {
       hostId: { type: 'string', required: true, description: 'Registered host id.' },
     },

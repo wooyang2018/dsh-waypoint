@@ -43,11 +43,13 @@ import { LocalError, asLocalError } from './errors.ts'
 import { hostIdFor } from './hosts/id.ts'
 import { HostStore } from './hosts/store.ts'
 import {
+  DEFAULT_TIMED_QUESTION_SECONDS,
   idleRuntime,
   idleForward,
   listeningForward,
   toHostView,
   type AddHostInput,
+  type AskUserMode,
   type DiscoveredSshHost,
   type HostRecord,
   type HostRuntime,
@@ -523,6 +525,40 @@ export class RemoteHostsService {
     if (record.modelSource !== source) await this.#saveRecord(id, { modelSource: source })
     // Reuse provisioning: it stops the tunnel, rewrites the remote environment,
     // and reconnects, which is exactly what a source change needs.
+    return this.provision(id)
+  }
+
+  /**
+   * Choose the `ask_user_question` schema this host runs.
+   *
+   * The schema is part of the remote agent preset, so changing it means
+   * re-provisioning — which is also what makes the choice durable: provisioning
+   * rewrites the `--patch` overlay, and the row lives there rather than in a file
+   * the next install would replace.
+   * @param id - host to configure.
+   * @param mode - blocking (DSH's default) or timed.
+   * @param timeoutSeconds - foreground window for `timed`; ignored for blocking.
+   * @returns the host as it now stands.
+   */
+  async setAskUserMode(id: string, mode: AskUserMode, timeoutSeconds?: number): Promise<HostView> {
+    this.#assertAlive()
+    const record = this.#requireRecord(id)
+    if (mode !== 'blocking' && mode !== 'timed') {
+      throw new LocalError('host/invalid', `unknown ask-user mode: ${String(mode)}`)
+    }
+    if (timeoutSeconds !== undefined) {
+      // DSH rejects a non-integer, non-positive or oversized window, so refusing
+      // it here keeps the failure on the side that can explain it.
+      if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 2_147_483) {
+        throw new LocalError('host/invalid', `ask-user timeout must be a whole number of seconds between 1 and 2147483`)
+      }
+    }
+    const nextTimeout = timeoutSeconds ?? record.askUserTimeoutSeconds ?? DEFAULT_TIMED_QUESTION_SECONDS
+    if (record.askUserMode !== mode || record.askUserTimeoutSeconds !== nextTimeout) {
+      await this.#saveRecord(id, { askUserMode: mode, askUserTimeoutSeconds: nextTimeout })
+    }
+    // Same reasoning as a model-source change: provisioning rewrites the overlay
+    // and reconnects, so the new schema reaches the remote on this call.
     return this.provision(id)
   }
 
@@ -1725,13 +1761,25 @@ export class RemoteHostsService {
    * @returns the overlay text, or undefined when nothing should be published.
    */
   async #modelRoutesFor(record: HostRecord): Promise<string | undefined> {
-    if (!this.config.mirrorLocalProviders) return undefined
-    if (this.#modelSourceFor(record) !== 'proxy') return undefined
+    // The question schema rides on this overlay because provisioning rewrites it
+    // every run, which is what keeps a per-host choice from being reverted.
+    const askUser = {
+      mode: record.askUserMode ?? 'blocking',
+      timeoutSeconds: record.askUserTimeoutSeconds ?? DEFAULT_TIMED_QUESTION_SECONDS,
+    } as const
+    if (!this.config.mirrorLocalProviders || this.#modelSourceFor(record) !== 'proxy') {
+      // No provider overlay, but a timed question still needs a patch file.
+      return renderModelOverlay([], undefined, askUser)
+    }
     const mirrored = await this.#mirroredProviders(record.id)
-    if (mirrored.length === 0) return undefined
+    if (mirrored.length === 0) return renderModelOverlay([], undefined, askUser)
     const local = readLocalModelConfig(this.ctx)
     const providers = mirrored.map(entry => entry.provider)
-    return renderModelOverlay(providers, defaultSelectionFor(providers, local.default))
+    return renderModelOverlay(
+      providers,
+      defaultSelectionFor(providers, local.default),
+      askUser,
+    )
   }
 
   async #ensureProxyToken(id: string): Promise<string> {

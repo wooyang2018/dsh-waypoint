@@ -21,6 +21,25 @@ import type { HostDetail, UiText } from '../messages.ts'
 export type ModelSource = 'proxy' | 'direct'
 
 /**
+ * Which `ask_user_question` schema the remote agent is provisioned with.
+ *
+ * `blocking` is DSH's default: the tool waits for an answer with no deadline.
+ * `timed` declares a `timeout` parameter, so the tool returns
+ * `{ pending: true }` when the window closes and the turn continues while the
+ * question stays answerable as a late reply.
+ *
+ * This is a per-host setting rather than a profile default because the schema is
+ * baked into the remote's agent preset at install time, and `timed` changes what
+ * the model sees. It also has to survive re-provisioning, which reinstalls the
+ * profile from this side — so it travels with the install rather than being
+ * patched into an installed file that the next provision overwrites.
+ */
+export type AskUserMode = 'blocking' | 'timed'
+
+/** Seconds a `timed` question stays in the foreground before becoming a late reply. */
+export const DEFAULT_TIMED_QUESTION_SECONDS = 120
+
+/**
  * Every lifecycle phase, as a value.
  *
  * The union is derived from this list so a test can iterate it: `phase.*` locale
@@ -61,6 +80,20 @@ export interface HostRecord {
    * older builds behaving exactly as they did.
    */
   readonly modelSource?: ModelSource | null
+  /**
+   * `ask_user_question` schema this host is provisioned with.
+   *
+   * Absent means DSH's default (blocking), so records written by older builds
+   * keep behaving exactly as they did.
+   */
+  readonly askUserMode?: AskUserMode | null
+  /**
+   * Foreground window in seconds for {@link askUserMode} `timed`.
+   *
+   * Absent means {@link DEFAULT_TIMED_QUESTION_SECONDS}. Ignored while the mode
+   * is blocking.
+   */
+  readonly askUserTimeoutSeconds?: number | null
   readonly autoConnect: boolean
   readonly createdAt: string
   readonly updatedAt: string
@@ -196,6 +229,10 @@ export interface HostView {
    * Settings page renders one value without knowing the fallback rules.
    */
   readonly modelSource: ModelSource
+  /** Effective `ask_user_question` schema for this host. */
+  readonly askUserMode: AskUserMode
+  /** Effective foreground window in seconds; meaningful only for `timed`. */
+  readonly askUserTimeoutSeconds: number
   /** Set when the remote DSH runtime is older than the local one. */
   readonly dshUpdate: DshUpdate | null
   /** Set while an automatic reconnect is scheduled. */
@@ -300,6 +337,8 @@ export function toHostView(record: HostRecord, runtime: HostRuntime, defaultSour
     updatedAt: record.updatedAt,
     hasToken: record.token !== null,
     modelSource: record.modelSource ?? defaultSource,
+    askUserMode: record.askUserMode ?? 'blocking',
+    askUserTimeoutSeconds: record.askUserTimeoutSeconds ?? DEFAULT_TIMED_QUESTION_SECONDS,
     phase: runtime.phase,
     localPort: runtime.localPort,
     localUrl: runtime.localUrl,

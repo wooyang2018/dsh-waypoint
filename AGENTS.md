@@ -101,9 +101,7 @@ this repository:
 - `docs/adapting-to-dsh-releases.md` — moving to a new DSH release.
 - `docs/remote-workspace-mechanism.md` — how a remote directory becomes a local
   workspace at runtime: discovery, tunnel, the session mirror, and how files and
-  terminals are rerouted. Start here before changing the mirror. The Chinese copy
-  (`docs/remote-workspace-mechanism.zh.md`) mirrors it; edit both, and treat the
-  English page as canonical.
+  terminals are rerouted. Start here before changing the mirror.
 - `docs/mirror-host-resolution.md` — how a remote absolute path is attributed to a
   host, and why it never is: read this before touching
   `remoteContextForRemotePath`, `resolveHostForRemotePath`, or anything that turns

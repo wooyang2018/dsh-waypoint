@@ -171,28 +171,46 @@ export interface OverlayRow {
  * exactly the local list. `agent-default-model` is rewritten in the same
  * overlay because the previous default may no longer exist.
  *
+ * The `ask_user_question` schema rides along for the same reason everything else
+ * here does: this file is rewritten by every provisioning run, so it is the only
+ * place a per-host setting can live without being reverted. Patching a preset
+ * inside the DSH installation instead loses to the `dsh plugin add` that
+ * provisioning performs.
+ *
  * @param providers - providers to publish; an empty list removes the override.
  * @param defaultSelection - provider/model the remote should default to.
+ * @param askUser - question schema this host asked for; blocking needs no row.
  * @returns overlay text, or undefined when there is nothing to publish.
  */
 export function renderModelOverlay(
   providers: readonly MirroredProvider[],
   defaultSelection?: { readonly provider: string; readonly model: string },
+  askUser?: { readonly mode: 'blocking' | 'timed'; readonly timeoutSeconds: number },
 ): string | undefined {
-  if (providers.length === 0) return undefined
   const rows: OverlayRow[] = []
-  if (defaultSelection !== undefined) {
+  if (providers.length > 0 && defaultSelection !== undefined) {
     rows.push({
       id: 'agent-default-model',
       config: { provider: defaultSelection.provider, model: defaultSelection.model },
     })
   }
-  rows.push({
-    id: 'llm-pi-ai',
-    config: {
-      providers: Object.fromEntries(providers.map(provider => [provider.id, provider.profile])),
-    },
-  })
+  if (providers.length > 0) {
+    rows.push({
+      id: 'llm-pi-ai',
+      config: {
+        providers: Object.fromEntries(providers.map(provider => [provider.id, provider.profile])),
+      },
+    })
+  }
+  // Written only for `timed`: the blocking schema is DSH's own default, and
+  // restating it would pin this plugin to today's preset shape for no gain.
+  if (askUser?.mode === 'timed') {
+    rows.push({
+      id: 'tool-ask-user',
+      config: { mode: 'timed', timeout: askUser.timeoutSeconds },
+    })
+  }
+  if (rows.length === 0) return undefined
   return `${JSON.stringify(rows, null, 2)}\n`
 }
 

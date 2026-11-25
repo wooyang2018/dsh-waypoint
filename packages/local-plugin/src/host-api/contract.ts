@@ -8,7 +8,7 @@
  * @module dsh-waypoint/host-api/contract
  */
 
-import type { HostView, ModelSource, PortForwardRuntime, SshDiscoveryResult } from '../hosts/types.ts'
+import type { AskUserMode, HostView, ModelSource, PortForwardRuntime, SshDiscoveryResult } from '../hosts/types.ts'
 import type { UiText } from '../messages.ts'
 import type {
   AcceptedResult,
@@ -54,6 +54,7 @@ export type HostApiEndpoint =
   | 'host/session/mirror'
   | 'host/session/model'
   | 'host/model-source'
+  | 'host/ask-user-mode'
   | 'host/node-install'
   | 'host/files/list'
   | 'host/files/read'
@@ -235,6 +236,7 @@ export interface HostApiPayloads {
     reasoningEffort?: string
   }
   'host/model-source': { hostId: string; source: ModelSource }
+  'host/ask-user-mode': { hostId: string; mode: AskUserMode; timeoutSeconds?: number }
   'host/node-install': { hostId: string }
   'host/files/list': { sessionId: string; path: string }
   'host/files/read': { sessionId: string; path: string; offset?: number; limit?: number }
@@ -280,6 +282,7 @@ export interface HostApiValues {
   'host/session/mirror': MirrorTarget
   'host/session/model': AcceptedResult
   'host/model-source': HostView
+  'host/ask-user-mode': HostView
   'host/node-install': HostView
   'host/files/list': MirrorFileResult
   'host/files/read': MirrorFileResult
