@@ -13,6 +13,26 @@ This repository is intended to be public on GitHub.
 - When releasing a new version, update the pinned install version in `README.md`, `README.zh.md`, and `packages/local-plugin/README.md`.
 - Do not commit generated `lib/` output, tarballs, local DSH state, or credentials.
 
+## Where to work
+
+**Give a new feature its own worktree when the change is expected to be substantial. Do not pile
+features into the main checkout.** Several half-finished lines of work in one working tree compete for
+the same files, make `git status` unreadable, and force every commit to be sorted out of unrelated
+edits — and this repository's packages reference each other, so a build mid-way through two features
+can look broken for reasons that belong to neither.
+
+The trigger is the expected size, judged before starting:
+
+- **Own worktree** — a feature that touches several packages, changes a protocol or service surface,
+  or will take more than a few commits. `docs/protocol.md` plus `packages/protocol`, both behaviour
+  packages, and tests is the shape that always qualifies.
+- **Main checkout** — a single-file fix, a doc-only change, or a small correction that lands in one
+  commit. Creating a worktree for these costs more than it saves.
+
+Two practical notes. A worktree starts from a commit, so commit (or stash) outstanding work in the
+main checkout first — uncommitted files do not follow you into the new tree. And the existing
+worktrees live under `.agents/worktrees/<name>`, which is where the tooling expects them.
+
 ## Verification commands
 
 Run these before claiming a change works:
@@ -40,6 +60,21 @@ node scripts/test/test-sandbox.mjs
 
 For a real remote test, point a second profile at throwaway directories under `/tmp` and use
 `remoteStart: nohup`; never create test workspaces in a production remote home.
+
+### Prefer the development build on the normal path
+
+When a change has to be exercised end to end, **install the local development build and let it run
+through the ordinary path** rather than hand-placing a tarball on the remote. The maintainer prefers
+this: it tests what users actually get, and it is the only path that catches provisioning behaviour.
+
+This matters because hand deployment is actively misleading here. A connected host's profile depends
+on the packed asset at a fixed path (`$DSH_HOME/waypoint-agent/agent-package.tgz`), and the plugin
+re-provisions that file and reinstalls the profile whenever it reconnects. A manually copied agent
+package is therefore reverted to the locally packed build within a minute, leaving the remote running
+the old version while the operator believes the new one is deployed.
+
+So: build, let the plugin pack and push, and read the version back from the remote's `agent.json`
+before claiming a test result. Anything else risks measuring a build that is not running.
 
 Keep test workspaces (and their sessions) out of the sidebar with the test-only manifest at
 `$DSH_HOME/waypoint/test-visibility.json`. Hide them rather than deleting them, so the data stays
