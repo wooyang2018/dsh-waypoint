@@ -132,9 +132,22 @@ Install the **local** build into the profile the desktop app loads, so the deskt
 meant to test. That is the only arrangement where the pushed and tested agents agree.
 
 ```powershell
-pnpm build && node scripts/release/release-plugin.mjs          # prints the dev tarball path
-dsh plugin --profile desktop add <that path>
+node scripts/dev/install-local.mjs                 # desktop profile
+node scripts/dev/install-local.mjs --profile web   # any other profile
 ```
+
+The script is the only supported way in, and the reason is narrow enough to be worth stating: `dsh
+plugin --profile desktop add` is refused at argument-parse time by `rejectElectronProfile` in the
+launcher, before any install begins. The flag that permits it, `manageDesktopProfile`, is an
+in-process parameter of the exported `runCli`, not a CLI option or an environment variable. The script
+imports that function and passes the flag, so the install runs the Host's own `runProfilePnpm` —
+including the `reconcile` pass that appends the package to `dsh.profile.bundles`.
+
+**Do not reach the same result by editing `~/.dsh/profiles/desktop/package.json` and running `pnpm
+install`.** It appears equivalent and is not: a hand-edited manifest skips that `reconcile` pass, so
+the package is installed but never registered as a bundle. Close the app first either way — a running
+Host holds loaded plugin files open, and pnpm swaps packages by renaming directories, which surfaces
+as an `EPERM` (on Windows, `os error 145`) on some unrelated dependency.
 
 `desktop` is the profile the maintainer's app loads; the same home also holds `web` and `headless`, and
 a package installed into those is invisible to the running app. The symptom of getting this wrong is
