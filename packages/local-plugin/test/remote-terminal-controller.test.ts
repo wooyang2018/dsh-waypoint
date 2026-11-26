@@ -183,6 +183,61 @@ describe('gateway terminal routing', () => {
 
     restore()
   })
+
+  /**
+   * The Gateway does not call a service method on the instance it patched: it
+   * applies it to a per-call view built with `extend({ invocation })`. The stock
+   * `attach` reads `this.ctx.invocation.uplink` for terminal input, so a
+   * delegate that closes over the install-time receiver binds a context where
+   * `invocation` is undefined — and a purely local terminal fails with
+   * "Terminal attachment requires a Remote invocation".
+   *
+   * This test gives the delegate a receiver whose `ctx.invocation` exists and
+   * asserts the local path still reaches it. Capturing `.bind(controller)` at
+   * install time fails here even though every routing assertion above passes.
+   */
+  it('forwards the call-time receiver, so the stock attach still sees its invocation', async () => {
+    const calls: string[] = []
+    // A controller that behaves like the stock one: it needs the call context.
+    const controller: any = {
+      ctx: {},
+      attach(this: any) {
+        const invocation = this.ctx?.invocation
+        if (invocation === undefined) throw new Error('Terminal attachment requires a Remote invocation')
+        calls.push('local:attach:with-invocation')
+        return (async function* () { yield { type: 'state', sequence: 0, writable: true } })()
+      },
+      environment: () => ({ cwd: '/local', maxInputBytes: 1, maxBufferedBytes: 1, maxCols: 80, maxRows: 24, scrollback: 0 }),
+      shells: () => Promise.resolve([]),
+      list: () => [],
+      watch: () => (async function* () { yield [] })(),
+      create: () => Promise.resolve({}),
+      retain: () => (async function* () { yield { type: 'retained' } })(),
+      rename: () => {},
+      close: () => Promise.resolve(),
+      openForAgent: () => Promise.resolve({}),
+      readScreen: () => Promise.resolve({}),
+      inspectActivity: () => Promise.resolve('idle' as const),
+    }
+    const { terminals } = fakeTerminals()
+    const restore = installRemoteTerminalController(
+      { logger: { warn: () => {} } } as never,
+      controller as never,
+      terminals as never,
+    )
+
+    // What `prepareInvocation` hands the method: a view, not the raw instance.
+    const callReceiver = {
+      ctx: { invocation: { uplink: () => (async function* () {})() } },
+      attach: controller.attach,
+    }
+    const frames: any[] = []
+    for await (const frame of callReceiver.attach({ id: 'local' }, 't1', new AbortController().signal)) frames.push(frame)
+
+    assert.deepEqual(calls, ['local:attach:with-invocation'])
+    assert.equal(frames.length, 1)
+    restore()
+  })
 })
 
 describe('terminal patch coverage', () => {

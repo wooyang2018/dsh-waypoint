@@ -34,11 +34,35 @@ import type {
 } from '@deepseek-ai/dsh-api-terminal-controller'
 import type { AgentTerminal, AgentTerminalRequest } from '@deepseek-ai/dsh-api-terminal-controller'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { replaceMethods } from './install.ts'
 import type { RemoteTerminals } from './terminal.ts'
 
 /** The gateway invocation fields the stock attach path uses. */
 interface Invocation {
   uplink?<T>(): AsyncIterable<T>
+}
+
+/**
+ * Call a captured stock method with the *call's* `this`, never one fixed at
+ * install time.
+ *
+ * The Typert Gateway does not call a service method on the instance: it builds a
+ * per-call view with `receiverContext.extend({ invocation })` and applies the
+ * method to that view. `attach` is the method that depends on it — the stock
+ * implementation reads `this.ctx.invocation.uplink` for terminal input — so a
+ * delegate bound with `.bind(controller)` binds the *install-time* context, where
+ * `invocation` is undefined, and a purely local terminal then fails with
+ * "Terminal attachment requires a Remote invocation".
+ *
+ * Forwarding the receiver keeps that per-call context intact while the state
+ * behind it (terminals, config, lifetime) still resolves to the same instance.
+ */
+function delegate<Args extends unknown[], Result>(
+  thisArg: unknown,
+  method: (this: unknown, ...args: Args) => Result,
+  args: Args,
+): Result {
+  return Reflect.apply(method, thisArg, args) as Result
 }
 
 /** Install the mirrored-Session gateway routing; returns its restorer. */
@@ -47,110 +71,105 @@ export function installRemoteTerminalController(
   controller: TerminalController,
   terminals: RemoteTerminals,
 ): () => void {
+  // Captured unbound on purpose: the call-time receiver carries the invocation
+  // the stock implementations need. See `delegate`.
   const original = {
-    environment: controller.environment.bind(controller),
-    shells: controller.shells.bind(controller),
-    list: controller.list.bind(controller),
-    watch: controller.watch.bind(controller),
-    create: controller.create.bind(controller),
-    retain: controller.retain.bind(controller),
-    attach: controller.attach.bind(controller),
-    rename: controller.rename.bind(controller),
-    close: controller.close.bind(controller),
-    openForAgent: controller.openForAgent.bind(controller),
-    readScreen: controller.readScreen.bind(controller),
-    inspectActivity: controller.inspectActivity.bind(controller),
+    environment: controller.environment,
+    shells: controller.shells,
+    list: controller.list,
+    watch: controller.watch,
+    create: controller.create,
+    retain: controller.retain,
+    attach: controller.attach,
+    rename: controller.rename,
+    close: controller.close,
+    openForAgent: controller.openForAgent,
+    readScreen: controller.readScreen,
+    inspectActivity: controller.inspectActivity,
   }
   const isMirror = (agent: Agent): boolean => terminals.isMirrored(String(agent.id))
   const isMirrorSession = (sessionId: SessionId): boolean => terminals.isMirrored(String(sessionId))
 
-  controller.environment = (agent: Agent, signal: AbortSignal): TerminalEnvironment => {
-    signal.throwIfAborted()
-    return isMirror(agent) ? terminals.environment(String(agent.id)) : original.environment(agent, signal)
-  }
-  controller.shells = (agent: Agent, signal: AbortSignal): Promise<TerminalShell[]> => {
-    signal.throwIfAborted()
-    return isMirror(agent) ? Promise.resolve(terminals.shells(String(agent.id))) : original.shells(agent, signal)
-  }
-  controller.list = ((sessionId: SessionId): WebTerminalInfo[] | Promise<WebTerminalInfo[]> =>
-    isMirrorSession(sessionId) ? terminals.list(String(sessionId)) : original.list(sessionId)) as TerminalController['list']
-  controller.create = (agent: Agent, request: TerminalCreateRequest, signal: AbortSignal): Promise<WebTerminalInfo> =>
-    isMirror(agent) ? terminals.create(String(agent.id), request) : original.create(agent, request, signal)
-  controller.watch = (sessionId: SessionId, signal: AbortSignal): AsyncIterable<WebTerminalInfo[]> => {
-    if (!isMirrorSession(sessionId)) return original.watch(sessionId, signal)
-    return watchRemoteTerminals(terminals, String(sessionId), signal,
-      message => ctx.logger.warn('dsh-waypoint: remote terminal roster failed: %s', message))
-  }
-  controller.retain = (sessionId: SessionId, id: WebTerminalId, signal: AbortSignal): AsyncIterable<TerminalRetentionFrame> => {
-    if (!isMirrorSession(sessionId)) return original.retain(sessionId, id, signal)
-    return (async function* () {
+  const replacements: Record<(typeof PATCHED_TERMINAL_METHODS)[number], unknown> = {
+    environment: function (this: TerminalController, agent: Agent, signal: AbortSignal): TerminalEnvironment {
       signal.throwIfAborted()
-      // rc.2 TerminalWindowHold treats an ended retention stream as unavailable.
-      yield { type: 'retained' as const }
-      await holdUntilAborted(signal)
-    })()
-  }
-  controller.attach = function (this: TerminalController, agent: Agent, id: WebTerminalId, signal: AbortSignal): AsyncIterable<TerminalFrame> {
-    if (!isMirror(agent)) return original.attach(agent, id, signal)
-    const invocation = (this as unknown as { ctx?: { invocation?: Invocation } }).ctx?.invocation
-    if (invocation === undefined || invocation.uplink === undefined) throw new Error('Terminal attachment requires a Remote invocation')
-    const uplink = <T>(): AsyncIterable<T> => invocation.uplink!<T>()
-    void (async () => {
-      try {
-        for await (const input of uplink<TerminalInput>()) {
-          await terminals.input(String(id), input)
+      return isMirror(agent) ? terminals.environment(String(agent.id)) : delegate(this, original.environment, [agent, signal])
+    },
+    shells: function (this: TerminalController, agent: Agent, signal: AbortSignal): Promise<TerminalShell[]> {
+      signal.throwIfAborted()
+      return isMirror(agent) ? Promise.resolve(terminals.shells(String(agent.id))) : delegate(this, original.shells, [agent, signal])
+    },
+    list: function (this: TerminalController, sessionId: SessionId): WebTerminalInfo[] | Promise<WebTerminalInfo[]> {
+      return isMirrorSession(sessionId) ? terminals.list(String(sessionId)) : delegate(this, original.list, [sessionId])
+    },
+    create: function (this: TerminalController, agent: Agent, request: TerminalCreateRequest, signal: AbortSignal): Promise<WebTerminalInfo> {
+      return isMirror(agent) ? terminals.create(String(agent.id), request) : delegate(this, original.create, [agent, request, signal])
+    },
+    watch: function (this: TerminalController, sessionId: SessionId, signal: AbortSignal): AsyncIterable<WebTerminalInfo[]> {
+      if (!isMirrorSession(sessionId)) return delegate(this, original.watch, [sessionId, signal])
+      return watchRemoteTerminals(terminals, String(sessionId), signal,
+        message => ctx.logger.warn('dsh-waypoint: remote terminal roster failed: %s', message))
+    },
+    retain: function (this: TerminalController, sessionId: SessionId, id: WebTerminalId, signal: AbortSignal): AsyncIterable<TerminalRetentionFrame> {
+      if (!isMirrorSession(sessionId)) return delegate(this, original.retain, [sessionId, id, signal])
+      return (async function* () {
+        signal.throwIfAborted()
+        // rc.2 TerminalWindowHold treats an ended retention stream as unavailable.
+        yield { type: 'retained' as const }
+        await holdUntilAborted(signal)
+      })()
+    },
+    attach: function (this: TerminalController, agent: Agent, id: WebTerminalId, signal: AbortSignal): AsyncIterable<TerminalFrame> {
+      if (!isMirror(agent)) return delegate(this, original.attach, [agent, id, signal])
+      const invocation = (this as unknown as { ctx?: { invocation?: Invocation } }).ctx?.invocation
+      if (invocation === undefined || invocation.uplink === undefined) throw new Error('Terminal attachment requires a Remote invocation')
+      const uplink = <T>(): AsyncIterable<T> => invocation.uplink!<T>()
+      void (async () => {
+        try {
+          for await (const input of uplink<TerminalInput>()) {
+            await terminals.input(String(id), input)
+          }
+        } catch (error) {
+          ctx.logger.warn('dsh-waypoint: remote terminal uplink failed: %s', String(error))
         }
-      } catch (error) {
-        ctx.logger.warn('dsh-waypoint: remote terminal uplink failed: %s', String(error))
-      }
-    })()
-    return terminals.attach(String(id), signal)
-  }
-  controller.rename = ((agent: Agent, id: WebTerminalId, title: string): void | Promise<void> =>
-    isMirror(agent) ? terminals.rename(String(id), title) : original.rename(agent, id, title)) as TerminalController['rename']
-  controller.close = ((agent: Agent, id: WebTerminalId): Promise<void> =>
-    isMirror(agent) ? terminals.close(String(id)) : original.close(agent, id)) as TerminalController['close']
+      })()
+      return terminals.attach(String(id), signal)
+    },
+    rename: function (this: TerminalController, agent: Agent, id: WebTerminalId, title: string): void | Promise<void> {
+      return isMirror(agent) ? terminals.rename(String(id), title) : delegate(this, original.rename, [agent, id, title])
+    },
+    close: function (this: TerminalController, agent: Agent, id: WebTerminalId): Promise<void> {
+      return isMirror(agent) ? terminals.close(String(id)) : delegate(this, original.close, [agent, id])
+    },
 
-  // Three Agent-facing methods have no remote equivalent, so they are handled
-  // by reporting the gap instead of returning a plausible-looking wrong answer.
-  //
-  // The screen is the reason: the Host renders it from a local `@xterm/headless`
-  // buffer fed by output it owns. A mirrored Session's PTY runs on the other
-  // machine and its frames are not replayed into that buffer, so the stock
-  // implementation would return an empty screen with no error — an Agent that
-  // "read" a blank terminal and concluded the build printed nothing. Refusing is
-  // the honest answer, and `terminal/unavailable` is the code its callers
-  // already handle.
-  controller.openForAgent = ((agent: Agent, request: AgentTerminalRequest, signal: AbortSignal): Promise<AgentTerminal> => {
-    if (!isMirror(agent)) return original.openForAgent(agent, request, signal)
-    return openRemoteAgentTerminal(terminals, String(agent.id), request)
-  }) as TerminalController['openForAgent']
-  controller.readScreen = ((agent: Agent, id: WebTerminalId, request: TerminalScreenRequest): Promise<TerminalScreenPage> => {
-    if (!isMirror(agent)) return original.readScreen(agent, id, request)
-    return Promise.reject(remoteScreenUnavailable(id))
-  }) as TerminalController['readScreen']
-  controller.inspectActivity = ((agent: Agent, id: WebTerminalId): Promise<'idle' | 'busy' | 'unknown'> => {
-    if (!isMirror(agent)) return original.inspectActivity(agent, id)
-    // The contract already admits `unknown` for shells it cannot inspect. A
-    // remote PTY is exactly that case, and answering `unknown` keeps retention
-    // conservative rather than claiming the shell is idle and reclaiming it.
-    return Promise.resolve('unknown')
-  }) as TerminalController['inspectActivity']
-
-  return () => {
-    controller.environment = original.environment
-    controller.shells = original.shells
-    controller.list = original.list
-    controller.create = original.create
-    controller.watch = original.watch
-    controller.retain = original.retain
-    controller.attach = original.attach
-    controller.rename = original.rename
-    controller.close = original.close
-    controller.openForAgent = original.openForAgent
-    controller.readScreen = original.readScreen
-    controller.inspectActivity = original.inspectActivity
+    // Three Agent-facing methods have no remote equivalent, so they are handled
+    // by reporting the gap instead of returning a plausible-looking wrong answer.
+    //
+    // The screen is the reason: the Host renders it from a local `@xterm/headless`
+    // buffer fed by output it owns. A mirrored Session's PTY runs on the other
+    // machine and its frames are not replayed into that buffer, so the stock
+    // implementation would return an empty screen with no error — an Agent that
+    // "read" a blank terminal and concluded the build printed nothing. Refusing is
+    // the honest answer, and `terminal/unavailable` is the code its callers
+    // already handle.
+    openForAgent: function (this: TerminalController, agent: Agent, request: AgentTerminalRequest, signal: AbortSignal): Promise<AgentTerminal> {
+      if (!isMirror(agent)) return delegate(this, original.openForAgent, [agent, request, signal])
+      return openRemoteAgentTerminal(terminals, String(agent.id), request)
+    },
+    readScreen: function (this: TerminalController, agent: Agent, id: WebTerminalId, request: TerminalScreenRequest): Promise<TerminalScreenPage> {
+      if (!isMirror(agent)) return delegate(this, original.readScreen, [agent, id, request])
+      return Promise.reject(remoteScreenUnavailable(id))
+    },
+    inspectActivity: function (this: TerminalController, agent: Agent, id: WebTerminalId): Promise<'idle' | 'busy' | 'unknown'> {
+      if (!isMirror(agent)) return delegate(this, original.inspectActivity, [agent, id])
+      // The contract already admits `unknown` for shells it cannot inspect. A
+      // remote PTY is exactly that case, and answering `unknown` keeps retention
+      // conservative rather than claiming the shell is idle and reclaiming it.
+      return Promise.resolve('unknown')
+    },
   }
+
+  return replaceMethods(controller, replacements)
 }
 
 /**

@@ -834,6 +834,21 @@ installing and sessions still work and only **New terminal** fails.
 `retain` deliberately returns a stream that stays open: rc.2's `TerminalWindowHold` treats a finished hold
 stream as "terminal unavailable".
 
+#### Delegating to a stock method: forward `this`, never `.bind`
+
+The Gateway does not call a patched method on the instance the installer held. `prepareInvocation`
+builds a per-call view — `receiverContext.extend({ invocation })` — and applies the method to *that*.
+The stock `attach` is the one method that reads it, because terminal input arrives as
+`this.ctx.invocation.uplink<TerminalInput>()`.
+
+So a delegate captured as `controller.attach.bind(controller)` freezes the **install-time** context,
+where `invocation` reads `undefined`, and the local branch — the branch that delegates to the stock
+method — throws `Terminal attachment requires a Remote invocation`. That is not a remote-only failure:
+it hits every Session, because a mirrored Session takes the other branch. The installer therefore
+keeps the methods unbound and calls them through `delegate(this, …)`, forwarding whatever receiver the
+Gateway supplied. Service state (`config`, `owners`, `lifetime`) still resolves to the same instance
+through the traceable proxy.
+
 #### Three methods the remote cannot answer
 
 The Host's `TerminalController` exposes twelve methods; nine map onto something the remote PTY can do

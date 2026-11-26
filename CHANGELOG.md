@@ -53,6 +53,15 @@
   loader never retries a miss. Files are re-saved verbatim (same bytes, same content address);
   images are published byte-for-byte under the id their digest names, because an image's id covers an
   object that was already normalized remotely and re-encoding it would change the digest.
+- **A local terminal no longer fails with "Terminal attachment requires a Remote invocation".** The
+  gateway terminal adapter captured each stock method with `.bind(controller)`, which freezes the
+  `this` of *install time*. The Typert Gateway never calls a service method on the instance: it builds
+  a per-call view with `receiverContext.extend({ invocation })`, and the stock `attach` reads
+  `this.ctx.invocation.uplink` from it. So the bound delegate saw a context with no invocation and
+  threw — for **every** Session, local ones included, since the local branch is exactly the one that
+  delegated to the stock method. The delegates now forward the call-time receiver, and restore goes
+  through `remote/install.ts` so unload puts the instance back. The regression test asserts a local
+  `attach` reaches an invocation-carrying receiver; it fails on the previous code.
 
 ### Added
 
