@@ -256,6 +256,10 @@ node scripts/test/test-sandbox.mjs
     mirrorPollMs: 1500
     mirrorMaxEvents: 2000
 
+    # 镜像会话的 `/` 菜单与命令执行是否由远端作答。设为 `false` 时菜单交回本机组合。
+    mirrorRemoteCatalog: true
+    mirrorCommandTimeoutMs: 120000
+
     # 点击转发 dev server 端口的总开关。设为 `false` 时，影子会话里的回环链接
     # 会按原样导航。
     portForwarding: true
@@ -348,6 +352,8 @@ dsh-remote-local-plugin`），避免同时出现两个设置分区；再按 `doc
 - [Wire protocol](docs/protocol.md)
 - [远程工作区原理](docs/remote-workspace-mechanism.zh.md)——远端目录如何变成侧边栏里的工作区：
   发现、隧道、会话镜像、文件与终端路由（英文正文：[remote-workspace-mechanism.md](docs/remote-workspace-mechanism.md)）
+- [镜像会话的远端目录](docs/specs/2026-11-26-remote-catalog-bridge.md)——镜像会话里 `/` 命令、
+  技能与命令执行的设计（英文）
 - [Operations guide](docs/operations.md)
 - [Development](docs/development.md)
 - [Testing](docs/testing.md)

@@ -291,6 +291,11 @@ implements only the methods the UI actually calls (`RemoteMirrorAgent` in `servi
 controller, sidebar, and composer treat it as an ordinary Agent. `inject()` is an empty implementation —
 remote context injection is not part of the mirror protocol yet.
 
+The façade also carries **no preset binding**: it is created with `createScope(ctx, this)` and never
+joins an `agentPresets` generation. Everything the Web surface mounts per Agent — `command-goal`,
+`command-compact`, `plan-mode`, `skill-filesystem` — is therefore registered into scoped layers this
+Agent's scope chain does not reach, which is what §6.6 exists to fill.
+
 ### 5.4 Downward: prompts, model, cancel
 
 `#sendPrompt` is the single exit that carries local input to the remote (`#sendPrompt` in `service.ts`):
@@ -477,6 +482,49 @@ reconciliation used to rebuild its projection on every launch; that is the whole
 mirror record points at an archived local Session (`#archivedMirror`). Nothing is deleted: the record
 and its log stay, so unarchiving restores the conversation, and old records archived before this
 behaviour existed need no migration — they are simply left alone.
+
+### 5.8 Compaction: how the card is rebuilt
+
+`/compact` in a mirrored Session used to render its command row and no compaction card. The card is
+now rebuilt from replayed evidence; this section records what had to change and what still does not
+cross.
+
+**What a compaction transaction looks like remotely.** `compaction-basic` writes five events: a
+`compaction/start` lock, a `compaction/summary` carrying the summary text and token accounting, a
+`user/message` whose `surfaceOp` is `{ op: 'replace', startSeq, endSeq }` covering the compacted span
+and whose `source.kind` is `'compact-checkpoint'`, then `compaction/end`. The chat command node reads
+that replacement message through `compactSource` to build the card, and the settlement's
+`sourceEventSeq` points at the summary.
+
+**What crosses, and what does not.**
+
+| Remote event | Local | Why |
+|---|---|---|
+| `compaction/start`, `compaction/end` | dropped | They are the *remote* compaction lock. A local copy would imply a transaction this log cannot run. |
+| `compaction/summary` | replayed, `rawOutput` reduced to its `reasoning` blocks | `summary` already *is* the text: the default backend projects `rawOutput` onto its text blocks. The blocks it drops are the ones worth forwarding, and only `reasoning` has a reader — the trajectory panel draws the compaction's thinking from it. When no reasoning survives, `rawOutput` and its `llmStreamCall` discriminator both go, because a summary claiming a stream call with no output is the shape the format validator rejects. |
+| the checkpoint `user/message` | replayed as a replacement | It is a real surface replacement, not injection. The old rule — `source.kind !== 'user'` ⇒ drop — was written for `runtime-context.ts`, which injects with the *same* `surfaceOp` shape, and it caught the checkpoint with it. |
+| injected context (instructions, runtime context, skill catalog) | dropped | Unchanged. They would corrupt the local prompts' provenance. |
+
+**The defect that had to be fixed first.** `remapRemoteEvent` translated `sourceEventSeqs` but passed
+`event.surfaceOp` through untouched, so a replacement range stayed in *remote* numbering. The branch
+had never executed against real data, because no replacement event survived the old filter — which is
+exactly why it was wrong for months without anyone noticing. `localSpan` now computes the span in local
+numbering and `remapRemoteEvent` writes those bounds.
+
+**Why the span is an intersection, not an endpoint pair.** A remote compaction range is a span of the
+remote surface, and its endpoints are ordinary surface events — including the injected messages a
+mirror does not reproduce. Requiring both endpoints to be mapped would drop the card whenever a
+compaction happened to cut at one, which is a common boundary rather than a corner case. So the shadow
+is taken over the mapped events *inside* the range. A disjoint range means the mirror holds none of
+that history, and only then is the checkpoint dropped rather than appended — appending it would make
+`compactSource` stop recognising it while the message node started rendering the summary as an ordinary
+user bubble, which is worse than the command row alone.
+
+**Seed versus streaming.** A snapshot window may start in the middle of a replacement chain, so
+`toSeedEvent` appends every replacement — except a checkpoint, which would then stop being a
+replacement. A checkpoint whose span the window still holds is placed; one whose span it lost is
+dropped, so a mirror opened long after the compaction shows the command row. The streaming path
+(`#appendEvent`) is the one a live `/compact` takes, and it places the checkpoint from the runtime's map.
 
 ## 6. Files and terminals: two adapters that pick an outlet per session
 
@@ -709,8 +757,62 @@ The `AgentTerminal` returned by `openForAgent` wires the members with a remote m
 (`@deepseek-ai/dsh-api-terminal-controller/typert`). A DSH release that adds a terminal method fails
 that test instead of quietly serving the new method from the local PTY.
 
-### 6.5 Ports: making a remote dev server reachable
+### 6.6 The `/` menu: commands and skills come from the remote composition
 
+A mirrored Session's `/` menu was empty of everything preset-owned, and the reason is structural. The
+browser reads the catalog through `ctx.remote.commands.list(sessionId)` and `ctx.remote.skills.list`,
+both of which resolve to **local** Host services backed by scoped registry layers
+(`ScopedLayers.merge` in `@deepseek-ai/dsh-scope`). A mirror façade Agent joins no preset generation
+(§5.3), and the Web surface keeps `command-goal`, `command-compact`, `plan-mode` and `skill-filesystem`
+off the host plane so only a preset mounts them — so those layers hold nothing for a mirror.
+
+The registrations exist only inside the remote Agent's composition, which is exactly what
+`installRemoteCatalog` (`src/remote/catalog.ts`) forwards to. The adapter replaces three instance
+methods, and it can do so for the reason §6.2 already states: the Typert Gateway resolves a Remote
+method per call, so an own property on the service instance shadows the prototype implementation for
+every caller.
+
+| Patched method | Mirror behaviour |
+|---|---|
+| `commands.list(agent)` | `POST /catalog/commands` for the address `mirrors.catalogAddressFor(sessionId)` returns |
+| `commands.execute(agent, line, attachments, signal)` | `POST /commands/execute`, then the settled `{commandId, result}` |
+| `sessionSkillCatalog.list({sessionId}, signal)` | `POST /catalog/skills` |
+
+`commands.list`'s parameter is nominally an `Agent`, but only its `id` is read: the decision is a mirror
+lookup, not an identity comparison.
+
+**Two addressing modes, and one asymmetry.** A materialized mirror names its remote Session, and the
+remote derives the cwd and preset from its own observation — the same source `SessionSkillCatalog` uses
+for the local answer, so the two catalogs cannot disagree about project roots. A **draft** mirror names
+its preset and the remote root instead, and the remote resolves that preset's standing composition
+through `agentPresets.acquireScope` *without creating anything*: opening a `/` menu must not create a
+Session on the other machine. Execution is the exception — `commands.execute` appends the
+`command/run`/`command/done` lifecycle to the Session, so `remoteSessionForCommand` materializes the
+draft first, which is the same act as sending its first message.
+
+**Execution really happens remotely.** The remote runs its own definition and writes the lifecycle into
+its own log; both events return through §5.5 and `dsh-client-ui-chat`'s command node renders them, so
+the local side synthesizes nothing. Two local rules apply:
+
+- `export` and `feedback` stay local. `/export`'s browser half listens on `command/executed` and
+  downloads by the **local** session id, while the remote handler only answers `REQUESTED`; forwarding
+  it would log the command on the remote and then download the wrong log.
+- A `command/done`'s `sourceEventSeq` is in the *remote* numbering, and the command node adopts it as
+  the event it follows, so `remapRemoteEvent` rewrites it into this log and drops it when the target is
+  unknown (`commandDoneData` in `mirror/service.ts`). Passing it through unchanged made a command cite
+  whatever local event happened to carry that seq.
+
+**Attachments take the prompt's route.** A command attachment is the same problem §5.4 describes: an
+image already arrives as base64, while a `file` is a receipt that cannot cross machines, so the bytes
+travel and the remote re-stages them with its own receipt before `commands.execute` sees them.
+
+**What degrades, and how.** A remote agent without `session.catalog` leaves all three methods
+answering locally — the old behaviour, not an empty menu or an error. Without `session.command`,
+execution delegates, so `/export` and `/feedback` still work. `mirrorRemoteCatalog: false` disables the
+forwarding entirely. A failed catalog read also falls back rather than turning a discovery surface into
+an error popup.
+
+### 6.5 Ports: making a remote dev server reachable
 A dev server on a remote workspace is the one thing this plugin cannot route the way it routes files,
 terminals and Git, so it is worth stating why — and what it does instead.
 
@@ -930,6 +1032,9 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | A remote dev server is reachable but still refuses to render in the sidebar | The stock browser's iframe policy (`X-Frame-Options`, mixed content) is unchanged by a forward (6.5) |
 | A published port disappears after a restart or reconnect | The set is memory-only; the next click republishes (6.5) |
 | A scheme-less address in plain text cannot be clicked | The interceptor reads `a[href]`; rewriting transcript text to add links was rejected (6.5) |
+| A mirror's `/` menu is empty when the remote agent predates `session.catalog` | The catalog is negotiated by capability, so an older agent keeps the local answer instead of an empty menu (6.6) |
+| A forwarded command's result may arrive after its request reports a timeout | The handler may legitimately run for minutes; the settlement still arrives through the mirrored log (6.6) |
+| A compacted mirror shows the command row but no compaction card | Only when the window lost the checkpoint's span, or the remote agent predates it: `isMirrorNoise` now replays the checkpoint and the summary, and a card that cannot be placed degrades to the command row (§5.8) |
 
 ## 10. Where to start when you want to change something
 
@@ -942,6 +1047,8 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | Remote events → local session | `#appendEvent`, `toSeedEvent`, `isMirrorNoise` |
 | Adding a remote capability | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
 | File/terminal routing | `src/remote/files.ts`, `src/remote/terminal-controller.ts` |
+| The `/` menu and command execution in a mirror | `src/remote/catalog.ts`, `packages/remote-agent/src/catalog.ts`, `catalogAddressFor` in `src/mirror/service.ts` (6.6) |
+| Whether a mirrored command row shows a compaction card | `isCompactionCheckpoint` / `localSpan` in `src/mirror/service.ts`; the order matters — the `surfaceOp` remap comes first (5.8) |
 | Remote dev-server ports | `src/client/link-forwarding.ts` (the click), `src/client/loopback-url.ts` (which addresses count), `publishPort` in `src/service.ts`, `host/ports/publish` in `src/host-api/` |
 | Settings page behaviour | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
 

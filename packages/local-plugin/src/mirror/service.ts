@@ -2262,6 +2262,80 @@ export class RemoteMirrorService {
     return presets?.defaultId
   }
 
+  /**
+   * Resolve the remote composition a mirrored Session's catalogs answer from.
+   *
+   * A materialized mirror names its remote Session, and the remote derives the
+   * rest from its own observation — its working directory, its preset, and the
+   * scoped layers that preset mounted. That is the whole point of forwarding:
+   * the local side cannot reproduce those layers, so it must not try to guess
+   * them either.
+   *
+   * A blank mirror names no Session, because none exists until the first prompt.
+   * It answers with the preset the draft will be created with plus the remote
+   * root, which lets the remote resolve that preset's standing composition
+   * *without* creating anything: reading a `/` menu must not make a Session on
+   * the other machine.
+   *
+   * @param localSessionId - candidate local Session id.
+   * @returns the host plus one addressing mode, or undefined when this is not a mirror.
+   */
+  catalogAddressFor(localSessionId: string): {
+    readonly hostId: string
+    readonly remoteSessionId?: string
+    readonly agentPreset?: string
+    readonly cwd?: string
+  } | undefined {
+    const record = Object.values(this.#state.sessions)
+      .find(entry => entry.localSessionId === localSessionId)
+    if (record !== undefined) {
+      // `remoteSessionId` is assigned at creation and never cleared, so a live
+      // mirror always has one; the guard keeps a half-built record from asking
+      // the remote for a Session it cannot name.
+      if (record.remoteSessionId === undefined || record.remoteSessionId === '') return undefined
+      return { hostId: record.hostId, remoteSessionId: record.remoteSessionId }
+    }
+    const pending = this.#pendingBlanks.get(localSessionId)
+    if (pending === undefined) return undefined
+    // A blank that already materialized has a remote Session and is really the
+    // live case; answering the draft form instead would read the default preset
+    // rather than the one actually running.
+    if (pending.remoteSessionId !== undefined && pending.remoteSessionId !== '') {
+      return { hostId: pending.hostId, remoteSessionId: pending.remoteSessionId }
+    }
+    const preset = this.#agentPresetFor(pending.session) ?? this.#defaultAgentPreset()
+    return {
+      hostId: pending.hostId,
+      ...preset === undefined ? {} : { agentPreset: preset },
+      cwd: pending.remoteRoot,
+    }
+  }
+
+  /**
+   * Return the remote Session id behind a mirror, creating it when the mirror is
+   * still a draft.
+   *
+   * A forwarded command needs this where a catalog read does not: the command
+   * registry appends its `command/run`/`command/done` lifecycle to the Session,
+   * so there must be a Session to append to. Materializing here is the same act
+   * as sending the draft's first message, which is exactly what the user did by
+   * invoking a command.
+   *
+   * @param localSessionId - mirrored Session, draft or materialized.
+   * @returns the remote Session id.
+   * @throws when the Session is not a mirror or the host is not connected.
+   */
+  async remoteSessionForCommand(localSessionId: string): Promise<string> {
+    const live = this.catalogAddressFor(localSessionId)
+    if (live === undefined) throw new Error('this Session is not a remote mirror')
+    if (live.remoteSessionId !== undefined) return live.remoteSessionId
+    const pending = this.#pendingBlanks.get(localSessionId)
+    if (pending === undefined) throw new Error('this Session is not a remote mirror')
+    await this.materializeBlank(pending)
+    const created = this.catalogAddressFor(localSessionId)?.remoteSessionId
+    if (created === undefined) throw new Error('the remote Session could not be created')
+    return created
+  }
   /** Log a lazy materialization failure without turning the blank Session into a local run. */
   reportBlankFailure(agent: LazyRemoteMirrorAgent, error: unknown): void {
     this.#ctx.logger.warn('dsh-waypoint: could not start remote Session for %s: %s', agent.id, String(error))

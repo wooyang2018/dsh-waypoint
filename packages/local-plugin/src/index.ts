@@ -20,8 +20,9 @@ import { installRemoteSandboxPolicy } from './remote/sandbox-policy.ts'
 import { installRemoteFileSystem } from './remote/fs.ts'
 import { installRemoteSubprocess } from './remote/subprocess.ts'
 import { installRemoteWorkspaceChanges, prefetchChangesSummary, RemoteChangesCache } from './remote/workspace-changes.ts'
-import { checkPatchContract, describePatchContract } from './remote/patch-contract.ts'
+import { checkPatchContract, describePatchContract, REQUIRED_COMMAND_METHODS, REQUIRED_SKILL_CATALOG_METHODS } from './remote/patch-contract.ts'
 import { installRemoteTerminalController } from './remote/terminal-controller.ts'
+import { installRemoteCatalog } from './remote/catalog.ts'
 import { RemoteTerminals } from './remote/terminal.ts'
 import { RemoteHostsService } from './service.ts'
 import { installRemoteToolGuards, registerRemoteTools } from './tools.ts'
@@ -149,6 +150,34 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
     },
     'dsh-waypoint: authenticated host API',
   )
+
+  // A mirrored Session's `/` menu and its command execution are answered by the
+  // local Host's `commands` and `sessionSkillCatalog` Remotes, but the layers
+  // that populate them belong to the remote composition: the Web bundle keeps
+  // the preset-owned command and skill rows off the host plane. Both adapters
+  // therefore forward to the host that actually runs the Session.
+  //
+  // Each service gets its own `inject` because either may mount before or after
+  // this plugin does. Each install names exactly one service, so the two can
+  // never patch the same method twice and nest their calls.
+  for (const [serviceName, methods, what] of [
+    ['commands', REQUIRED_COMMAND_METHODS, 'command'],
+    ['sessionSkillCatalog', REQUIRED_SKILL_CATALOG_METHODS, 'skill'],
+  ] as const) {
+    ctx.inject([serviceName], child => {
+      child.effect(() => {
+        const target = child.get(serviceName)
+        if (target !== undefined && !checkPatchContract(target, methods).active) {
+          ctx.logger.warn(
+            'dsh-waypoint: remote %s catalog is inactive; a mirrored Session offers only this host\'s own %ss',
+            what,
+            what,
+          )
+        }
+        return installRemoteCatalog(child, mirrors, service, resolved, serviceName)
+      }, `dsh-waypoint: remote ${what} catalog`)
+    })
+  }
 
   installRemoteToolGuards(ctx)
   ctx.inject(['tools'], child => {

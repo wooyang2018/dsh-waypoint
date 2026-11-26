@@ -77,6 +77,10 @@ export class FakeRemoteHost {
   failPromptText: string | undefined
   /** Terminals created through the agent API, for assertions. */
   readonly terminalCreates: Array<{ readonly id: string; readonly cwd: string; readonly title?: string; readonly shellPath?: string }> = []
+  /** Catalog reads accepted by this fake host, in order, for assertions. */
+  readonly catalogRequests: Array<{ readonly sessionId?: string; readonly agentPreset?: string; readonly cwd?: string }> = []
+  /** Command executions accepted by this fake host, for assertions. */
+  readonly commandRequests: Array<{ readonly sessionId: string; readonly line: string; readonly attachments: readonly unknown[] }> = []
   /** Input/resize commands accepted by the fake PTYs, for assertions. */
   readonly terminalInputs: Array<{ readonly id: string; readonly input: RemoteTerminalInput }> = []
   /** Terminals closed through the agent API, for assertions. */
@@ -287,6 +291,51 @@ export class FakeRemoteHost {
             this.#getSession(route.sessionId)
             sendJson(res, { accepted: true })
             return
+          case 'catalog-commands': {
+            const record = body as { sessionId?: unknown; agentPreset?: unknown; cwd?: unknown }
+            this.catalogRequests.push({
+              ...typeof record.sessionId === 'string' ? { sessionId: record.sessionId } : {},
+              ...typeof record.agentPreset === 'string' ? { agentPreset: record.agentPreset } : {},
+              ...typeof record.cwd === 'string' ? { cwd: record.cwd } : {},
+            })
+            sendJson(res, { commands: this.#fixtures.commands })
+            return
+          }
+          case 'catalog-skills': {
+            const record = body as { sessionId?: unknown; agentPreset?: unknown; cwd?: unknown }
+            this.catalogRequests.push({
+              ...typeof record.sessionId === 'string' ? { sessionId: record.sessionId } : {},
+              ...typeof record.agentPreset === 'string' ? { agentPreset: record.agentPreset } : {},
+              ...typeof record.cwd === 'string' ? { cwd: record.cwd } : {},
+            })
+            sendJson(res, { skills: this.#fixtures.skills })
+            return
+          }
+          case 'command-execute': {
+            const record = body as { sessionId?: unknown; line?: unknown; attachments?: unknown }
+            if (typeof record.sessionId !== 'string' || typeof record.line !== 'string') {
+              throw new RemoteProtocolError({ code: 'request/invalid', message: 'sessionId and line are required' })
+            }
+            this.commandRequests.push({
+              sessionId: record.sessionId,
+              line: record.line,
+              attachments: Array.isArray(record.attachments) ? record.attachments : [],
+            })
+            // A line naming no fake command is the admission miss the local
+            // adapter has to pass through as `undefined`.
+            const name = record.line.trim().replace(/^\//u, '').split(/\s/u)[0] ?? ''
+            if (!this.#fixtures.commands.some(command => command.name === name)) {
+              sendJson(res, { kind: 'unknown' })
+              return
+            }
+            const commandId = `command-${this.commandRequests.length}`
+            sendJson(res, {
+              kind: 'settled',
+              commandId,
+              result: { kind: 'success', text: `${name} settled` },
+            })
+            return
+          }
           case 'approval-answer': {
             const record = body as { id?: unknown; outcome?: unknown }
             const outcomes: readonly ApprovalOutcome[] = ['allowed-once', 'rejected', 'cancelled', 'unavailable']
@@ -454,6 +503,15 @@ export class FakeRemoteHost {
           res.on('close', cleanup)
           return
         }
+        default:
+          // Every POST-only route lands here. Without it the request had no
+          // response at all and the client waited for its timeout, which reads
+          // as a hung agent rather than a wrong method.
+          throw new RemoteProtocolError({
+            code: 'request/invalid',
+            message: `${route.kind} does not accept GET`,
+            httpStatus: 405,
+          })
       }
     } catch (error) {
       if (res.headersSent) {

@@ -4,6 +4,35 @@
 
 ### Fixed
 
+- **A mirrored `/compact` now shows its compaction card.** The card is built from two pieces of remote
+  evidence, and both were being filtered as "not the conversation": the `compaction/summary` carrying
+  the text and token accounting, and the `user/message` whose `surfaceOp` replaces the compacted span.
+  The second one was collateral damage — the rule that drops injected context (`source.kind !== 'user'`)
+  caught the checkpoint too, although a checkpoint is a real surface replacement rather than injection.
+  The summary is now replayed with its `rawOutput` reduced to the `reasoning` blocks — the summary
+  text is already a projection of the rest, and the thinking is the only part with a reader (the
+  trajectory panel) — while the checkpoint is replayed as a replacement, and the remote
+  `compaction/start`/`compaction/end` pair is still dropped because a local copy of the remote lock
+  would imply a transaction this log cannot run.
+- **A replacement range crossing into a mirrored Session kept the remote numbering.** `remapRemoteEvent`
+  translated `sourceEventSeqs` but passed `event.surfaceOp` through untouched, so replaying a
+  replacement deleted whatever local events happened to carry those seqs. The branch had never executed
+  against real data — every replacement event was filtered — which is why it was wrong for months
+  without a symptom. The span is now computed over the part of the range this log actually holds, so a
+  compaction whose boundary falls on an unreproduced injected message still places instead of vanishing.
+
+- **A mirrored Session's `/` menu now offers the remote agent's own commands and skills.** The menu is
+  served by Host services backed by scoped registry layers, and a mirror's Agent façade joins no Agent
+  preset — so `/goal`, `/compact`, `/plan` (which the Web surface keeps off the host plane and mounts
+  inside a preset) and the project's skills were simply absent. Both catalogs and command execution are
+  now answered by the host that runs the Session: `commands.list`, `commands.execute` and
+  `sessionSkillCatalog.list` forward for a mirrored Session and delegate unchanged for everything else.
+  A draft mirror answers through its preset without creating a remote Session; executing a command
+  materializes one first, because the registry logs its lifecycle there.
+- **A command run in a mirrored Session now renders where it belongs.** The remote's `command/done`
+  carries `sourceEventSeq` in the remote numbering, and the chat command node adopts that value as the
+  event it follows, so an unremapped citation pointed at whatever local event happened to carry that
+  seq. The mirror now rewrites it into its own log and drops it when the target is unknown.
 - **An attachment sent from a mirrored Session now reaches the remote Session.** A file was dropped
   silently: `promptParts` recognised only `text` and `image`, so a file-only prompt returned before
   anything was sent and a mixed prompt arrived without it. The local transcript had already shown the
@@ -30,6 +59,15 @@
 - `session.file-attachment` and `attachment.read` capabilities, plus `POST /attachments/read`, so a
   client can tell before sending whether a host can carry attachments in either direction. An older
   agent is refused with a Reinstall instruction rather than a silent drop.
+- `session.catalog` and `session.command` capabilities, plus `POST /catalog/commands`,
+  `POST /catalog/skills` and `POST /commands/execute`. Each is separate because they fail differently:
+  an agent without the catalogs keeps its local answer, while an agent without command execution
+  delegates execution instead of accepting a line it cannot run. Both catalog routes accept either a
+  Session id or a draft's `{ agentPreset, cwd }`, so a mirrored conversation shows a populated menu
+  before its first message.
+- `mirrorRemoteCatalog` (default on) and `mirrorCommandTimeoutMs` (default 120 s). A command handler
+  may legitimately run for minutes — `/compact` performs a summarization call — so the request timeout
+  that suits a metadata read would report a failure for work still in progress.
 - `RemoteMirrorService.forwardedSelection`, the model a mirror would forward for one local Session.
   It exists because the Agent façade can no longer answer that question, and it is what the
   model-selection tests now assert on.

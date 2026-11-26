@@ -85,6 +85,17 @@ export interface Config {
   readonly mirrorPollMs?: number
   /** Maximum remote events replayed when a mirror is created. */
   readonly mirrorMaxEvents?: number
+  /**
+   * Answer a mirrored Session's `/` menu and command execution from its host.
+   *
+   * On by default: without it a mirror's menu offers only the commands the local
+   * host-plane composition happens to carry, which for the Web surface is
+   * nothing preset-specific. Turn it off to compare against stock behaviour, or
+   * when a host must not receive command traffic at all.
+   */
+  readonly mirrorRemoteCatalog?: boolean
+  /** Request timeout for one forwarded command, which may legitimately run for minutes. */
+  readonly mirrorCommandTimeoutMs?: number
 }
 
 /** Loader-validated schema. */
@@ -122,6 +133,8 @@ export const Config: z<Config> = z.object({
   portForwarding: z.boolean().default(true),
   mirrorPollMs: z.number().min(500).max(30_000).default(1_500),
   mirrorMaxEvents: z.number().min(100).max(10_000).default(2_000),
+  mirrorRemoteCatalog: z.boolean().default(true),
+  mirrorCommandTimeoutMs: z.number().min(1_000).max(1_800_000).default(120_000),
 })
 
 /** How the remote DSH web host is supervised after provisioning. */
@@ -167,6 +180,8 @@ export interface ResolvedConfig {
   readonly portForwarding: boolean
   readonly mirrorPollMs: number
   readonly mirrorMaxEvents: number
+  readonly mirrorRemoteCatalog: boolean
+  readonly mirrorCommandTimeoutMs: number
 }
 
 /** DSH home. */
@@ -263,5 +278,7 @@ export function resolveConfig(config: Config = {}, env: NodeJS.ProcessEnv = proc
     portForwarding: config.portForwarding ?? true,
     mirrorPollMs: config.mirrorPollMs ?? 1_500,
     mirrorMaxEvents: config.mirrorMaxEvents ?? 2_000,
+    mirrorRemoteCatalog: config.mirrorRemoteCatalog ?? true,
+    mirrorCommandTimeoutMs: config.mirrorCommandTimeoutMs ?? 120_000,
   }
 }

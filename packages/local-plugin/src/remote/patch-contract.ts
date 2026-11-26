@@ -95,6 +95,24 @@ export const REQUIRED_WORKSPACE_CHANGES_METHODS = ['summary', 'diff'] as const
  */
 export const REQUIRED_WORKSPACE_REGISTRY_METHODS = ['archiveSession', 'unarchiveSession'] as const
 
+/**
+ * The `commands` methods the remote catalog bridge replaces.
+ *
+ * `list` and `execute` are the two halves of the browser's command surface: the
+ * menu reads the first and a submission calls the second. Both are required
+ * because forwarding one without the other produces a menu whose entries cannot
+ * run — which reads to a user as a broken command, not as a degraded mirror.
+ */
+export const REQUIRED_COMMAND_METHODS = ['list', 'execute'] as const
+
+/**
+ * The `sessionSkillCatalog` method the skill catalog bridge replaces.
+ *
+ * The service owns the `skills` Remote namespace, so this is the single method
+ * the `/` menu's skill source calls.
+ */
+export const REQUIRED_SKILL_CATALOG_METHODS = ['list'] as const
+
 /** One expected method the service did not offer. */
 export interface MissingPatchMethod {
   readonly method: string

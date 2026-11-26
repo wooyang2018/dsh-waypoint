@@ -20,7 +20,8 @@
     "release:preflight": "node scripts/release/release-preflight.mjs",
     "release:publish": "node scripts/release/publish-local.mjs",
     "release:publish:dry": "node scripts/release/publish-local.mjs --dry-run",
-    "test:e2e": "pnpm build && node scripts/build/package-agent.mjs && node scripts/test/test-e2e.mjs"
+    "test:e2e": "pnpm build && node scripts/build/package-agent.mjs && node scripts/test/test-e2e.mjs",
+    "test:e2e:attachments": "node scripts/test/extract-dsh-modules.mjs && pnpm -F dsh-waypoint exec node --import tsx test-e2e/command-attachments.e2e.ts ../../test-results/e2e/node_modules"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",

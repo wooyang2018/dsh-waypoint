@@ -34,12 +34,45 @@ interface FixtureAgent {
   model: { current(): FixtureSelection; select(selection: FixtureSelection): void }
 }
 
+/**
+ * One appended event as this double records it.
+ *
+ * The placement members are optional because most events append, but a
+ * replacement's range is the whole subject of the compaction tests: without
+ * them here, `appendRemoteEvent` would look like it had discarded the range and
+ * every assertion about it would pass vacuously.
+ */
+interface RecordedEvent {
+  seq: number
+  type: string
+  data: unknown
+  surfaceOp?: 'append' | { op: 'replace'; startSeq: number; endSeq: number }
+  sourceEventSeqs?: readonly number[]
+}
+
 interface FakeSession {
   id: string
   header: Record<string, unknown>
   seq: number
-  append(type: string, data: unknown): number
-  snapshotEvents(): Array<{ seq: number; type: string; data: unknown }>
+  append(
+    type: string,
+    data: unknown,
+    opts?: {
+      surfaceOp?: RecordedEvent['surfaceOp']
+      sourceEventSeqs?: readonly number[]
+    },
+  ): number
+  /**
+   * Plugin-record append, mirroring the real `Session` contract.
+   *
+   * `appendPluginRecord` reaches a `#appendRecord` private and therefore requires
+   * a real `Session` instance, which this fake is not. The mirror writes its
+   * log-gap markers through that API, so the fake has to honour the same shape —
+   * otherwise the only way to observe a marker in a test would be to stop
+   * writing one.
+   */
+  appendRecord(type: string, data: unknown): number
+  snapshotEvents(): RecordedEvent[]
 }
 
 interface Summary {
@@ -57,7 +90,13 @@ interface Snapshot {
   cursor: number
   live: boolean
   truncated: boolean
-  events: Array<{ seq: number; type: string; data?: unknown }>
+  events: Array<{
+    seq: number
+    type: string
+    data?: unknown
+    surfaceOp?: RecordedEvent['surfaceOp']
+    sourceEventSeqs?: readonly number[]
+  }>
 }
 
 const tempDirs: string[] = []
@@ -67,7 +106,16 @@ after(async () => {
 })
 
 function session(id: string, meta: Record<string, unknown>, seed: Snapshot['events'] = []): FakeSession {
-  const events = seed.map((event, index) => ({ seq: index, type: event.type, data: event.data ?? {} }))
+  // Seed events carry their placement: a replacement's range is what a seeded
+  // checkpoint is placed by, and dropping it here would make the seed path look
+  // like it had appended something it actually replaced.
+  const events: RecordedEvent[] = seed.map((event, index) => ({
+    seq: index,
+    type: event.type,
+    data: event.data ?? {},
+    ...event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp },
+    ...event.sourceEventSeqs === undefined ? {} : { sourceEventSeqs: event.sourceEventSeqs },
+  }))
   const record: FakeSession = {
     id,
     header: {
@@ -81,20 +129,21 @@ function session(id: string, meta: Record<string, unknown>, seed: Snapshot['even
       ...meta.origin === undefined ? {} : { origin: meta.origin },
     },
     seq: events.length,
-    append(type, data) {
+    append(type, data, opts) {
       const seq = record.seq
-      events.push({ seq, type, data })
+      events.push({
+        seq,
+        type,
+        data,
+        ...opts?.surfaceOp === undefined ? {} : { surfaceOp: opts.surfaceOp },
+        ...opts?.sourceEventSeqs === undefined ? {} : { sourceEventSeqs: opts.sourceEventSeqs },
+      })
       record.seq += 1
       return seq
     },
     /**
-     * Plugin-record append, mirroring the real `Session` contract.
-     *
-     * `appendPluginRecord` reaches a `#appendRecord` private and therefore
-     * requires a real `Session` instance, which this fake is not. The mirror
-     * writes its log-gap markers through that API, so the fake has to honour
-     * the same shape — otherwise the only way to observe a marker in a test
-     * would be to stop writing one.
+     * See {@link FakeSession.appendRecord}: this stands in for the real
+     * private that `appendPluginRecord` reaches.
      */
     appendRecord(type, data) {
       const seq = record.seq
@@ -183,9 +232,12 @@ export function harness() {
       assert.equal(sessions.has(id), false, `session ${id} created twice`)
       const created = session(id, options.meta ?? {}, options.seed)
       const append = created.append
-      created.append = (type, data) => {
-        const seq = append(type, data)
-        ctx.emit('session/event' as never, created as never, { type, data, seq } as never)
+      // The wrapper must forward `opts`: a replacement's `surfaceOp` travels
+      // there, and dropping it made every placement assertion read an appended
+      // event while the mirror had actually replaced a span.
+      created.append = (type, data, opts) => {
+        const seq = append(type, data, opts)
+        ctx.emit('session/event' as never, created as never, { type, data, ...opts ?? {}, seq } as never)
         return seq
       }
       sessions.set(id, created)

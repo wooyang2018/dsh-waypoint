@@ -47,6 +47,18 @@ export type {
 export type { RemoteGitRequest, RemoteGitResult } from './git.ts'
 export { isRemoteGitResult } from './git.ts'
 export type {
+  RemoteCatalogRequest,
+  RemoteCommandAttachment,
+  RemoteCommandCatalogResult,
+  RemoteCommandDescriptor,
+  RemoteCommandExecuteRequest,
+  RemoteCommandExecuteResult,
+  RemoteCommandInput,
+  RemoteCommandOutcome,
+  RemoteSkillCatalogResult,
+  RemoteSkillEntry,
+} from './catalog.ts'
+export type {
   RemoteChangesDiffRequest,
   RemoteChangesSummaryRequest,
   RemoteWorkspaceChangedFile,
@@ -155,6 +167,10 @@ export {
   isListWorkspacesResult,
   isModelCatalogResult,
   isAttachmentReadResult,
+  isRemoteCommandAttachmentList,
+  isRemoteCommandCatalogResult,
+  isRemoteCommandExecuteResult,
+  isRemoteSkillCatalogResult,
   isRecord,
   isRemoteWorkspace,
   isRemoteApprovalFrame,

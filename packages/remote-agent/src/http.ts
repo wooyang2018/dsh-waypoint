@@ -37,7 +37,11 @@ import {
   type RemoteGitRequest,
   type RemoteChangesSummaryRequest,
   type RemoteChangesDiffRequest,
+  type RemoteCatalogRequest,
+  type RemoteCommandAttachment,
+  type RemoteCommandExecuteRequest,
 } from '@dsh-waypoint/protocol'
+import type { AgentRoute } from '@dsh-waypoint/protocol'
 import { parseBearer, tokensEqual } from './auth.ts'
 import { listDirectories, listFile, readBytes, readText, statFile, watchFile } from './files.ts'
 import { searchFiles } from './search.ts'
@@ -48,6 +52,19 @@ import { AGENT_VERSION } from './version.ts'
 
 /** Header carrying the client's protocol revision. */
 const CLIENT_PROTOCOL_HEADER = HEADER_PROTOCOL_VERSION
+
+/**
+ * Largest accepted JSON body per POST route, in bytes.
+ *
+ * Only routes that can carry attachment bytes need more than the default.
+ * A command submission is one of them: its attachments cross the tunnel inline
+ * for the same reason a prompt's do, so it shares the prompt's ceiling rather
+ * than silently refusing a file the prompt route accepts.
+ */
+const POST_BODY_LIMITS: Partial<Record<AgentRoute['kind'], number>> = {
+  'session-prompt': 12 * 1024 * 1024,
+  'command-execute': 12 * 1024 * 1024,
+}
 
 /** Register the agent prefix route and return its disposer. */
 export function registerAgentRoutes(ctx: Context, service: RemoteAgentService): () => void {
@@ -119,7 +136,7 @@ export async function handleAgentRequest(
 
     // Write routes. Everything else is read-only GET.
     if (method === 'POST') {
-      const body = await readJsonBody(req, route.kind === 'session-prompt' ? 12 * 1024 * 1024 : 256 * 1024)
+      const body = await readJsonBody(req, POST_BODY_LIMITS[route.kind] ?? 256 * 1024)
       switch (route.kind) {
         case 'workspaces':
           sendJson(res, await service.createWorkspace(asWorkspaceRequest(body)))
@@ -175,6 +192,15 @@ export async function handleAgentRequest(
           return
         case 'attachment-read':
           sendJson(res, await service.readAttachment(asAttachmentReadRequest(body)))
+          return
+        case 'catalog-commands':
+          sendJson(res, await service.catalog.commands(asCatalogRequest(body), watchCancellation(req, res)))
+          return
+        case 'catalog-skills':
+          sendJson(res, await service.catalog.skills(asCatalogRequest(body), watchCancellation(req, res)))
+          return
+        case 'command-execute':
+          sendJson(res, await service.catalog.execute(asCommandExecuteRequest(body), watchCancellation(req, res)))
           return
         case 'changes-diff':
           sendJson(res, await diffFor(ctx, asChangesDiffRequest(body), watchCancellation(req, res)))
@@ -283,6 +309,9 @@ export async function handleAgentRequest(
       case 'session-archive':
       case 'session-unarchive':
       case 'attachment-read':
+      case 'catalog-commands':
+      case 'catalog-skills':
+      case 'command-execute':
       case 'approval-answer':
         throw new RemoteProtocolError({ code: 'request/invalid', message: 'POST is required', httpStatus: 405 })
       default:
@@ -428,8 +457,7 @@ function writeStreamEnd(res: ServerResponse, reason: 'error' | 'server-shutdown'
   }
 }
 
-async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promise<unknown> {
-  const chunks: Buffer[] = []
+async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promise<unknown> {  const chunks: Buffer[] = []
   let bytes = 0
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
@@ -534,16 +562,6 @@ function inferImageMediaType(data: string): string | undefined {
 }
 
 /**
- * Validate one prompt body.
- *
- * A `file` part carries base64 bytes with no `mediaType`: its kind is the
- * file's display name, and the bytes are stored verbatim, so there is no media
- * type to verify. Images still require one.
- *
- * @param value - parsed JSON body.
- * @returns a request with every content part normalized.
- */
-/**
  * Validate one durable-attachment read request.
  * @param value - parsed JSON body.
  * @returns kind plus the reference to read.
@@ -562,6 +580,129 @@ function asAttachmentReadRequest(value: unknown): AttachmentReadRequest {
   return { kind: body.kind, ref: body.ref as Record<string, unknown> }
 }
 
+/**
+ * Validate one catalog request.
+ *
+ * Exactly one addressing mode is admitted, because the two resolve differently:
+ * a Session id reads that Session's own working directory and preset, while a
+ * draft names both outright. Accepting both at once would leave which one wins
+ * undefined, and accepting a draft without a directory would make the project
+ * roots — and therefore the skill list — depend on this process's own idea of a
+ * default rather than on the directory the Session will actually run in.
+ *
+ * @param value - parsed JSON body.
+ * @returns the addressing pair the catalog service needs.
+ */
+function asCatalogRequest(value: unknown): RemoteCatalogRequest {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
+  }
+  const body = value as Record<string, unknown>
+  for (const key of ['sessionId', 'agentPreset', 'cwd'] as const) {
+    if (body[key] !== undefined && (typeof body[key] !== 'string' || body[key] === '')) {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: `${key} must be a non-empty string` })
+    }
+  }
+  if (typeof body.sessionId === 'string') {
+    if (body.agentPreset !== undefined || body.cwd !== undefined) {
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'a catalog request names either a sessionId or a draft preset with its directory, not both',
+      })
+    }
+    return { sessionId: body.sessionId }
+  }
+  if (typeof body.agentPreset !== 'string' || typeof body.cwd !== 'string') {
+    throw new RemoteProtocolError({
+      code: 'request/invalid',
+      message: 'a catalog request requires sessionId, or agentPreset with cwd',
+    })
+  }
+  return { agentPreset: body.agentPreset, cwd: body.cwd }
+}
+
+/**
+ * Validate one command-execution request.
+ *
+ * Attachment parts are validated here rather than trusted: this body is up to
+ * 12 MiB of caller-supplied bytes, and the registry below would otherwise hand a
+ * malformed part to admission, where the failure would read as a storage fault
+ * instead of a bad request.
+ *
+ * @param value - parsed JSON body.
+ * @returns the session, the exact line, and the ordered attachments.
+ */
+function asCommandExecuteRequest(value: unknown): RemoteCommandExecuteRequest {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
+  }
+  const body = value as Record<string, unknown>
+  if (typeof body.sessionId !== 'string' || body.sessionId === '') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'sessionId must be a non-empty string' })
+  }
+  if (typeof body.line !== 'string' || body.line.trim() === '') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'line must be a non-empty string' })
+  }
+  const raw = body.attachments
+  const attachments: RemoteCommandAttachment[] = []
+  if (raw !== undefined) {
+    if (!Array.isArray(raw)) {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'attachments must be an array' })
+    }
+    for (const part of raw) {
+      if (typeof part !== 'object' || part === null || Array.isArray(part)) {
+        throw new RemoteProtocolError({ code: 'request/invalid', message: 'attachment parts must be objects' })
+      }
+      const record = part as Record<string, unknown>
+      if (record.type === 'image') {
+        if (typeof record.data !== 'string') {
+          throw new RemoteProtocolError({ code: 'request/invalid', message: 'image attachment is invalid' })
+        }
+        const mediaType = typeof record.mediaType === 'string'
+          ? record.mediaType
+          : inferImageMediaType(record.data)
+        if (mediaType === undefined) {
+          throw new RemoteProtocolError({ code: 'request/invalid', message: 'image attachment is invalid' })
+        }
+        attachments.push({
+          type: 'image',
+          data: record.data,
+          mediaType,
+          ...typeof record.name === 'string' ? { name: record.name } : {},
+        })
+        continue
+      }
+      if (record.type === 'file') {
+        if (typeof record.data !== 'string') {
+          throw new RemoteProtocolError({ code: 'request/invalid', message: 'file attachment is invalid' })
+        }
+        attachments.push({
+          type: 'file',
+          data: record.data,
+          ...typeof record.name === 'string' ? { name: record.name } : {},
+        })
+        continue
+      }
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'unsupported attachment part' })
+    }
+  }
+  return {
+    sessionId: body.sessionId,
+    line: body.line,
+    ...attachments.length === 0 ? {} : { attachments },
+  }
+}
+
+/**
+ * Validate one prompt body.
+ *
+ * A `file` part carries base64 bytes with no `mediaType`: its kind is the
+ * file's display name, and the bytes are stored verbatim, so there is no media
+ * type to verify. Images still require one.
+ *
+ * @param value - parsed JSON body.
+ * @returns a request with every content part normalized.
+ */
 function asPromptRequest(value: unknown): PromptSessionRequest {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })

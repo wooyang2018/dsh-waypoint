@@ -33,6 +33,13 @@ import {
 import { parseSseStream } from './sse.ts'
 import { isRemoteAssistantFrame } from './types.ts'
 import type {
+  RemoteCatalogRequest,
+  RemoteCommandCatalogResult,
+  RemoteCommandExecuteRequest,
+  RemoteCommandExecuteResult,
+  RemoteSkillCatalogResult,
+} from './catalog.ts'
+import type {
   AcceptedResult,
   AttachmentReadRequest,
   AttachmentReadResult,
@@ -96,6 +103,9 @@ import {
   isSessionStreamFrame,
   isModelCatalogResult,
   isAttachmentReadResult,
+  isRemoteCommandCatalogResult,
+  isRemoteCommandExecuteResult,
+  isRemoteSkillCatalogResult,
   isWebUrlResult,
   isRemoteDirectoryListing,
   isRemoteFileBytes,
@@ -463,6 +473,61 @@ export class RemoteAgentClient {
   }
 
   /**
+   * Read the command catalog one remote Session composition exposes.
+   *
+   * Addressing a draft (`agentPreset` + `cwd`) resolves the preset's standing
+   * composition without creating a Session, which is what lets a mirrored
+   * conversation show a populated `/` menu before its first message.
+   * @param request - the existing Session, or the draft's preset and directory.
+   * @param signal - caller cancellation.
+   */
+  commandCatalog(request: RemoteCatalogRequest, signal?: AbortSignal): Promise<RemoteCommandCatalogResult> {
+    return this.#request(AGENT_ROUTES.catalogCommands, isRemoteCommandCatalogResult, {
+      method: 'POST',
+      body: request,
+      signal,
+    })
+  }
+
+  /**
+   * Read the user-invocable skill catalog one remote Session composition exposes.
+   * @param request - the existing Session, or the draft's preset and directory.
+   * @param signal - caller cancellation.
+   */
+  skillCatalog(request: RemoteCatalogRequest, signal?: AbortSignal): Promise<RemoteSkillCatalogResult> {
+    return this.#request(AGENT_ROUTES.catalogSkills, isRemoteSkillCatalogResult, {
+      method: 'POST',
+      body: request,
+      signal,
+    })
+  }
+
+  /**
+   * Execute one slash-command line on a remote Session.
+   *
+   * The remote runs its own definition, logs the `command/run`/`command/done`
+   * lifecycle, and answers with the settled outcome. `timeoutMs` is per-call
+   * because a handler may run for minutes — `/compact` performs a summarization
+   * call — and the request timeout that suits a metadata read would report a
+   * failure for work still in progress.
+   * @param request - target Session, complete line, and ordered attachments.
+   * @param signal - caller cancellation; forwarded to the remote handler.
+   * @param timeoutMs - override for this call's request timeout.
+   */
+  executeCommand(
+    request: RemoteCommandExecuteRequest,
+    signal?: AbortSignal,
+    timeoutMs?: number,
+  ): Promise<RemoteCommandExecuteResult> {
+    return this.#request(AGENT_ROUTES.commandExecute, isRemoteCommandExecuteResult, {
+      method: 'POST',
+      body: request,
+      signal,
+      ...timeoutMs === undefined ? {} : { timeoutMs },
+    })
+  }
+
+  /**
    * Run one read-only Git command in the remote host's execution world.
    * @param request - directory, subcommand argv, environment overlay, and bound.
    * @param signal - cancels the round trip.
@@ -570,7 +635,20 @@ export class RemoteAgentClient {
   async #request<T>(
     path: string,
     guard: Guard<T>,
-    init: { readonly method?: 'GET' | 'POST'; readonly body?: unknown; readonly signal?: AbortSignal } = {},
+    init: {
+      readonly method?: 'GET' | 'POST'
+      readonly body?: unknown
+      readonly signal?: AbortSignal
+      /**
+       * Override this client's default request timeout for one call.
+       *
+       * A command handler runs arbitrary work on the remote — `/compact` runs a
+       * summarization call — so the 15 s default that suits metadata reads
+       * would abort a healthy execution and report a timeout for work that is
+       * still finishing.
+       */
+      readonly timeoutMs?: number
+    } = {},
   ): Promise<T> {
     const headers = this.#headers()
     if (init.body !== undefined) headers.set('content-type', 'application/json')
@@ -583,7 +661,7 @@ export class RemoteAgentClient {
         ...init.body === undefined ? {} : { body: JSON.stringify(init.body) },
       },
       this.#fetch,
-      this.#timeoutMs,
+      init.timeoutMs ?? this.#timeoutMs,
       init.signal,
     )
     if (!response.ok) await this.#throwResponseError(response)

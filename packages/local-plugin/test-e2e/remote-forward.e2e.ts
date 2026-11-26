@@ -120,7 +120,7 @@ async function fetchLocal(port: number, path = '/'): Promise<{ status: number; b
  * the whole answer: the frame has to arrive too, which proves the forward
  * neither terminated nor rewrote the stream after the upgrade.
  */
-function upgradeOnce(port: number, expected: string): Promise<{ status: string; data: string }> {
+function upgradeOnce(port: number): Promise<{ status: string; data: string }> {
   return new Promise((resolve, reject) => {
     const socket: Socket = connect({ host: '127.0.0.1', port })
     let buffer = Buffer.alloc(0)
@@ -321,7 +321,7 @@ cleanup.push(async () => {
   check('the remote page arrives through the forward', pageA.status === 200 && pageA.body.includes(`MARK${String(PORT_A)}`), pageA.body.slice(0, 80))
   check('the path is preserved through the forward', (await fetchLocal(localA, '/some/deep/path')).status === 200)
 
-  const upgrade = await upgradeOnce(localA, `MARK${String(PORT_A)}`).catch(error => ({ status: `error:${String(error)}`, data: '' }))
+  const upgrade = await upgradeOnce(localA).catch(error => ({ status: `error:${String(error)}`, data: '' }))
   check('a WebSocket upgrade completes through the forward', upgrade.status.includes('101'), upgrade.status)
   check('the WebSocket frame arrives through the forward', upgrade.data === `MARK${String(PORT_A)}`, upgrade.data)
   check('one ssh child carries the first port', await localSshChildren(PORT_A) >= 1)

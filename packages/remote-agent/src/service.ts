@@ -70,6 +70,7 @@ import { AsyncQueue } from './queue.ts'
 import { followLiveSession } from './stream.ts'
 import { AGENT_VERSION, resolveDshVersion } from './version.ts'
 import { RemoteTerminalManager, resolveLoginShell } from './terminal.ts'
+import { RemoteCatalogService } from './catalog.ts'
 
 /** One page size used when a backend cannot report its event count. */
 const COLD_SCAN_PAGE = 500
@@ -121,6 +122,14 @@ export class RemoteAgentService {
   readonly startedAt: string
   readonly dshVersion: string
   readonly terminals = new RemoteTerminalManager()
+  /**
+   * Remote-side catalog and command execution.
+   *
+   * Constructed with this service's own file admission so a command attachment
+   * and a prompt attachment take the identical route onto the host: both arrive
+   * as bytes because a staged receipt cannot cross machines.
+   */
+  readonly catalog: RemoteCatalogService
 
   #state: AgentState
   readonly #approvalEvents = new EventEmitter()
@@ -133,6 +142,8 @@ export class RemoteAgentService {
     this.token = token
     this.startedAt = state.startedAt
     this.dshVersion = dshVersion
+    this.catalog = new RemoteCatalogService(ctx, (sessionId, data, name) =>
+      this.#admitForwardedFile(sessionId, data, name))
   }
 
   /** Open or mint the token, then publish the listener endpoint into the state file. */
@@ -215,6 +226,12 @@ export class RemoteAgentService {
         // before sending anything.
         ...this.#fileUploadsService() === undefined ? [] : ['session.file-attachment' as const],
         ...this.#attachmentStore() === undefined ? [] : ['attachment.read' as const],
+        // Same rule one level up: a profile that composes no command registry
+        // has no catalog to answer from, so it must not claim one. Execution is
+        // advertised separately because a client can use a menu whose commands
+        // it cannot run, while a forwarded line it cannot run is a dead end.
+        ...this.catalog.available ? ['session.catalog' as const] : [],
+        ...this.catalog.available ? ['session.command' as const] : [],
       ],
       workspaceCount: this.ctx.workspaceRegistry.list().length,
       modelBaseUrl: process.env.DEEPSEEK_BASE_URL ?? null,

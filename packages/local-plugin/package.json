@@ -180,7 +180,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node ../../scripts/build/package-agent.mjs && node ../../scripts/build/build-host.mjs && node ../../scripts/build/build-client.mjs",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsc -p tsconfig.test-e2e.json",
     "test": "node ../../scripts/build/build-client.mjs && node --import tsx --test test/*.test.ts"
   },
   "repository": {

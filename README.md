@@ -347,6 +347,11 @@ remote model requests use it as well, not just the installer.
     mirrorPollMs: 1500
     mirrorMaxEvents: 2000
 
+    # Answer a mirrored Session's `/` menu and command execution from its host.
+    # `false` leaves the menu to this machine's own composition.
+    mirrorRemoteCatalog: true
+    mirrorCommandTimeoutMs: 120000
+
     # Master switch for click-to-forward of dev-server ports. `false` makes a
     # loopback link in a mirrored Session navigate normally instead.
     portForwarding: true
@@ -460,6 +465,8 @@ then follow `docs/operations.md` for moving the host registry and cleaning up th
   ([中文版](docs/remote-workspace-mechanism.zh.md))
 - [Host routing for mirrored paths](docs/mirror-host-resolution.md) — why a remote path does not name
   a host, how ambiguity is refused instead of guessed, and what `spawn git ENOENT` actually means
+- [Remote catalogs for mirrored Sessions](docs/specs/2026-11-26-remote-catalog-bridge.md) — the
+  approved design for `/` commands, skills, and command execution in a mirrored Session
 - [Operations guide](docs/operations.md)
 - [Development](docs/development.md)
 - [Testing](docs/testing.md)

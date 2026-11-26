@@ -162,6 +162,9 @@ Read routes use `GET`. Write routes use `POST` with a JSON body:
 | `POST` | `/sessions/:id/archive` | `{ "stopActivity"?: true }` (default `true`) | `{ "accepted": true }` |
 | `POST` | `/sessions/:id/unarchive` | `{}` | `{ "accepted": true }` |
 | `POST` | `/attachments/read` | `{ "kind": "image" \| "file", "ref": { … } }` | `AttachmentReadResult`; `attachment/not-found` when the object is gone |
+| `POST` | `/catalog/commands` | `{ "sessionId": "…" }` or `{ "agentPreset": "…", "cwd": "/abs/dir" }` | `{ commands: RemoteCommandDescriptor[] }` |
+| `POST` | `/catalog/skills` | the same two addressing shapes | `{ skills: RemoteSkillEntry[] }` |
+| `POST` | `/commands/execute` | `{ "sessionId": "…", "line": "/goal do X", "attachments"?: [{ "type": "image", … } \| { "type": "file", "data": "<base64>", "name"?: "…" }] }` | `{ "kind": "settled", commandId, result }` or `{ "kind": "unknown" }` |
 | `POST` | `/approvals/answer` | `{ "id": "…", "outcome": "allowed-once" \| "rejected" \| "cancelled" \| "unavailable" }` | `{ "accepted": true }` |
 | `POST` | `/files/stat`, `/files/list`, `/files/read`, `/files/bytes` | `{ "path": "/abs/path", "offset"?, "limit"?, "length"? }` | file/list result |
 | `POST` | `/files/search` | `{ "path": "/abs/root", "query": "…", "excludedPaths"?, "includeHidden"?, "respectGitignore"? }` | `RemoteFileSearchResult` |
@@ -176,8 +179,8 @@ Read routes use `GET`. Write routes use `POST` with a JSON body:
 `workspaceId` and `cwd` are mutually exclusive. A prompt carries either a non-empty `text` or at least
 one `content` image part; `text` may be empty when an image is present. An optional provider/model
 selection is installed on the remote Session before the prompt is submitted. Request bodies are capped
-at 256 KiB, and at 12 MiB for `session.prompt` (base64 images); an oversized body fails with
-`request/too-large`. Unknown paths return a JSON `route/not-found` envelope.
+at 256 KiB, and at 12 MiB for `session.prompt` and `command.execute` (base64 attachments); an oversized
+body fails with `request/too-large`. Unknown paths return a JSON `route/not-found` envelope.
 
 A wrong method on a known path returns `405` with code `request/invalid`. That covers `GET` on a
 POST-only route, `POST` on a read route, and any method other than `GET` or `POST` anywhere. A client
@@ -472,6 +475,50 @@ A reference whose object is gone answers `attachment/not-found` (HTTP 404) rathe
 the store is content-addressed and may legitimately be pruned, so that is an ordinary outcome the
 client degrades from.
 
+### Session catalogs: why a menu needs the remote
+
+A mirrored Session's `/` menu is answered by the *local* Host: the browser calls
+`ctx.remote.commands.list` and `ctx.remote.skills.list`, which resolve to Host services backed by
+scoped registry layers. A mirror façade Agent deliberately carries no preset binding, and the Web
+surface keeps the preset-owned rows (`command-goal`, `command-compact`, `plan-mode`,
+`skill-filesystem`) off the host plane, so those layers hold nothing to show. The registrations exist
+only inside the remote Agent's composition, which the local side cannot reproduce.
+
+Two capabilities gate the answer, and they are separate because they fail differently:
+
+| Capability | Routes | Why it is separate |
+|---|---|---|
+| `session.catalog` | `POST /catalog/commands`, `POST /catalog/skills` | A menu that lists commands it cannot run is still readable, and an agent without this route must leave the local answer in place rather than show an empty menu. |
+| `session.command` | `POST /commands/execute` | A forwarded line the agent cannot run is a dead end after the user has committed to it, so execution is negotiated on its own. |
+
+**Addressing.** Both catalog routes accept exactly one shape:
+
+- `{ "sessionId": "…" }` — an existing remote Session; the remote reads its own working directory and
+  preset, so the command and skill catalogs cannot disagree about which project roots are in play.
+- `{ "agentPreset": "…", "cwd": "/abs/dir" }` — a draft, whose remote Session does not exist yet. The
+  remote resolves that preset's standing composition for the given directory **without creating
+  anything**, which is what lets a mirrored conversation show a populated menu before its first
+  message. `cwd` is required: a directory does not name a composition, and guessing the default one
+  would answer with a menu the eventual Session may not use.
+
+Naming both shapes, or a draft without `cwd`, is `request/invalid`.
+
+`POST /commands/execute` requires a real remote Session because the registry appends the
+`command/run`/`command/done` lifecycle to it. A draft therefore materializes its remote Session first —
+the same act as sending its first message, which is what invoking a command means.
+
+**Results.** Execution answers either `{ "kind": "settled", commandId, result }` or
+`{ "kind": "unknown" }`. `unknown` is not an error: the line did not parse or named no registered
+command, which a client reports as an admission failure rather than as a command that ran.
+`settled.result.sourceEventSeq` is in the **remote** numbering; a mirror must remap it into its own
+log and drop it when the target is unknown, because a client adopts it as the event the command node
+follows.
+
+**Attachments.** `command.execute` takes the same attachment parts a prompt does, for the same reason:
+an image already arrives as base64, while a file crosses as bytes and is re-staged on the remote with
+a receipt that host minted. Command attachment traffic needs `session.file-attachment` in addition to
+`session.command`.
+
 ## Package surface: contract versus internals
 
 `@dsh-waypoint/protocol` is a workspace package, not a published one — the release workflow publishes
@@ -479,12 +526,12 @@ only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
-`index.ts` exports 148 symbols in total. They split into 67 contract symbols and 81 symbols that no
+`index.ts` exports 162 symbols in total. They split into 74 contract symbols and 88 symbols that no
 other package consumes, of which 2 are referenced nowhere at all. Every name below is listed
 explicitly, and `scripts/check/protocol-surface.mjs` recomputes these numbers from the source tree; run it
 whenever you add or remove an export, and a test fails if the two disagree.
 
-**Import contract (67 symbols).** Consumed by another package's production code through a named
+**Import contract (74 symbols).** Consumed by another package's production code through a named
 import, or reached through `RemoteAgentClient`'s signatures. Changing or removing one of these is a
 cross-package change. Test files are not counted as consumers: a test that imports a path builder to
 build a URL does not make it part of the contract.
@@ -492,8 +539,8 @@ build a URL does not make it part of the contract.
 - Version and headers (9): `PROTOCOL_VERSION`, `AGENT_API_PREFIX`, `HEADER_PROTOCOL_VERSION`,
   `HEADER_SERVER_PROTOCOL_VERSION`, `HEADER_HOST_ID`, `HEADER_AGENT_VERSION`, `HEADER_REQUEST_ID`,
   `negotiateProtocol`, `parseProtocolHeader`
-- Client, routing, and cursors (4): `RemoteAgentClient`, `matchAgentRoute`, `EventCursor`,
-  `parseCursorQuery`
+- Client, routing, and cursors (5): `RemoteAgentClient`, `matchAgentRoute`, `AgentRoute`,
+  `EventCursor`, `parseCursorQuery`
 - Discovery (3): `AgentDiscoveryState`, `isAgentDiscoveryState`, `isAgentLive`
 - Envelopes and errors (4): `ApiSuccess`, `ApiFailure`, `RemoteProtocolError`, `httpStatusForCode`
 - Host and workspace (5): `AgentCapability`, `HostInfo`, `RemoteWorkspace`, `CreateWorkspaceRequest`,
@@ -502,6 +549,9 @@ build a URL does not make it part of the contract.
   `SessionStreamFrame`, `ListSessionsResult`, `RemoteAssistantFrame`, `AcceptedResult`,
   `CreateSessionRequest`, `CreateSessionResult`, `PromptSessionRequest`, `PromptContentPart`,
   `PromptDeliveryMode`, `SelectModelRequest`, `AttachmentReadRequest`
+- Remote catalogs (5): `RemoteCommandDescriptor`, `RemoteCommandCatalogResult`,
+  `RemoteSkillCatalogResult`, `RemoteSkillEntry`, `isRemoteCommandAttachmentList`
+- Remote command parts (1): `RemoteCommandAttachment`
 - Files (10): `RemoteFileStat`, `RemoteFileText`, `RemoteFileBytes`, `RemoteFileEntry`,
   `RemoteFileListing`, `RemoteFileWatchFrame`, `RemoteDirectoryListing`, `RemoteFileSearchRequest`,
   `RemoteFileSearchResult`, `RemoteFileSearchMatch`
@@ -514,33 +564,37 @@ build a URL does not make it part of the contract.
 - Approvals, JSON, and Web UI (5): `ApprovalOutcome`, `RemoteApprovalFrame`,
   `RemoteApprovalRequest`, `JsonValue`, `WebUrlResult`
 
-**Internal (81 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
+**Internal (88 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
 private: they carry no cross-package guarantee, and nothing outside `packages/protocol/src` should
 start importing them without promoting them to the contract above.
 
-*Used inside `packages/protocol/src` (79).*
+*Used inside `packages/protocol/src` (86).*
 
-- Guards (31): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`, `isCreateSessionResult`,
+- Guards (34): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`, `isCreateSessionResult`,
   `isCursor`,
   `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`, `isModelCatalogResult`,
   `isProtocolSupported`, `isRecord`, `isRemoteApprovalFrame`, `isRemoteAssistantFrame`,
-  `isRemoteChangesDiff`, `isRemoteChangesSummary`, `isRemoteDirectoryListing`, `isRemoteFileBytes`,
+  `isRemoteChangesDiff`, `isRemoteChangesSummary`, `isRemoteCommandCatalogResult`,
+  `isRemoteCommandExecuteResult`, `isRemoteDirectoryListing`, `isRemoteFileBytes`,
   `isRemoteFileListing`, `isRemoteFileSearchResult`, `isRemoteFileStat`, `isRemoteFileText`,
-  `isRemoteFileWatchFrame`, `isRemoteGitResult`, `isRemoteTerminalFrame`, `isRemoteTerminalInfo`,
+  `isRemoteFileWatchFrame`, `isRemoteGitResult`, `isRemoteSkillCatalogResult`,
+  `isRemoteTerminalFrame`, `isRemoteTerminalInfo`,
   `isRemoteTerminalListResult`, `isRemoteWorkspace`, `isRetryableCode`, `isSessionSnapshot`,
   `isSessionStreamFrame`, `isWebUrlResult`
 - Path builders (16): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
   `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionArchivePath`,
   `sessionUnarchivePath`, `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`,
   `terminalAttachPath`, `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
-- Types, constants, and functions used inside the package (32): `RemoteFailure`,
+- Types, constants, and functions used inside the package (36): `RemoteFailure`,
   `RemoteTerminalListResult`, `SessionSnapshotOptions`, `SetSandboxModeRequest`,
-  `DEFAULT_REQUEST_TIMEOUT_MS`, `parseSseStream`, `AgentRoute`, `CursorAcceptance`,
+  `DEFAULT_REQUEST_TIMEOUT_MS`, `parseSseStream`, `CursorAcceptance`,
   `DISCOVERY_STATE_VERSION`, `JsonPrimitive`, `MAX_SUPPORTED_PROTOCOL_VERSION`,
   `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`, `PromptImagePart`, `PromptFilePart`,
   `AttachmentReadResult`, `ProtocolErrorCode`,
   `ProtocolNegotiation`, `RemoteAgentClientOptions`, `RemoteChangesDiffRequest`,
-  `RemoteChangesSummaryRequest`, `RemoteDirectoryEntry`, `RemoteFileSearchEntryType`,
+  `RemoteChangesSummaryRequest`, `RemoteCommandExecuteRequest`, `RemoteCommandExecuteResult`,
+  `RemoteCommandInput`, `RemoteCommandOutcome`, `RemoteCatalogRequest`,
+  `RemoteDirectoryEntry`, `RemoteFileSearchEntryType`,
   `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteReasoningEffort`, `RemoteSandboxMode`,
   `RemoteTerminalShell`, `RemoteWorkspaceChangedFile`, `RemoteWorkspaceDiffHunk`,
   `SessionStreamEndReason`, `SseMessage`

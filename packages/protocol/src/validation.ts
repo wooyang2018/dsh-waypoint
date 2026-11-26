@@ -29,6 +29,15 @@ import type {
   WebUrlResult,
 } from './types.ts'
 import type {
+  RemoteCommandAttachment,
+  RemoteCommandCatalogResult,
+  RemoteCommandDescriptor,
+  RemoteCommandExecuteResult,
+  RemoteCommandInput,
+  RemoteSkillCatalogResult,
+  RemoteSkillEntry,
+} from './catalog.ts'
+import type {
   RemoteDirectoryListing,
   RemoteFileBytes,
   RemoteFileEntry,
@@ -376,4 +385,87 @@ export function isRemoteTerminalListResult(value: unknown): value is RemoteTermi
   return isRecord(value)
     && Array.isArray(value.terminals)
     && value.terminals.every(isRemoteTerminalInfo)
+}
+
+/** Guard for one command's optional input descriptor. */
+function isRemoteCommandInput(value: unknown): value is RemoteCommandInput {
+  return isRecord(value)
+    && isString(value.hint)
+    && (value.attachments === undefined || typeof value.attachments === 'boolean')
+}
+
+/** Guard for one command descriptor. */
+function isRemoteCommandDescriptor(value: unknown): value is RemoteCommandDescriptor {
+  return isRecord(value)
+    && isString(value.name)
+    && isString(value.description)
+    && (value.definitionId === undefined || isString(value.definitionId))
+    && (value.input === undefined || isRemoteCommandInput(value.input))
+}
+
+/**
+ * Guard for `catalog.commands`.
+ *
+ * The array is required: an answer without one is a shape the local adapter
+ * cannot distinguish from "this composition has no commands", and returning an
+ * empty menu for a broken response is worse than reporting the failure.
+ */
+export function isRemoteCommandCatalogResult(value: unknown): value is RemoteCommandCatalogResult {
+  return isRecord(value)
+    && Array.isArray(value.commands)
+    && value.commands.every(isRemoteCommandDescriptor)
+}
+
+/** Guard for one skill entry. */
+function isRemoteSkillEntry(value: unknown): value is RemoteSkillEntry {
+  return isRecord(value)
+    && isString(value.name)
+    && isString(value.description)
+    && typeof value.modelInvocable === 'boolean'
+    && (value.path === undefined || isString(value.path))
+    && (value.whenToUse === undefined || isString(value.whenToUse))
+}
+
+/** Guard for `catalog.skills`. */
+export function isRemoteSkillCatalogResult(value: unknown): value is RemoteSkillCatalogResult {
+  return isRecord(value)
+    && Array.isArray(value.skills)
+    && value.skills.every(isRemoteSkillEntry)
+}
+
+/** Guard for one command attachment: an encoded image or a verbatim file. */
+function isRemoteCommandAttachment(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  if (value.type === 'image') {
+    return isString(value.data) && isString(value.mediaType)
+      && (value.name === undefined || isString(value.name))
+  }
+  if (value.type === 'file') {
+    return isString(value.data) && (value.name === undefined || isString(value.name))
+  }
+  return false
+}
+
+/** Guard for `command.execute`. */
+export function isRemoteCommandExecuteResult(value: unknown): value is RemoteCommandExecuteResult {
+  if (!isRecord(value)) return false
+  if (value.kind === 'unknown') return true
+  if (value.kind !== 'settled' || !isString(value.commandId) || !isRecord(value.result)) return false
+  const result = value.result
+  if (result.kind === 'error') return isString(result.text)
+  if (result.kind !== 'success') return false
+  return (result.text === undefined || isString(result.text))
+    && (result.sourceEventSeq === undefined || typeof result.sourceEventSeq === 'number')
+}
+
+/**
+ * Validate an attachment list before it leaves the client.
+ *
+ * Exported because the local adapter builds these values from the browser's
+ * submission and should fail on its own bug rather than have a remote agent
+ * reject the body: the parts are derived here, so a malformed one is never the
+ * user's fault.
+ */
+export function isRemoteCommandAttachmentList(value: unknown): value is readonly RemoteCommandAttachment[] {
+  return Array.isArray(value) && value.every(isRemoteCommandAttachment)
 }

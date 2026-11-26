@@ -58,6 +58,26 @@ export type AgentCapability =
    * not: without this route the local transcript can only render the metadata.
    */
   | 'attachment.read'
+  /**
+   * The agent serves `/catalog/commands` and `/catalog/skills`.
+   *
+   * What makes a mirrored Session's `/` menu show the composition the remote
+   * Session actually runs. The catalogs are per-Session answers — the remote
+   * reads its own scoped layers, which the local side cannot reproduce — so a
+   * client without this capability keeps its local answer rather than showing
+   * an empty menu, which is why the two are distinguishable.
+   */
+  | 'session.catalog'
+  /**
+   * The agent serves `/commands/execute`.
+   *
+   * Advertised separately from `session.catalog` because the two fail
+   * differently: a menu that lists commands it cannot run is still readable,
+   * while a command forwarded to an agent that never implemented the route
+   * would fail after the user had committed to it. A client without this
+   * capability delegates execution locally instead.
+   */
+  | 'session.command'
 
 /** Identity and environment of the remote DSH host serving the agent API. */
 export interface HostInfo {

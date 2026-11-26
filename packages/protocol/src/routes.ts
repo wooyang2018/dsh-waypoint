@@ -32,6 +32,9 @@ export const AGENT_ROUTES = {
   terminals: `${AGENT_API_PREFIX}/terminals`,
   modelCatalog: `${AGENT_API_PREFIX}/llm/catalog`,
   attachmentRead: `${AGENT_API_PREFIX}/attachments/read`,
+  catalogCommands: `${AGENT_API_PREFIX}/catalog/commands`,
+  catalogSkills: `${AGENT_API_PREFIX}/catalog/skills`,
+  commandExecute: `${AGENT_API_PREFIX}/commands/execute`,
 } as const
 
 /** One decoded agent route. */
@@ -65,6 +68,9 @@ export type AgentRoute =
   | { readonly kind: 'changes-diff' }
   | { readonly kind: 'model-catalog' }
   | { readonly kind: 'attachment-read' }
+  | { readonly kind: 'catalog-commands' }
+  | { readonly kind: 'catalog-skills' }
+  | { readonly kind: 'command-execute' }
   | { readonly kind: 'terminals' }
   | { readonly kind: 'terminal-attach'; readonly terminalId: string }
   | { readonly kind: 'terminal-input'; readonly terminalId: string }
@@ -222,6 +228,12 @@ export function matchAgentRoute(pathname: string): AgentRoute | undefined {
       return { kind: 'model-catalog' }
     case AGENT_ROUTES.attachmentRead:
       return { kind: 'attachment-read' }
+    case AGENT_ROUTES.catalogCommands:
+      return { kind: 'catalog-commands' }
+    case AGENT_ROUTES.catalogSkills:
+      return { kind: 'catalog-skills' }
+    case AGENT_ROUTES.commandExecute:
+      return { kind: 'command-execute' }
     case AGENT_ROUTES.terminals:
       return { kind: 'terminals' }
   }

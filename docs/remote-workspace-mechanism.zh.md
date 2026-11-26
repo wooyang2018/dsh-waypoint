@@ -262,6 +262,10 @@ UI 里（`#ensureMirrorOnce` 的 truncated 分支）。尾部窗口里没有 `tu
 `ctx.agents.enter(agent)` 把它挂进本地 Agent registry（`#mountRuntime`），于是 Session 控制器、侧边栏、
 composer 全部按普通 Agent 对待它。`inject()` 是空实现——远端上下文注入还没进镜像协议。
 
+这个外观也**不带 preset 绑定**：它由 `createScope(ctx, this)` 创建，从不加入任何 `agentPresets` 代。
+Web 面按 Agent 挂载的一切——`command-goal`、`command-compact`、`plan-mode`、`skill-filesystem`——因此
+注册进这个 Agent 的 scope 链根本到不了的层，§6.6 就是来补这一块的。
+
 ### 5.4 往下发：prompt、模型、取消
 
 `#sendPrompt` 是唯一把本地输入送到远端的出口（`service.ts` 的 `#sendPrompt`）：
@@ -416,6 +420,42 @@ running 标记，以及「inbox 里的下一条 prompt 何时放行」。远端 
 这就是用户报告的 bug 的全部。现在 `#syncHost` 每轮读一次 `workspaceRegistry.archivedSessionIds`，
 凡影子记录指向的本地会话已归档就跳过（`#archivedMirror`）。什么都不删：记录和日志都留着，
 所以取消归档仍能恢复对话；而本行为出现之前就已归档的旧记录也不需要迁移——它们只是不再被重建。
+
+### 5.8 压缩：卡片是怎么重建的
+
+镜像会话里 `/compact` 过去只显示命令行、不显示压缩卡片。现在卡片已经能从回放的证据重建；
+这一节记录改了哪些地方，以及还有什么不会过隧道。
+
+**一次压缩事务在远端长什么样。** `compaction-basic` 写五个事件：`compaction/start` 锁、
+带摘要文本与 token 统计的 `compaction/summary`、一条 `surfaceOp` 为
+`{ op: 'replace', startSeq, endSeq }` 覆盖被压缩区间且 `source.kind` 为 `'compact-checkpoint'` 的
+`user/message`，最后是 `compaction/end`。聊天里的命令节点正是通过 `compactSource` 读那条替换消息来
+拼卡片，而结算事件的 `sourceEventSeq` 指向摘要。
+
+**哪些过、哪些不过。**
+
+| 远端事件 | 本地 | 原因 |
+|---|---|---|
+| `compaction/start`、`compaction/end` | 丢弃 | 它们是**远端**的压缩锁。本地复制一份会暗示一个本地根本跑不了的事务。 |
+| `compaction/summary` | 回放，`rawOutput` 只保留 `reasoning` 块 | `summary` **本来就是**那段文本：默认后端把 `rawOutput` 投影到它的 text 块上。被丢掉的块才是值得转发的，而其中只有 `reasoning` 有读取方——轨迹面板从它取压缩的思考内容。若没有任何 reasoning 留下，`rawOutput` 与它的判别字段 `llmStreamCall` 一起删除，因为"声称流式调用却没有输出"正是格式校验器拒绝的形状。 |
+| 检查点 `user/message` | 作为替换回放 | 它是**真正的** surface 替换，不是注入。旧规则 `source.kind !== 'user'` ⇒ 丢弃，是为 `runtime-context.ts` 设的——而它注入时用的是**同一套** `surfaceOp` 形状——检查点就跟着被误伤了。 |
+| 注入上下文（instructions、runtime context、skill catalog） | 丢弃 | 不变。它们会破坏本地 prompt 的来源语义。 |
+
+**必须先修掉的那个缺陷。** `remapRemoteEvent` 翻译了 `sourceEventSeqs`，却把 `event.surfaceOp`
+原样透传，于是替换区间仍然是**远端**序号。这个分支从未对真实数据执行过，因为没有任何替换事件能穿过
+旧过滤器——这正是它能错上几个月而没人发现的原因。现在 `localSpan` 负责算出本地序号的区间，
+`remapRemoteEvent` 写入的是这组边界。
+
+**为什么区间取交集、而不是两个端点。** 远端压缩区间是远端 surface 上的一段，它的端点是普通 surface
+事件——其中就包括镜像**不**复现的注入消息。要求两个端点都能映射，会让"压缩恰好切在注入消息上"时
+卡片消失，而那是常见边界而不是角落情况。所以影子取的是区间内**已映射**事件的最小与最大本地 seq。
+交集为空才意味着这个窗口里完全没有这段历史，只有那时才丢弃检查点——而不是降级成 append：append 会让
+`compactSource` 不再认它，同时消息节点开始把摘要渲染成普通用户气泡，比只有命令行更糟。
+
+**seed 与流式两条路径。** 快照窗口可能从替换链中间开始，所以 `toSeedEvent` 会把所有替换降级成
+append——检查点除外，因为降级后它就不再是替换了。区间仍在窗口内的检查点会被放置；区间已丢失的会被
+丢弃，所以压缩之后很久才打开的镜像只看到命令行。流式路径（`#appendEvent`）是真实 `/compact` 走的那条，
+它用运行时的映射来放置检查点。
 
 ## 6. 文件与终端：两个「按 Session 决定出口」的适配器
 
@@ -612,6 +652,50 @@ Host 的 `TerminalController` 暴露十二个方法，其中九个能映射到�
 （`@deepseek-ai/dsh-api-terminal-controller/typert`）比对。某个 DSH 版本新增了终端方法时，该测试会失败，
 而不是悄悄让新方法在镜像会话里落到本机 PTY。
 
+### 6.6 `/` 菜单：命令与技能来自远端组合
+
+镜像会话的 `/` 菜单里，凡是 preset 拥有的项目都是空的，原因是结构性的。浏览器通过
+`ctx.remote.commands.list(sessionId)` 和 `ctx.remote.skills.list` 读目录，两者都解析到**本地** Host
+服务，而这些服务由分层的注册表（`@deepseek-ai/dsh-scope` 的 `ScopedLayers.merge`）作答。镜像外观
+Agent 不加入任何 preset 代（§5.3），而 Web 面又把 `command-goal`、`command-compact`、`plan-mode`、
+`skill-filesystem` 从 host plane 挪走、只由 preset 挂载——所以对镜像来说那些层里什么都没有。
+
+这些注册只存在于远端 Agent 的组合里，而这正是 `installRemoteCatalog`（`src/remote/catalog.ts`）
+转发过去的地方。适配器替换三个实例方法，之所以能这样替换，理由 §6.2 已经说过：Typert Gateway 每次
+调用都重新解析 Remote 方法，所以实例上的自有属性对所有调用者都遮蔽原型实现。
+
+| 被替换的方法 | 镜像行为 |
+|---|---|
+| `commands.list(agent)` | 按 `mirrors.catalogAddressFor(sessionId)` 给出的地址 `POST /catalog/commands` |
+| `commands.execute(agent, line, attachments, signal)` | `POST /commands/execute`，再用返回的 `{commandId, result}` 作答 |
+| `sessionSkillCatalog.list({sessionId}, signal)` | `POST /catalog/skills` |
+
+`commands.list` 的形参名义上是 `Agent`，但实际只读它的 `id`：判定依据是"这个会话是不是镜像"，
+不是身份比较。
+
+**两种寻址，一处不对称。** 已物化的镜像给出远端 Session id，远端据此读自己的 cwd 与 preset——和本地
+`SessionSkillCatalog` 同源，所以两个目录不可能对"哪些 project root 参与"产生分歧。**草稿**镜像改为
+给出 preset 与远端根目录，远端用 `agentPresets.acquireScope` 解析该 preset 的常驻组合，**不创建任何
+东西**：敲一次 `/` 不该在另一台机器上建 Session。执行是例外——`commands.execute` 要把
+`command/run`/`command/done` 写进 Session，所以 `remoteSessionForCommand` 会先物化草稿，这与"发出它的
+第一条消息"是同一个动作。
+
+**执行真的发生在远端。** 远端跑自己的定义，把生命周期写进自己的日志；两个事件经 §5.5 回来，由
+`dsh-client-ui-chat` 的 command node 渲染，本地不合成任何事件。本地只有两条规则：
+
+- `export` 与 `feedback` 留在本地。`/export` 的浏览器半身监听 `command/executed` 并按**本地**
+  session id 下载，而远端 handler 只回 `REQUESTED`；转发它等于在远端记一条命令、然后下载错日志。
+- `command/done` 的 `sourceEventSeq` 是**远端**序号，而 command node 会把它当作自己要跟随的事件，所以
+  `remapRemoteEvent` 把它改写成本地日志的序号，映射不到就丢弃（`mirror/service.ts` 的
+  `commandDoneData`）。原样透传会让命令节点去引用本地恰好带着那个序号的事件。
+
+**附件走 prompt 那条路。** 命令附件和 §5.4 描述的是同一个问题：图片到这里已经是 base64，而 `file`
+是过不了机器的回执，所以让字节过去、由远端重新铸一枚自己的回执，再交给 `commands.execute`。
+
+**怎么降级。** 远端 agent 缺 `session.catalog` 时，三个方法一律按本地作答——即旧行为，而不是空菜单或
+报错；缺 `session.command` 时执行退回本地，`/export` 和 `/feedback` 照旧可用；`mirrorRemoteCatalog:
+false` 完全关闭转发。目录读取失败也只回退，不把一个发现性界面变成错误弹窗。
+
 ### 6.5 端口：让远端 dev server 可达
 
 远端工作区上的 dev server 是本插件唯一不能像文件、终端、Git 那样"路由"的东西，所以值得说清原因，以及它改用了什么。
@@ -796,6 +880,9 @@ overlay。`#modelRoutesMatch` 拿这份上报与已发布 overlay 里的 id 比�
 | 远端 dev server 可达，但侧栏仍拒绝渲染 | 原生浏览器的 iframe 策略（`X-Frame-Options`、混合内容）不因转发而改变（6.5） |
 | 重启或重连后已发布的端口消失 | 集合只存在内存里，下一次点击会重建（6.5） |
 | 纯文本里不带 scheme 的地址点不了 | 拦截器读 `a[href]`；改写转录文本加链接的方案已被否决（6.5） |
+| 远端 agent 早于 `session.catalog` 时，镜像的 `/` 菜单是空的 | 目录按能力协商，老 agent 保留本地答案而不是空菜单（6.6） |
+| 被转发的命令可能在上报超时之后才落定 | handler 合法地可能跑上几分钟，结果仍会经镜像日志到达（6.6） |
+| 压缩过的镜像只显示命令行、不显示压缩卡片 | 仅在窗口丢失了检查点区间、或远端 agent 版本较老时：`isMirrorNoise` 现已回放检查点与摘要，放不下的卡片退化成命令行（§5.8） |
 
 ## 10. 想动手改，从哪里进
 
@@ -808,6 +895,8 @@ overlay。`#modelRoutesMatch` 拿这份上报与已发布 overlay 里的 id 比�
 | 远端事件 → 本地 Session | `#appendEvent`、`toSeedEvent`、`isMirrorNoise` |
 | 新增远端能力 | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
 | 文件/终端路由 | `src/remote/files.ts`、`src/remote/terminal-controller.ts` |
+| 镜像的 `/` 菜单与命令执行 | `src/remote/catalog.ts`、`packages/remote-agent/src/catalog.ts`、`src/mirror/service.ts` 的 `catalogAddressFor`（6.6） |
+| 镜像里的命令行是否显示压缩卡片 | `src/mirror/service.ts` 的 `isCompactionCheckpoint` / `localSpan`；顺序要紧——`surfaceOp` 翻译在前（5.8） |
 | 远端 dev server 端口 | `src/client/link-forwarding.ts`（点击）、`src/client/loopback-url.ts`（哪些地址算数）、`src/service.ts` 的 `publishPort`、`src/host-api/` 的 `host/ports/publish` |
 | Settings 页行为 | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
 

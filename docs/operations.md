@@ -324,6 +324,12 @@ Local plugin profile override:
     mirrorSessions: true
     mirrorPollMs: 1500
     mirrorMaxEvents: 2000
+
+    # Answer a mirrored Session's `/` menu and command execution from its host.
+    # Set false to leave the menu to this machine's own composition; the
+    # timeout bounds one forwarded command, which may run for minutes.
+    mirrorRemoteCatalog: true
+    mirrorCommandTimeoutMs: 120000
 ```
 
 Remote agent override:

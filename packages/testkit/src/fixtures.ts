@@ -7,8 +7,10 @@
 import type {
   AgentCapability,
   HostInfo,
+  RemoteCommandDescriptor,
   RemoteSessionEvent,
   RemoteSessionSummary,
+  RemoteSkillEntry,
   RemoteWorkspace,
 } from '@dsh-waypoint/protocol'
 
@@ -30,6 +32,16 @@ export interface Fixtures {
   readonly hostInfo: HostInfo
   readonly workspaces: FakeWorkspace[]
   readonly sessions: FakeSession[]
+  /**
+   * Command descriptors the fake catalogs answer with.
+   *
+   * Mutable so a test can simulate a remote plugin install appearing mid-run,
+   * which is the one case the local menu has to notice by change detection
+   * rather than by a forwarded event.
+   */
+  commands: RemoteCommandDescriptor[]
+  /** Skill entries the fake catalog answers with. */
+  skills: RemoteSkillEntry[]
 }
 
 /** Build deterministic fixtures with two workspaces and three sessions. */
@@ -110,6 +122,8 @@ export function createFixtures(hostId = 'fake-host'): Fixtures {
     'terminal',
     'approval.follow',
     'approval.answer',
+    'session.catalog',
+    'session.command',
   ]
   const hostInfo: HostInfo = {
     hostId,
@@ -126,7 +140,43 @@ export function createFixtures(hostId = 'fake-host'): Fixtures {
     workspaceCount: workspaces.length,
   }
 
-  return { hostInfo, workspaces, sessions }
+  return {
+    hostInfo,
+    workspaces,
+    sessions,
+    commands: createCommands(),
+    skills: createSkills(),
+  }
+}
+
+/**
+ * Commands the fake host's catalogs answer with.
+ *
+ * One preset-shaped command with an input hint, one with no input, and one that
+ * accepts attachments: the three rows a local adapter has to reproduce exactly,
+ * including the `input.attachments` flag it needs to refuse a submission before
+ * spending an upload.
+ */
+function createCommands(): RemoteCommandDescriptor[] {
+  return [
+    { name: 'compact', description: 'Compact this session context' },
+    { name: 'goal', description: 'Set or read the session goal', input: { hint: '<text>' } },
+    { name: 'export', description: 'Download this Session log as a ZIP archive' },
+    { name: 'note', description: 'Attach files to a transcript remark', input: { hint: '<text>', attachments: true } },
+  ]
+}
+
+/**
+ * Skills the fake host's catalog answers with.
+ *
+ * Already filtered: the remote route returns only user-invocable skills, so the
+ * fake reproduces that answer rather than the pre-filter registry.
+ */
+function createSkills(): RemoteSkillEntry[] {
+  return [
+    { name: 'dsh-doc', description: 'DeepSeek Harness reference', modelInvocable: true },
+    { name: 'spec', description: 'Design a feature', whenToUse: 'before implementing', modelInvocable: true },
+  ]
 }
 
 /** Project one fake session to the wire summary. */

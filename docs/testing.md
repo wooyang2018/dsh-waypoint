@@ -272,10 +272,58 @@ it after changing anything in `remote/fs.ts`, `remote/subprocess.ts`,
 After `pnpm -r build`, run the focused checks from the repository root:
 
 ```sh
-pnpm --filter dsh-waypoint exec node --import tsx --test test/mirror_lifecycle.test.ts test/mirror-subagents.test.ts test/client_workspace_loading.test.ts
+pnpm --filter dsh-waypoint exec node --import tsx --test test/mirror_lifecycle.test.ts test/mirror-subagents.test.ts test/mirror-commands.test.ts test/remote-catalog.test.ts test/client_workspace_loading.test.ts
 ```
 
 The mirror fixture uses real Cordis contexts and scope disposal with in-memory remote services. It covers model selection and forwarding, explicit choices matching deployment defaults, recorded-model precedence, asynchronous shutdown and subagent pruning, and native resume attempted before persisted mirror mappings finish loading. Ordinary local Agents and the remote façade remain admissible.
+
+`mirror-commands.test.ts` covers the one thing a command lifecycle needs beyond replay: `command/done`'s `sourceEventSeq` arrives in the remote numbering, and the chat command node adopts it as the event it follows, so the mirror rewrites it into its own log and drops it when the target is unknown. Its first case opens the remote log with an event the mirror does not reproduce, which makes the two numberings genuinely differ — with an identity mapping the unremapped bug would pass.
+
+`remote-catalog.test.ts` drives the local adapter over fakes, because the decision under test is which implementation answers: forward to the host that owns the Session, or delegate. It covers a live mirror, a draft (which must not materialize a Session), an agent without the capability, the config toggle, the local `export`/`feedback` whitelist, and the attachment paths (image verbatim, file read from the local store, unresolvable receipt, missing capability).
+
+### Command attachments across the boundary, end to end
+
+`packages/local-plugin/test-e2e/command-attachments.e2e.ts` is the acceptance run for a command that
+carries attachments. Every unit test in this repository stubs one side of the boundary, which is
+exactly where the interesting failures hide, so this script composes the real thing on both sides and
+lets the bytes cross a real loopback HTTP hop: the shipped `CommandRuntime`, the shipped
+`FileUploads` staging table and `LocalAttachmentStore`, the real `installRemoteCatalog` adapter, the
+real `RemoteAgentClient` and the real `POST /commands/execute` handler.
+
+Those three packages are runtime peers rather than dev dependencies, so the suite cannot import them
+from this workspace. It takes the path of a materialised DSH `node_modules`:
+
+```sh
+pnpm test:e2e:attachments
+```
+
+That runs `scripts/test/extract-dsh-modules.mjs` first and then the acceptance script. The extractor
+exists because of two platform facts worth keeping in the script rather than in a habit:
+
+- On Windows the DSH packages live inside the desktop app's `app.asar`, which `existsSync` and Node's
+  own resolver treat as absent. The extractor re-executes itself under the app binary with
+  `ELECTRON_RUN_AS_NODE=1`, which reads asar transparently, and copies the closure out to
+  `test-results/e2e/node_modules` (git-ignored).
+- The closure must follow `dependencies`, `peerDependencies` **and** `optionalDependencies`.
+  `dsh-error` is a *peer* of `dsh-attachment`; following only `dependencies` produces a tree that
+  resolves until the first service constructs. Platform-only packages (`@img/sharp-*`,
+  `node-addon-require-builtin-*`) are legitimately absent off their platform and are skipped.
+
+`DSH_MODULES_ROOT` points the extractor at a plain `node_modules` when the release is not packed, and
+`DSH_APP_ROOT` relocates the desktop install. The file is covered by `pnpm typecheck` through
+`packages/local-plugin/tsconfig.test-e2e.json`.
+
+It proves ten properties, of which three cannot be reached any other way: a file staged on the local
+host arrives as an admitted `FileBlock` whose `attachment.name` and `bytes` are correct, an image
+arrives as a normalized remote image, and the receipt cited on the remote was minted by the remote
+(the sender's never crosses). It also pins the refusal paths — a command that declares no
+attachments, an unresolvable receipt, a body over the 12 MiB cap — and that a refused submission logs
+no lifecycle at all.
+
+The display name in that first property is the one defect this run found and the unit tests had
+missed: a browser's file part carries only a receipt, so the name has to be read off the reference the
+receipt names. `remote-catalog.test.ts` now submits the same shape the browser does, with no `name`.
+
 
 The client tests render the built Settings component with React's test renderer. They keep a workspace request pending while host polling rerenders the component, then exercise completion, failure, reopening the host, and creating a workspace while an older listing is pending. A request limit makes a reintroduced render loop fail instead of hanging the suite.
 
@@ -303,6 +351,37 @@ The job installs into no DSH profile and calls no model provider. The Playwright
 CI: `test/playwright` defaults to DSH `0.2.2-rc.5` through `DSH_WAYPOINT_E2E_DSH_VERSION` and runs
 locally; see [test/playwright/README.md](../test/playwright/README.md). Changes to the mirror's Agent
 interface must pass CI and the Playwright suite locally.
+
+### Compaction in a mirrored Session
+
+`compaction-replay.test.ts` covers the two defects that made a mirrored `/compact` show a command row
+with no card. Both are invisible to a test that only asserts the command ran, and one of them was
+invisible even to a test that mounted a mirror against a fresh snapshot: the seed path numbers a
+replacement from a freshly built map, so the translation bug only appears on the streaming path. The
+suite therefore drives both:
+
+- the seed path (fixture mounted over a log that already contains the transaction), and
+- the streaming path (`mounted()` then `poll()`), which is what a live `/compact` takes.
+
+It pins that the checkpoint and the summary land, that the remote lock does not, that the range is in
+local numbering, that injected context is still dropped, and that `rawOutput` is reduced to its
+`reasoning` blocks. That last one is a pairing rule, not a single field: `compaction/summary` is a
+discriminated union in DSH, so dropping the output while leaving `llmStreamCall: true` behind would
+describe a stream call with no output — the shape the format validator rejects. The suite asserts both
+halves, in both directions (reasoning present ⇒ both stay; nothing left ⇒ both go).
+
+`packages/local-plugin/test-e2e/compaction-card.e2e.ts` checks the join the client actually performs —
+the `command/run` node, the summary its settlement cites through `sourceEventSeq`, and the checkpoint
+that correlates to it — over the real projection order rather than by calling the helpers directly:
+
+```sh
+node --import tsx --test packages/local-plugin/test-e2e/compaction-card.e2e.ts
+```
+
+`test/mirror_fixture.ts` had to learn about surface placement for this: its `append` forwarded only
+`(type, data)` and its seed mapping dropped `surfaceOp`, so every assertion about a replacement range
+would have read an appended event and passed vacuously. Both now carry `surfaceOp` and
+`sourceEventSeqs`, which is the shape the real `Session.append` accepts.
 
 ### Local workspace removal regressions
 
