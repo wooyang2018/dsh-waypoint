@@ -80,6 +80,18 @@ describe('plugin localization', () => {
     }
   })
 
+  it('words the switch labels as a state, not as the options', () => {
+    // The labels sit beside the track, so they report what the host is set to.
+    // Bare "开启/关闭" and "On/Off" name the two choices a reader is picking
+    // between, which reads as a mislabelled control next to a switch that is
+    // already showing which one is chosen. The state forms are the guard.
+    assert.match(zh['settings.autoProvisionOn'], /^已/u, 'zh on-label must read as a state')
+    assert.match(zh['settings.autoProvisionOff'], /^已/u, 'zh off-label must read as a state')
+    for (const key of ['settings.autoProvisionOn', 'settings.autoProvisionOff'] as const) {
+      assert.match(en[key], /ed$/u, `en ${key} must read as a state`)
+    }
+  })
+
   it('renders the auto-forwarded row in both languages', () => {
     // The Settings card that used to carry the `ports.*` family is gone; what
     // remains is the read-only line under a host that says which ports are
