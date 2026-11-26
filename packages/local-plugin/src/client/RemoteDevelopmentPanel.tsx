@@ -358,6 +358,18 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
     })
   }
 
+  /**
+   * Stop or resume this plugin's own installs on one host.
+   *
+   * Disabling writes only the local record, so it takes effect immediately and
+   * cannot itself touch the remote — which is the point of turning it off.
+   */
+  async function switchAutoProvision(host: HostView, enabled: boolean): Promise<void> {
+    await run(`autoprovision:${host.id}`, async () => {
+      await api.setAutoProvision(host.id, enabled)
+    })
+  }
+
   async function toggleHost(host: HostView): Promise<void> {
     if (expandedHost === host.id) {
       setExpandedHost(null)
@@ -732,6 +744,45 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                           <span className="dshwp-detail" role="status">{t('settings.modelSourceBusy')}</span>
                         )}
                       </span>
+                    </div>
+
+                    <div className="dshwp-field">
+                      <span className="dshwp-field-label">{t('settings.autoProvision')}</span>
+                      <span className="dshwp-field-value">
+                        <span className="dshwp-segmented" role="group" aria-label={t('settings.autoProvision')}>
+                          <button
+                            type="button"
+                            className={host.autoProvision ? 'dshwp-seg dshwp-seg-active' : 'dshwp-seg'}
+                            aria-pressed={host.autoProvision === true}
+                            disabled={busy !== null || host.phase === 'installing' || host.phase === 'discovering'}
+                            onClick={() => { void switchAutoProvision(host, true) }}
+                          >
+                            {t('settings.autoProvisionOn')}
+                          </button>
+                          <button
+                            type="button"
+                            className={host.autoProvision ? 'dshwp-seg' : 'dshwp-seg dshwp-seg-active'}
+                            aria-pressed={host.autoProvision === false}
+                            disabled={busy !== null || host.phase === 'installing' || host.phase === 'discovering'}
+                            onClick={() => { void switchAutoProvision(host, false) }}
+                          >
+                            {t('settings.autoProvisionOff')}
+                          </button>
+                        </span>
+                        <span
+                          className="dshwp-help"
+                          title={t('settings.autoProvisionHelp')}
+                          aria-label={t('settings.autoProvisionHelp')}
+                        >
+                          ?
+                        </span>
+                        {busy === `autoprovision:${host.id}` && (
+                          <span className="dshwp-detail" role="status">{t('settings.autoProvisionBusy')}</span>
+                        )}
+                      </span>
+                      {!host.autoProvision && (
+                        <span className="dshwp-detail">{t('settings.autoProvisionOffNote')}</span>
+                      )}
                     </div>
 
                     <div className="dshwp-field">

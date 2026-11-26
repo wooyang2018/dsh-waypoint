@@ -284,14 +284,12 @@ async function dispatch(
       }
       return service.setModelSource(requireStringField(body, 'hostId'), source)
     }
-    case 'host/ask-user-mode': {
+    case 'host/auto-provision': {
       const body = requireRecord(payload)
-      const mode = requireStringField(body, 'mode')
-      if (mode !== 'blocking' && mode !== 'timed') {
-        throw new LocalError('request/invalid', 'mode must be "blocking" or "timed"')
-      }
-      const timeoutSeconds = optionalNumberField(body, 'timeoutSeconds')
-      return service.setAskUserMode(requireStringField(body, 'hostId'), mode, timeoutSeconds)
+      return service.setAutoProvision(
+        requireStringField(body, 'hostId'),
+        requireBooleanField(body, 'enabled'),
+      )
     }
     case 'host/node-install':
       return service.installNode(requireStringField(payload, 'hostId'))
@@ -502,8 +500,23 @@ function requireNumberField(value: unknown, field: string): number {
   return parsed
 }
 
-function optionalBooleanField(value: unknown, field: string): boolean | undefined {
-  const record = requireRecord(value)
+/**
+ * Read one required boolean field.
+ *
+ * Separate from {@link optionalBooleanField} because `false` is a meaningful
+ * value here: a caller that omits the field must fail rather than be read as
+ * "leave it alone", which would silently do nothing to a setting it asked to
+ * change.
+ */
+function requireBooleanField(value: unknown, field: string): boolean {
+  const fieldValue = optionalBooleanField(value, field)
+  if (fieldValue === undefined) {
+    throw new LocalError('request/invalid', `payload.${field} is required`)
+  }
+  return fieldValue
+}
+
+function optionalBooleanField(value: unknown, field: string): boolean | undefined {  const record = requireRecord(value)
   const fieldValue = record[field]
   if (fieldValue === undefined || fieldValue === null) return undefined
   if (typeof fieldValue !== 'boolean') {

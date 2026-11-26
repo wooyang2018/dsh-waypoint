@@ -205,36 +205,3 @@ describe('published and routable sets agree', () => {
     assert.deepEqual(projected.map(entry => entry.id).sort(), [...mirroredRouteIds(overlay)].sort())
   })
 })
-
-describe('ask-user schema rides the overlay', () => {
-  // The overlay is rewritten by every provisioning run, so it is the only place
-  // a per-host question schema survives. Patching a preset inside the DSH
-  // installation loses to the `dsh plugin add` that provisioning performs.
-  it('adds a tool-ask-user row for a timed host', () => {
-    const overlay = renderModelOverlay([], undefined, { mode: 'timed', timeoutSeconds: 90 })
-    assert.ok(overlay !== undefined)
-    const rows = JSON.parse(overlay) as Array<{ id: string; config?: Record<string, unknown> }>
-    assert.deepEqual(rows, [{ id: 'tool-ask-user', config: { mode: 'timed', timeout: 90 } }])
-  })
-
-  it('writes no row for a blocking host', () => {
-    // Restating DSH's default would pin this plugin to today's preset shape for
-    // no gain, and an empty overlay must stay undefined so nothing is published.
-    assert.equal(renderModelOverlay([], undefined, { mode: 'blocking', timeoutSeconds: 90 }), undefined)
-    assert.equal(renderModelOverlay([], undefined), undefined)
-  })
-
-  it('keeps the provider rows when a timed host also mirrors providers', () => {
-    const projected = projectProviders(
-      { 'tt-switch': profile() },
-      { proxyBaseUrl: BASE, credentialRef: REF },
-    ).providers
-    const overlay = renderModelOverlay(projected, { provider: 'tt-switch', model: 'glm-5.3' }, {
-      mode: 'timed',
-      timeoutSeconds: 30,
-    })
-    assert.ok(overlay !== undefined)
-    const rows = JSON.parse(overlay) as Array<{ id: string }>
-    assert.deepEqual(rows.map(row => row.id), ['agent-default-model', 'llm-pi-ai', 'tool-ask-user'])
-  })
-})

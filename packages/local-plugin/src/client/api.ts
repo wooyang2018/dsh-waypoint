@@ -103,6 +103,7 @@ export interface HostsApi {
   // --- Model catalog (Settings page and the composer model menu) ---
   readonly modelCatalog: (hostId: string) => Promise<ModelCatalogResult>
   readonly setModelSource: (hostId: string, source: 'proxy' | 'direct') => Promise<HostView>
+  readonly setAutoProvision: (hostId: string, enabled: boolean) => Promise<HostView>
   readonly sessionMirror: (localSessionId: string) => Promise<MirrorTarget>
   readonly setSessionModel: (input: {
     localSessionId: string
@@ -185,6 +186,7 @@ export function createHostsApi(ctx: Context): HostsApi {
     modelCatalog: hostId => call('host/model-catalog', { hostId }),
     sessionMirror: localSessionId => call('host/session/mirror', { localSessionId }),
     setModelSource: (hostId, source) => call('host/model-source', { hostId, source }),
+    setAutoProvision: (hostId, enabled) => call('host/auto-provision', { hostId, enabled }),
     setSessionModel: input => call('host/session/model', input),
     snapshot: (hostId, sessionId, limit) => call('host/session', {
       hostId,

@@ -21,25 +21,6 @@ import type { HostDetail, UiText } from '../messages.ts'
 export type ModelSource = 'proxy' | 'direct'
 
 /**
- * Which `ask_user_question` schema the remote agent is provisioned with.
- *
- * `blocking` is DSH's default: the tool waits for an answer with no deadline.
- * `timed` declares a `timeout` parameter, so the tool returns
- * `{ pending: true }` when the window closes and the turn continues while the
- * question stays answerable as a late reply.
- *
- * This is a per-host setting rather than a profile default because the schema is
- * baked into the remote's agent preset at install time, and `timed` changes what
- * the model sees. It also has to survive re-provisioning, which reinstalls the
- * profile from this side — so it travels with the install rather than being
- * patched into an installed file that the next provision overwrites.
- */
-export type AskUserMode = 'blocking' | 'timed'
-
-/** Seconds a `timed` question stays in the foreground before becoming a late reply. */
-export const DEFAULT_TIMED_QUESTION_SECONDS = 120
-
-/**
  * Every lifecycle phase, as a value.
  *
  * The union is derived from this list so a test can iterate it: `phase.*` locale
@@ -81,19 +62,14 @@ export interface HostRecord {
    */
   readonly modelSource?: ModelSource | null
   /**
-   * `ask_user_question` schema this host is provisioned with.
+   * Whether this host may be installed and updated by this plugin.
    *
-   * Absent means DSH's default (blocking), so records written by older builds
-   * keep behaving exactly as they did.
+   * Absent means "follow the profile default". Turning it off is the supported
+   * way to hand-maintain a remote: provisioning reinstalls the profile on every
+   * connect, so anything edited in the remote's DSH installation is otherwise
+   * replaced without warning. While it is off the plugin only reads that host.
    */
-  readonly askUserMode?: AskUserMode | null
-  /**
-   * Foreground window in seconds for {@link askUserMode} `timed`.
-   *
-   * Absent means {@link DEFAULT_TIMED_QUESTION_SECONDS}. Ignored while the mode
-   * is blocking.
-   */
-  readonly askUserTimeoutSeconds?: number | null
+  readonly autoProvision?: boolean | null
   readonly autoConnect: boolean
   readonly createdAt: string
   readonly updatedAt: string
@@ -229,10 +205,13 @@ export interface HostView {
    * Settings page renders one value without knowing the fallback rules.
    */
   readonly modelSource: ModelSource
-  /** Effective `ask_user_question` schema for this host. */
-  readonly askUserMode: AskUserMode
-  /** Effective foreground window in seconds; meaningful only for `timed`. */
-  readonly askUserTimeoutSeconds: number
+  /**
+   * Effective auto-provision setting for this host.
+   *
+   * Resolved against the profile default so the Settings card renders one value
+   * without knowing the fallback rule.
+   */
+  readonly autoProvision: boolean
   /** Set when the remote DSH runtime is older than the local one. */
   readonly dshUpdate: DshUpdate | null
   /** Set while an automatic reconnect is scheduled. */
@@ -324,8 +303,20 @@ export function idleRuntime(): HostRuntime {
   }
 }
 
-/** Project one record + runtime into the browser-safe view. */
-export function toHostView(record: HostRecord, runtime: HostRuntime, defaultSource: ModelSource): HostView {
+/**
+ * Project one record + runtime into the browser-safe view.
+ *
+ * @param record - durable host record.
+ * @param runtime - live lifecycle state.
+ * @param defaultSource - profile default credential source.
+ * @param defaultAutoProvision - profile default for installing this host.
+ */
+export function toHostView(
+  record: HostRecord,
+  runtime: HostRuntime,
+  defaultSource: ModelSource,
+  defaultAutoProvision = true,
+): HostView {
   return {
     id: record.id,
     label: record.label,
@@ -337,8 +328,7 @@ export function toHostView(record: HostRecord, runtime: HostRuntime, defaultSour
     updatedAt: record.updatedAt,
     hasToken: record.token !== null,
     modelSource: record.modelSource ?? defaultSource,
-    askUserMode: record.askUserMode ?? 'blocking',
-    askUserTimeoutSeconds: record.askUserTimeoutSeconds ?? DEFAULT_TIMED_QUESTION_SECONDS,
+    autoProvision: record.autoProvision ?? defaultAutoProvision,
     phase: runtime.phase,
     localPort: runtime.localPort,
     localUrl: runtime.localUrl,

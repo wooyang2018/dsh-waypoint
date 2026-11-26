@@ -43,13 +43,11 @@ import { LocalError, asLocalError } from './errors.ts'
 import { hostIdFor } from './hosts/id.ts'
 import { HostStore } from './hosts/store.ts'
 import {
-  DEFAULT_TIMED_QUESTION_SECONDS,
   idleRuntime,
   idleForward,
   listeningForward,
   toHostView,
   type AddHostInput,
-  type AskUserMode,
   type DiscoveredSshHost,
   type HostRecord,
   type HostRuntime,
@@ -299,7 +297,12 @@ export class RemoteHostsService {
   /** One host view. */
   view(id: string): HostView {
     const record = this.#requireRecord(id)
-    return toHostView(record, this.#runtime.get(id) ?? idleRuntime(), this.#defaultModelSource())
+    return toHostView(
+      record,
+      this.#runtime.get(id) ?? idleRuntime(),
+      this.#defaultModelSource(),
+      this.config.autoProvision,
+    )
   }
 
   /** Profile-wide default used by records that never chose explicitly. */
@@ -310,6 +313,21 @@ export class RemoteHostsService {
   /** Effective credential source for one host. */
   #modelSourceFor(record: HostRecord): ModelSource {
     return record.modelSource ?? this.#defaultModelSource()
+  }
+
+  /**
+   * Whether this plugin may install or update one host.
+   *
+   * Guards every path that writes to a remote. Provisioning reinstalls the
+   * profile, which restores the DSH installation's own presets and overlays, so
+   * an operator who edits those files on the remote needs a way to say "leave
+   * this host alone". Resolved here rather than read from config directly so a
+   * record written before this setting existed behaves exactly as it did.
+   * @param record - host about to be written to.
+   * @returns whether installation and reconciliation may proceed.
+   */
+  #autoProvisionFor(record: HostRecord): boolean {
+    return record.autoProvision ?? this.config.autoProvision
   }
 
   /** Parse a destination without touching SSH. */
@@ -529,37 +547,21 @@ export class RemoteHostsService {
   }
 
   /**
-   * Choose the `ask_user_question` schema this host runs.
+   * Choose whether this plugin may install and update one host.
    *
-   * The schema is part of the remote agent preset, so changing it means
-   * re-provisioning — which is also what makes the choice durable: provisioning
-   * rewrites the `--patch` overlay, and the row lives there rather than in a file
-   * the next install would replace.
+   * Turning it off is the supported way to hand-maintain a remote. It takes
+   * effect on the next write rather than triggering one: enabling it re-checks
+   * on the next connect, and disabling it must never install anything, which is
+   * the whole point of the setting.
    * @param id - host to configure.
-   * @param mode - blocking (DSH's default) or timed.
-   * @param timeoutSeconds - foreground window for `timed`; ignored for blocking.
+   * @param enabled - false to stop touching this host's DSH installation.
    * @returns the host as it now stands.
    */
-  async setAskUserMode(id: string, mode: AskUserMode, timeoutSeconds?: number): Promise<HostView> {
+  async setAutoProvision(id: string, enabled: boolean): Promise<HostView> {
     this.#assertAlive()
     const record = this.#requireRecord(id)
-    if (mode !== 'blocking' && mode !== 'timed') {
-      throw new LocalError('host/invalid', `unknown ask-user mode: ${String(mode)}`)
-    }
-    if (timeoutSeconds !== undefined) {
-      // DSH rejects a non-integer, non-positive or oversized window, so refusing
-      // it here keeps the failure on the side that can explain it.
-      if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 2_147_483) {
-        throw new LocalError('host/invalid', `ask-user timeout must be a whole number of seconds between 1 and 2147483`)
-      }
-    }
-    const nextTimeout = timeoutSeconds ?? record.askUserTimeoutSeconds ?? DEFAULT_TIMED_QUESTION_SECONDS
-    if (record.askUserMode !== mode || record.askUserTimeoutSeconds !== nextTimeout) {
-      await this.#saveRecord(id, { askUserMode: mode, askUserTimeoutSeconds: nextTimeout })
-    }
-    // Same reasoning as a model-source change: provisioning rewrites the overlay
-    // and reconnects, so the new schema reaches the remote on this call.
-    return this.provision(id)
+    if (record.autoProvision !== enabled) await this.#saveRecord(id, { autoProvision: enabled })
+    return this.view(id)
   }
 
   async #runUpgrade(id: string, localVersion: string): Promise<void> {    try {
@@ -1324,7 +1326,7 @@ export class RemoteHostsService {
       await this.#saveRecord(id, { remoteAgentPort: remotePort, token })
     } catch (error) {
       const failure = asLocalError(error, 'ssh/probe-failed')
-      if (this.config.autoProvision && failure.code === 'agent/unavailable') {
+      if (this.#autoProvisionFor(record) && failure.code === 'agent/unavailable') {
         // A previous attempt proved this host cannot be provisioned as it
         // stands. Re-uploading the agent and re-running the whole bootstrap
         // every 30 seconds cannot change that, so stop and keep the original
@@ -1476,7 +1478,10 @@ export class RemoteHostsService {
     tunnel: Tunnel,
   ): Promise<boolean> {
     const expected = bundledAgentVersion()
-    if (!this.config.autoProvision) return false
+    // A host the operator maintains by hand must not be replaced just because
+    // this build ships a different bundle: reinstalling is exactly the write the
+    // setting exists to prevent.
+    if (!this.#autoProvisionFor(this.#requireRecord(id))) return false
     if (!agentVersionDiffers(health.agentVersion, expected)) return false
     // One attempt per connect cycle: #attempts already bounds reconnect loops,
     // and repeating a failed reinstall on every health tick would spin forever.
@@ -1534,7 +1539,11 @@ export class RemoteHostsService {
       this.#modelReconciled.delete(id)
       return false
     }
-    if (this.#modelReconciled.has(id) || !this.config.autoProvision) {
+    // Same rule as the agent-version reconcile: rewriting the remote's model
+    // environment and provider overlay is a write this setting forbids. The
+    // visible consequence is that a hand-maintained host keeps its own providers
+    // even when this profile changes, which is what "leave it alone" means.
+    if (this.#modelReconciled.has(id) || !this.#autoProvisionFor(this.#requireRecord(id))) {
       this.ctx.logger.warn(
         'dsh-waypoint: model environment for %s still differs from this profile (%s vs %s)',
         id,
@@ -1761,25 +1770,13 @@ export class RemoteHostsService {
    * @returns the overlay text, or undefined when nothing should be published.
    */
   async #modelRoutesFor(record: HostRecord): Promise<string | undefined> {
-    // The question schema rides on this overlay because provisioning rewrites it
-    // every run, which is what keeps a per-host choice from being reverted.
-    const askUser = {
-      mode: record.askUserMode ?? 'blocking',
-      timeoutSeconds: record.askUserTimeoutSeconds ?? DEFAULT_TIMED_QUESTION_SECONDS,
-    } as const
-    if (!this.config.mirrorLocalProviders || this.#modelSourceFor(record) !== 'proxy') {
-      // No provider overlay, but a timed question still needs a patch file.
-      return renderModelOverlay([], undefined, askUser)
-    }
+    if (!this.config.mirrorLocalProviders) return undefined
+    if (this.#modelSourceFor(record) !== 'proxy') return undefined
     const mirrored = await this.#mirroredProviders(record.id)
-    if (mirrored.length === 0) return renderModelOverlay([], undefined, askUser)
+    if (mirrored.length === 0) return undefined
     const local = readLocalModelConfig(this.ctx)
     const providers = mirrored.map(entry => entry.provider)
-    return renderModelOverlay(
-      providers,
-      defaultSelectionFor(providers, local.default),
-      askUser,
-    )
+    return renderModelOverlay(providers, defaultSelectionFor(providers, local.default))
   }
 
   async #ensureProxyToken(id: string): Promise<string> {

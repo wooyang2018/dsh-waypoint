@@ -25,7 +25,20 @@ function toJsonObject(value: unknown): JsonObject {
 }
 
 /** Host-writing tools that may connect over SSH or provision a remote runtime. */
-const HOST_WRITE_TOOLS = new Set(['remote_host_add', 'remote_host_connect', 'remote_host_provision', 'remote_host_restart', 'remote_host_ask_user_mode'])
+/**
+ * Host-writing tools that may connect over SSH or provision a remote runtime.
+ *
+ * `remote_host_auto_provision` is here even though it writes nothing itself: it
+ * decides whether every later connect may reinstall that host, so approving it is
+ * approving a standing change in what this plugin does to a machine.
+ */
+const HOST_WRITE_TOOLS = new Set([
+  'remote_host_add',
+  'remote_host_connect',
+  'remote_host_provision',
+  'remote_host_restart',
+  'remote_host_auto_provision',
+])
 
 /**
  * Require an explicit approval before model-facing host writes. These tools can
@@ -139,20 +152,11 @@ export function registerRemoteTools(ctx: Context, service: RemoteHostsService): 
   }))
 
   ctx.tools.register(defineTool({
-    name: 'remote_host_ask_user_mode',
-    description: 'Choose the ask_user_question schema a remote host runs: "timed" gives the question a foreground window and lets the turn continue when it closes (the question stays answerable as a late reply); "blocking" is DSH\'s default and waits indefinitely. Re-provisions the host so the choice survives future installs.',
+    name: 'remote_host_auto_provision',
+    description: 'Turn automatic install/update of a remote host on or off. Set it to false to hand-maintain that host: the plugin then only reads it, so edits made to its DSH installation (agent presets, patch files) are no longer replaced on the next connect. Disabling installs nothing; enabling re-checks on the next connect.',
     parameters: {
       hostId: { type: 'string', required: true, description: 'Registered host id.' },
-      mode: {
-        type: 'string',
-        required: true,
-        enum: ['blocking', 'timed'],
-        description: 'Question schema for this host.',
-      },
-      timeoutSeconds: {
-        type: 'number',
-        description: 'Foreground window for "timed", in seconds. Defaults to 120; ignored for "blocking".',
-      },
+      enabled: { type: 'boolean', required: true, description: 'false to stop this plugin from writing to the host.' },
     },
     output: {
       schema: {
@@ -163,8 +167,7 @@ export function registerRemoteTools(ctx: Context, service: RemoteHostsService): 
       render: renderJson,
     },
     async execute(args) {
-      const mode = args.mode === 'timed' ? 'timed' : 'blocking'
-      return { host: toJsonObject(await service.setAskUserMode(args.hostId, mode, args.timeoutSeconds)) }
+      return { host: toJsonObject(await service.setAutoProvision(args.hostId, args.enabled)) }
     },
   }))
 
