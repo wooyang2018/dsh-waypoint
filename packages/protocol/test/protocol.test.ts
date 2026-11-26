@@ -395,3 +395,19 @@ describe('RemoteAgentClient', () => {
     assert.deepEqual(matchAgentRoute(AGENT_ROUTES.approvalEvents), { kind: 'approval-events' })
   })
 })
+
+describe('question expiry frame', () => {
+  // A closed window must reach the card that is still showing it. Without this
+  // frame the local wait never ends and the user submits into a rejection.
+  it('accepts an expired frame carrying an id and a reason', () => {
+    assert.equal(isRemoteQuestionFrame({ type: 'expired', id: 'q-1', reason: 'window closed' }), true)
+  })
+
+  it('rejects an expired frame without an id', () => {
+    assert.equal(isRemoteQuestionFrame({ type: 'expired', reason: 'window closed' }), false)
+  })
+
+  it('rejects an expired frame with a non-string reason', () => {
+    assert.equal(isRemoteQuestionFrame({ type: 'expired', id: 'q-1', reason: 7 }), false)
+  })
+})

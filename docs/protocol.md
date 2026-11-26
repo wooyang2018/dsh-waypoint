@@ -144,7 +144,7 @@ check and tunnel watcher schedule a bounded reconnect on any transport failure.
 | `GET` | `/web-url` | `{ path: "/?token=..." }` |
 | `GET` | `/llm/catalog` | `ModelCatalogResult` — the providers/models this host can actually route to |
 | `GET` | `/approvals/events` | SSE `event: ready`, then one `event: request` per pending approval, with `event: heartbeat` keepalives |
-| `GET` | `/questions/events` | SSE `event: ready`, then one `event: request` per pending `ask_user_question`, with `event: heartbeat` keepalives |
+| `GET` | `/questions/events` | SSE `event: ready`, then one `event: request` per pending `ask_user_question` and an `event: expired` when a timed question's window closes, with `event: heartbeat` keepalives |
 | `GET` | `/files/watch?path=...` | SSE `event: file` with `{ kind: "ready" \| "change" }` |
 | `GET` | `/directories?path=...` | `RemoteDirectoryListing` |
 | `GET` | `/terminals` | `{ terminals: RemoteTerminalInfo[] }` |
@@ -212,13 +212,19 @@ one `request` frame per pending question, which are replayed when a follower con
 carries the remote Session id, the tool call id, and the questions themselves (id, text, optional
 detail/header/options/multi-select, and the asking host's presentation `intent`).
 
-Two differences from an approval are load-bearing.
+Three differences from an approval are load-bearing.
 
 **The stream's existence is the capability.** The agent only claims a question while at least one
 stream is attached. With no follower it calls `next()` and lets the remote Web UI keep the question,
 because a claimed question with nobody listening would park the turn until the timeout for no gain.
 The same rule answers version skew: an old plugin never opens the stream, so an upgraded agent
 behaves exactly as before.
+
+**A closed window is announced, not left open.** A timed question that reaches its deadline produces
+an `expired` frame carrying that question's id and a reason, and the agent drops its record. The
+question is not answerable through this bridge afterwards: DSH's late-reply path needs the exact live
+`Agent` that asked, which is unregistered once the turn continues. Reporting the closure lets the
+local card close with an explanation instead of accepting a submission that would be rejected.
 
 **A refusal has three forms.** `POST /questions/answer` takes
 `{ "id": "…", "outcome": … }` where the outcome is one of:

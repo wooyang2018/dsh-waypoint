@@ -438,15 +438,31 @@ With the anchor in place, the remote's pending `tool/result` folds the call to `
 projection publishes it, and the local card renders the state DSH already supports: `waitState:
 'continued'`, no countdown (`countdown` is `undefined` without a deadline, by design).
 
-#### Late answers
+#### When the window closes
 
-When that window closes, `askTimed` has already returned `{ pending: true }` to the model and the turn
-moved on, but the question stays answerable. Resolving the original waterfall now would reach nobody.
-The agent therefore **parks** the record instead of dropping it (`#parkExpiredQuestion`) and delivers a
-later answer through `userQuestions.answer()`, which steers a `user-question-reply` message into the
-conversation — the documented path for a `continued` question (`#steerLateAnswer`). If DSH reports the
-call is no longer answerable, that is surfaced as a failure rather than acknowledged: a caller who
-believes an answer was delivered when it was not is worse off than one told to retype it.
+`askTimed` returns `{ pending: true }` to the model and the turn continues, while the Session projection
+keeps the call as `continued`. The question is nominally still answerable, but not through this bridge,
+and the reason is a DSH constraint rather than a gap here: `userQuestions.answer()` — the documented
+late-reply path — requires the exact live `Agent` that asked (`agents.get(agent.id) !== agent` rejects
+it with `CALLER_NOT_LIVE`), and that instance is unregistered once the turn ends. An answer submitted
+afterwards therefore cannot reach the model.
+
+The bridge says so instead of accepting it. On expiry the agent emits an `expired` frame carrying the
+question id and drops its record; the local side aborts that card's wait, so the composer clears with
+the reason rather than offering an input whose submission would be rejected. Both sides forget the
+question at the same moment, which keeps a late submission honest: it fails as `not pending` instead of
+being silently swallowed.
+
+Verified against a real host by configuring its `tool-ask-user` row with `mode: timed, timeout: 15`:
+the tool result becomes `{ pending: true }`, the turn completes, and the local card closes. Answering
+inside the window still delivers normally — the only difference is the `callId` the request carries,
+which the blocking schema never supplies.
+
+Turning that on for a host is deliberately not a setting. The row lives inside an agent preset, and a
+profile patch replaces a preset's whole `plugins` list rather than merging one row, so supporting it
+would make this plugin responsible for mirroring DSH's tool table on every release. A host whose
+operator wants it can edit that preset directly — after turning off automatic deployment for that host,
+which is what keeps the edit from being reverted.
 
 `intent` is copied verbatim in both directions. It names a presentation the *asking* host chose, and
 DSH's own rule is that a tag a UI does not recognise falls back to the generic option list, so
