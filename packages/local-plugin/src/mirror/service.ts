@@ -2262,6 +2262,74 @@ export class RemoteMirrorService {
     return presets?.defaultId
   }
 
+  /** Log a lazy materialization failure without turning the blank Session into a local run. */
+  reportBlankFailure(agent: LazyRemoteMirrorAgent, error: unknown): void {
+    this.#ctx.logger.warn('dsh-waypoint: could not start remote Session for %s: %s', agent.id, String(error))
+    try {
+      const emit = this.#ctx.emit as unknown as (name: string, payload: unknown) => void
+      emit.call(this.#ctx, 'agent/error', {
+        agent,
+        error: error instanceof Error ? error : new Error(String(error)),
+      })
+    } catch (emitError) {
+      this.#ctx.logger.warn('dsh-waypoint: blank Session error notification failed: %s', String(emitError))
+    }
+  }
+
+  /** Initial model selection used by a blank Agent before the mirror exists. */
+  selectionForBlank(session: Session): MirrorModelSelection | undefined {
+    const projections = this.#ctx.get('sessionProjections') as unknown as {
+      stateOf?: (session: Session, key: string) => unknown
+    } | undefined
+    const state = projections?.stateOf?.(session, 'modelSelection') as
+      | { pending?: unknown; lastUsed?: unknown }
+      | undefined
+    const read = (candidate: unknown): MirrorModelSelection | undefined => {
+      if (typeof candidate !== 'object' || candidate === null) return undefined
+      const record = candidate as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
+      if (typeof record.provider !== 'string' || typeof record.model !== 'string') return undefined
+      return {
+        provider: record.provider,
+        model: record.model,
+        ...typeof record.reasoningEffort === 'string' ? { reasoningEffort: record.reasoningEffort } : {},
+      }
+    }
+    return read(state?.pending) ?? read(state?.lastUsed) ?? latestSelection(session) ?? this.#defaultSelection()
+  }
+
+  /**
+   * Drop a rejection record so the picker offers the selection again.
+   *
+   * The record only reflects the remote catalog at the time of the failure, and
+   * it exists to keep the picker honest rather than to gate sending. When the
+   * user picks the model again they assert it should work now (for example
+   * after installing it on the host), so the stale entry must go.
+   */
+  forgetRejectedSelection(runtime: MirrorRuntime, selection: MirrorModelSelection): void {
+    runtime.rejectedSelections.delete(selectionKey(selection))
+  }
+
+  /**
+   * Resolve the mirror record for a local Session id.
+   *
+   * The Settings page needs this to tell a mirrored Session (which has a remote
+   * host behind it) from an ordinary local one before offering remote models.
+   */
+  mirrorFor(localSessionId: string): { hostId: string; remoteSessionId: string } | undefined {
+    const record = Object.values(this.#state.sessions)
+      .find(entry => entry.localSessionId === localSessionId)
+    if (record !== undefined) {
+      return { hostId: record.hostId, remoteSessionId: record.remoteSessionId }
+    }
+    // A brand-new mirrored conversation exists only as a pending blank until the
+    // first prompt materializes the remote Session. Its host is already known, so
+    // the composer can offer that host's models before anything has been sent —
+    // which is exactly when a model is picked.
+    const pending = this.#pendingBlanks.get(localSessionId)
+    if (pending === undefined) return undefined
+    return { hostId: pending.hostId, remoteSessionId: pending.remoteSessionId ?? '' }
+  }
+
   /**
    * Resolve the remote composition a mirrored Session's catalogs answer from.
    *
@@ -2335,73 +2403,6 @@ export class RemoteMirrorService {
     const created = this.catalogAddressFor(localSessionId)?.remoteSessionId
     if (created === undefined) throw new Error('the remote Session could not be created')
     return created
-  }
-  /** Log a lazy materialization failure without turning the blank Session into a local run. */
-  reportBlankFailure(agent: LazyRemoteMirrorAgent, error: unknown): void {
-    this.#ctx.logger.warn('dsh-waypoint: could not start remote Session for %s: %s', agent.id, String(error))
-    try {
-      const emit = this.#ctx.emit as unknown as (name: string, payload: unknown) => void
-      emit.call(this.#ctx, 'agent/error', {
-        agent,
-        error: error instanceof Error ? error : new Error(String(error)),
-      })
-    } catch (emitError) {
-      this.#ctx.logger.warn('dsh-waypoint: blank Session error notification failed: %s', String(emitError))
-    }
-  }
-
-  /** Initial model selection used by a blank Agent before the mirror exists. */
-  selectionForBlank(session: Session): MirrorModelSelection | undefined {
-    const projections = this.#ctx.get('sessionProjections') as unknown as {
-      stateOf?: (session: Session, key: string) => unknown
-    } | undefined
-    const state = projections?.stateOf?.(session, 'modelSelection') as
-      | { pending?: unknown; lastUsed?: unknown }
-      | undefined
-    const read = (candidate: unknown): MirrorModelSelection | undefined => {
-      if (typeof candidate !== 'object' || candidate === null) return undefined
-      const record = candidate as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
-      if (typeof record.provider !== 'string' || typeof record.model !== 'string') return undefined
-      return {
-        provider: record.provider,
-        model: record.model,
-        ...typeof record.reasoningEffort === 'string' ? { reasoningEffort: record.reasoningEffort } : {},
-      }
-    }
-    return read(state?.pending) ?? read(state?.lastUsed) ?? latestSelection(session) ?? this.#defaultSelection()
-  }
-
-  /**
-   * Drop a rejection record so the picker offers the selection again.
-   *
-   * The record only reflects the remote catalog at the time of the failure, and
-   * it exists to keep the picker honest rather than to gate sending. When the
-   * user picks the model again they assert it should work now (for example
-   * after installing it on the host), so the stale entry must go.
-   */
-  forgetRejectedSelection(runtime: MirrorRuntime, selection: MirrorModelSelection): void {
-    runtime.rejectedSelections.delete(selectionKey(selection))
-  }
-
-  /**
-   * Resolve the mirror record for a local Session id.
-   *
-   * The Settings page needs this to tell a mirrored Session (which has a remote
-   * host behind it) from an ordinary local one before offering remote models.
-   */
-  mirrorFor(localSessionId: string): { hostId: string; remoteSessionId: string } | undefined {
-    const record = Object.values(this.#state.sessions)
-      .find(entry => entry.localSessionId === localSessionId)
-    if (record !== undefined) {
-      return { hostId: record.hostId, remoteSessionId: record.remoteSessionId }
-    }
-    // A brand-new mirrored conversation exists only as a pending blank until the
-    // first prompt materializes the remote Session. Its host is already known, so
-    // the composer can offer that host's models before anything has been sent —
-    // which is exactly when a model is picked.
-    const pending = this.#pendingBlanks.get(localSessionId)
-    if (pending === undefined) return undefined
-    return { hostId: pending.hostId, remoteSessionId: pending.remoteSessionId ?? '' }
   }
 
   /**
@@ -3101,7 +3102,14 @@ export class RemoteMirrorService {
         seedEndSeq = seedEvents.at(-1)?.seq
       }
     }
-    const filtered = seedEvents.filter(event => !isMirrorNoise(event))
+    // A seed window cannot place a replacement *in general*: `toSeedEvent`
+    // deliberately appends them, because a window may start in the middle of a
+    // replacement chain. A compaction checkpoint whose span this window still
+    // holds is the exception `toSeedEvent` places; one whose span it lost becomes
+    // an invisible append, so it is dropped here.
+    const filtered = seedEvents.filter(event =>
+      !isMirrorNoise(event)
+      && !(isCompactionCheckpoint(event) && localSpan(event, new Map(seedEvents.map((e, i) => [e.seq, i]))) === undefined))
     // A subagent address is authorized by the descriptor in the child log. A
     // window that lost it (over-cap child, or a trim that cut the prefix)
     // cannot answer a subagent history read, so leave that child unmirrored
@@ -3644,7 +3652,7 @@ export class RemoteMirrorService {
   #noteProjection(runtime: MirrorRuntime, event: RemoteSessionEvent, grew: boolean): void {
     if (grew) return
     if (runtime.skippedRemoteSeqs.has(event.seq)) return
-    if (isMirrorNoise(event)) {
+    if (isMirrorNoise(event) || unplaceableCheckpoint(event, runtime.remoteToLocalSeq)) {
       this.#ctx.logger.debug(
         'dsh-waypoint: filtered remote %s (seq %s) for %s by design',
         event.type,
@@ -3829,7 +3837,7 @@ export class RemoteMirrorService {
     runtime.applyingRemote = true
     let mappedSeq: number | undefined
     try {
-      if (!isMirrorNoise(event)) {
+      if (!isMirrorNoise(event) && !unplaceableCheckpoint(event, runtime.remoteToLocalSeq)) {
         mappedSeq = appendRemoteEvent(
           runtime.session,
           remapRemoteEvent(event, runtime.remoteToLocalSeq, runtime.skippedRemoteSeqs),
@@ -4230,14 +4238,45 @@ function replacementResolves(
   event: RemoteSessionEvent,
   remoteToLocal: ReadonlyMap<number, number>,
 ): boolean {
-  if (typeof event.surfaceOp !== 'object') return false
+  return localSpan(event, remoteToLocal) !== undefined
+}
+
+/**
+ * Locate a replacement range in this log, as the part of it the mirror reproduced.
+ *
+ * A remote compaction range is a span of the remote *surface*, and its endpoints
+ * are ordinary surface events — which includes the injected context messages a
+ * mirror deliberately does not reproduce. Demanding that both endpoints be
+ * mapped would therefore drop the card whenever a compaction happened to cut at
+ * an injected message, which is a common boundary rather than a corner case.
+ *
+ * So the shadow is taken over the intersection: the smallest and largest local
+ * seq among the mapped events inside the remote range. That is the part of the
+ * span this log actually holds, and replacing it is the faithful local reading of
+ * "the summary stands in for this history". An empty intersection means the
+ * mirror reproduced none of the span, and only then is there nothing to place.
+ *
+ * @param event - a replacement event.
+ * @param remoteToLocal - the mirror's seq map for this Session.
+ * @returns the local span to replace, or nothing when the range is disjoint.
+ */
+function localSpan(
+  event: RemoteSessionEvent,
+  remoteToLocal: ReadonlyMap<number, number>,
+): { startSeq: number; endSeq: number } | undefined {
+  if (typeof event.surfaceOp !== 'object') return undefined
   const { startSeq, endSeq } = event.surfaceOp
-  if (!Number.isSafeInteger(startSeq) || !Number.isSafeInteger(endSeq)) return false
-  if (startSeq > endSeq) return false
-  for (let seq = startSeq; seq <= endSeq; seq += 1) {
-    if (!remoteToLocal.has(seq)) return false
+  if (!Number.isSafeInteger(startSeq) || !Number.isSafeInteger(endSeq)) return undefined
+  if (startSeq > endSeq) return undefined
+  let low: number | undefined
+  let high: number | undefined
+  for (const [remote, local] of remoteToLocal) {
+    if (remote < startSeq || remote > endSeq) continue
+    if (low === undefined || local < low) low = local
+    if (high === undefined || local > high) high = local
   }
-  return true
+  if (low === undefined || high === undefined) return undefined
+  return low <= high ? { startSeq: low, endSeq: high } : undefined
 }
 
 function remapRemoteEvent(
@@ -4245,12 +4284,13 @@ function remapRemoteEvent(
   remoteToLocal: ReadonlyMap<number, number>,
   skipped: ReadonlySet<number> = new Set(),
 ): RemoteSessionEvent {
-  // A replacement is reproducible only when its whole remote range still has a
-  // local counterpart and none of it was skipped. Otherwise replaying it could
+  // A replacement is reproducible only when some of its remote range is still in
+  // this log and none of what it cites was skipped. Otherwise replaying it could
   // target a node that is not the current local surface, so it degrades to an
   // append and says so.
   const hadReplacement = typeof event.surfaceOp === 'object'
-  const resolvable = replacementResolves(event, remoteToLocal)
+  const span = hadReplacement ? localSpan(event, remoteToLocal) : undefined
+  const resolvable = span !== undefined
   const citesSkipped = (event.sourceEventSeqs ?? []).some(seq => skipped.has(seq))
   const degraded: MirrorDegradedEvent | undefined = hadReplacement && !resolvable
     ? { mirrorDegraded: 'replace-unmapped' }
@@ -4258,28 +4298,135 @@ function remapRemoteEvent(
       ? { mirrorDegraded: 'event-skipped' }
       : undefined
 
-  const sourceEventSeqs = hadReplacement && resolvable
-    ? event.sourceEventSeqs
-      ?.map(seq => remoteToLocal.get(seq))
-      .filter((seq): seq is number => seq !== undefined)
-    : event.sourceEventSeqs
-      ?.map(seq => remoteToLocal.get(seq))
-      .filter((seq): seq is number => seq !== undefined)
+  const sourceEventSeqs = event.sourceEventSeqs
+    ?.map(seq => remoteToLocal.get(seq))
+    .filter((seq): seq is number => seq !== undefined)
+
+  // A replacement that cannot be placed degrades to an append, which is what
+  // makes the event land as a visible node instead of deleting the wrong span.
+  // When it can, the bounds are local: passing the remote numbers through would
+  // delete whatever local events happen to carry them.
+  const surfaceOp: RemoteSessionEvent['surfaceOp'] = event.surfaceOp === undefined
+    ? undefined
+    : span === undefined
+      ? 'append'
+      : { op: 'replace', startSeq: span.startSeq, endSeq: span.endSeq }
+
+  const data = degraded === undefined
+    ? event.type === 'compaction/summary' ? trimmedCompactionSummary(event.data) : event.data
+    : mergeDegraded(
+      event.type === 'compaction/summary' ? trimmedCompactionSummary(event.data) : event.data,
+      degraded,
+    )
 
   return {
     ...event,
     ...sourceEventSeqs === undefined || sourceEventSeqs.length === 0 ? {} : { sourceEventSeqs },
-    ...hadReplacement && !resolvable
-      ? { surfaceOp: 'append' as const }
-      : event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp },
-    ...degraded === undefined ? {} : { data: mergeDegraded(event.data, degraded) },
+    ...surfaceOp === undefined ? {} : { surfaceOp },
+    ...data === event.data ? {} : { data },
+    ...commandDoneData(event, remoteToLocal),
   } as RemoteSessionEvent
+}
+
+/**
+ * Rewrite a `command/done` payload's `sourceEventSeq` into this log's numbering.
+ *
+ * `commands.execute` records the remote seq of the authoritative domain event a
+ * successful command points at, and the chat command node adopts that value as
+ * the node it should follow. In a mirror the numbers describe the *remote* log,
+ * so passing one through unchanged makes the node cite whatever local event
+ * happens to carry that seq — a silent, wrong correlation.
+ *
+ * An unmappable value is dropped rather than replaced: the command node's own
+ * `seq`/`time` still place it correctly, and a missing `sourceEventSeq` only
+ * means "no richer presentation". Guessing would be worse than omitting.
+ *
+ * @param event - event about to be appended locally.
+ * @param remoteToLocal - the mirror's seq map for this Session.
+ * @returns a `data` override, or nothing when this event is not a command settlement.
+ */
+function commandDoneData(
+  event: RemoteSessionEvent,
+  remoteToLocal: ReadonlyMap<number, number>,
+): { data?: unknown } {
+  if (event.type !== 'command/done') return {}
+  const data = event.data
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return {}
+  const record = data as { sourceEventSeq?: unknown }
+  if (typeof record.sourceEventSeq !== 'number') return {}
+  const mapped = remoteToLocal.get(record.sourceEventSeq)
+  const rest = { ...record }
+  delete rest.sourceEventSeq
+  return { data: mapped === undefined ? rest : { ...rest, sourceEventSeq: mapped } }
 }
 
 /** Attach the degradation marker without discarding the payload. */
 function mergeDegraded(data: unknown, marker: MirrorDegradedEvent): unknown {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) return { ...marker, value: data }
   return { ...(data as Record<string, unknown>), ...marker }
+}
+
+/**
+ * Keep only the reasoning blocks of a provider's raw output.
+ *
+ * `summaryText` in the default backend projects `rawOutput` onto its `text`
+ * blocks, so the summary the card renders already *is* that text; the blocks it
+ * drops are the ones worth forwarding.
+ *
+ * `reasoning` is the only one with a reader: the trajectory panel draws the
+ * compaction's thinking from `rawOutput` (`detailReasoning` in
+ * `dsh-client-ui-trajectory`), and without it a mirrored card's thinking detail
+ * is empty while a local one's is not. Attachments cannot ride here — a
+ * `reasoning` block carries text and nothing else — so this filter also keeps
+ * the export's reference walk (`collectAttachmentRefs` over `rawOutput`) from
+ * ever missing something, because it never had anything to find.
+ *
+ * @param raw - the event's `rawOutput` value, of unknown shape.
+ * @returns the reasoning blocks, empty when there are none.
+ */
+function reasoningBlocks(raw: unknown): unknown[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter(block =>
+    typeof block === 'object' && block !== null && !Array.isArray(block)
+    && (block as { type?: unknown }).type === 'reasoning')
+}
+
+/**
+ * Trim a `compaction/summary` to what this transcript can show.
+ *
+ * `compaction/summary` is a discriminated union in DSH: `{ rawOutput,
+ * llmStreamCall: true }` records that a call through `ctx.llm.stream()` produced
+ * this summary, while the other branch is an unmarked template or remote
+ * summarizer and carries no `llmStreamCall`. Removing `rawOutput` while leaving
+ * `llmStreamCall: true` behind would describe a stream call whose output is
+ * missing — the shape `dsh-session-format-v0-to-v1` refuses with "llmStreamCall
+ * requires rawOutput". So when nothing is left to forward, both members go
+ * together and the event lands in the second branch: still a valid summary, just
+ * no longer one this host attributes to a call it did not make.
+ *
+ * When reasoning survives, `rawOutput` stays (now holding only reasoning) and
+ * `llmStreamCall` stays with it; the union is still satisfied, and the event
+ * honestly reports that a stream call produced what remains.
+ *
+ * `text` blocks are dropped rather than kept as a second copy of `summary`.
+ * Everything else — `summary`, `shadowedSeqs`, `shadowedTokenCount`, `provider`,
+ * `model`, `usage` — is untouched.
+ *
+ * @param data - the event payload about to be appended.
+ * @returns the payload with its raw output reduced to the reasoning.
+ */
+function trimmedCompactionSummary(data: unknown): unknown {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return data
+  const record = data as Record<string, unknown>
+  if (!Object.hasOwn(record, 'rawOutput')) return data
+  const kept = reasoningBlocks(record.rawOutput)
+  if (kept.length === 0) {
+    const copy = { ...record }
+    delete copy.rawOutput
+    delete copy.llmStreamCall
+    return copy
+  }
+  return { ...record, rawOutput: kept }
 }
 
 /**
@@ -4308,20 +4455,74 @@ function isSessionLike(value: unknown): boolean {
     && typeof candidate.seq === 'number'
 }
 
+/**
+ * Whether a remote event is a compaction checkpoint: a surface replacement that
+ * carries the summary into the visible transcript.
+ *
+ * @param event - remote event about to be replayed.
+ * @returns whether the event is a checkpoint.
+ */
+function isCompactionCheckpoint(event: RemoteSessionEvent): boolean {
+  if (event.type !== 'user/message') return false
+  const source = (event.data as { source?: { kind?: unknown } }).source
+  return source?.kind === 'compact-checkpoint'
+}
+
+/**
+ * Whether a remote event describes the remote *context window* rather than the
+ * conversation, and therefore has no local counterpart.
+ *
+ * Two families are filtered, and the reasons are deliberately separate:
+ *
+ * - **Remote transaction bookkeeping.** `agent/inbox/spliced` is a projection of
+ *   remote pending input, and the `compaction/start` / `compaction/end` pair is
+ *   the *remote* compaction lock. A local copy of the lock would imply a
+ *   transaction this log cannot run, so only the lock is dropped — its middle,
+ *   `compaction/summary`, is conversation evidence and survives.
+ * - **Injected model context.** Remote DSH adds instructions, runtime context
+ *   and the skill catalog as `user/message` events with non-human sources.
+ *   Replaying those corrupts the local transcript's prompts and can stall the
+ *   mirror on a large synthetic message.
+ *
+ * A compaction checkpoint is a `user/message` too, but it is *not* injection: it
+ * is a real surface replacement that belongs in the transcript. It shares the
+ * shape and not the meaning, so it is excluded from the injection rule below —
+ * that is what lets a mirrored `/compact` show its card. Whether a particular
+ * checkpoint can be *placed* is a separate question, answered where the seq map
+ * is available (see {@link unplaceableCheckpoint}).
+ *
+ * @param event - remote event about to be replayed.
+ * @returns whether to drop it.
+ */
 function isMirrorNoise(event: RemoteSessionEvent): boolean {
-  // Inbox splices are projections of remote pending input, and compaction
-  // events describe the remote context window, not the conversation. Neither
-  // has a local counterpart.
-  if (event.type === 'agent/inbox/spliced' || event.type.startsWith('compaction/')) return true
-  // Remote DSH injects context as user/message events with non-human sources
-  // (compaction checkpoint, instructions, runtime context, skill catalog).
-  // Replaying those into the local transcript corrupts its prompts and can
-  // stall the mirror on a large synthetic message.
+  if (event.type === 'agent/inbox/spliced') return true
+  if (event.type === 'compaction/start' || event.type === 'compaction/end') return true
   if (event.type === 'user/message') {
     const source = (event.data as { source?: { kind?: unknown } }).source
+    if (source?.kind === 'compact-checkpoint') return false
     return source?.kind !== 'user'
   }
   return false
+}
+
+/**
+ * Whether a checkpoint cannot be placed in this log.
+ *
+ * A checkpoint is meaningful only as a replacement over a range that exists
+ * locally. Unplaceable ones are dropped rather than degraded to `append`: an
+ * appended checkpoint is *not* a replacement, so the client's `compactSource`
+ * would stop recognising it while the message node would start rendering the
+ * summary as an ordinary user bubble — strictly worse than the command row alone.
+ *
+ * @param event - remote event about to be replayed.
+ * @param remoteToLocal - the mirror's seq map for this Session.
+ * @returns whether to drop the checkpoint.
+ */
+function unplaceableCheckpoint(
+  event: RemoteSessionEvent,
+  remoteToLocal: ReadonlyMap<number, number>,
+): boolean {
+  return isCompactionCheckpoint(event) && !replacementResolves(event, remoteToLocal)
 }
 
 function appendRemoteEvent(
@@ -4371,23 +4572,35 @@ function messageData(message: unknown): unknown {
   }
 }
 
-function toSeedEvent(event: RemoteSessionEvent, seq: number, map: ReadonlyMap<number, number>): SessionEvent {
+function toSeedEvent(
+  event: RemoteSessionEvent,
+  seq: number,
+  map: ReadonlyMap<number, number>,
+): SessionEvent {
   // A seeded tail may start in the middle of a replacement chain. Replaying a
   // remote replacement can then target a node that was dropped with the prefix
-  // and poison the whole local surface projection. Seed every result as its own
-  // surface append instead.
+  // and poison the whole local surface projection, so every replacement is
+  // seeded as its own surface append.
+  //
+  // The one exception is a compaction checkpoint: appended, it would stop being
+  // a replacement, so `compactSource` would no longer recognise it and the
+  // summary would render as an ordinary user bubble instead of the card. A
+  // checkpoint whose span this window still holds is therefore placed over the
+  // local intersection; one whose span it does not is dropped (see
+  // `isCompactionCheckpoint` in the seed filter).
   const hadReplacement = typeof event.surfaceOp === 'object'
-  const surfaceOp = event.surfaceOp === undefined || hadReplacement ? (hadReplacement ? 'append' : undefined) : event.surfaceOp
-  const sourceEventSeqs = hadReplacement
-    ? undefined
-    : event.sourceEventSeqs
-      ?.map(source => map.get(source))
-      .filter((source): source is number => source !== undefined)
+  const span = isCompactionCheckpoint(event) && hadReplacement ? localSpan(event, map) : undefined
+  const surfaceOp = span !== undefined
+    ? { op: 'replace' as const, startSeq: span.startSeq, endSeq: span.endSeq }
+    : event.surfaceOp === undefined || hadReplacement ? (hadReplacement ? 'append' : undefined) : event.surfaceOp
+  const sourceEventSeqs = event.sourceEventSeqs
+    ?.map(source => map.get(source))
+    .filter((source): source is number => source !== undefined)
   return {
     seq,
     type: event.type,
     time: event.time,
-    data: event.data,
+    data: event.type === 'compaction/summary' ? trimmedCompactionSummary(event.data) : event.data,
     ...surfaceOp === undefined ? {} : { surfaceOp },
     ...sourceEventSeqs === undefined || sourceEventSeqs.length === 0 ? {} : { sourceEventSeqs },
   } as unknown as SessionEvent
