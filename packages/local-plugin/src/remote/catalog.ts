@@ -193,7 +193,12 @@ export function installRemoteCatalog(
           lastSignature.set(key, signature)
           return result.commands
         } catch (error) {
-          ctx.logger.debug('dsh-waypoint: remote command catalog unavailable: %s', String(error))
+          // Reaching here means the host advertised `session.catalog` and the
+          // call still failed, because `addressOf` already filtered unsupported
+          // hosts out. That makes this a real fault, not a negotiated absence, so
+          // it is reported at a level an operator will actually see: at `debug`
+          // the only symptom was an empty `/` menu with nothing in the log.
+          ctx.logger.warn('dsh-waypoint: remote command catalog unavailable: %s', String(error))
           return originalList(agent)
         }
       },
@@ -298,7 +303,10 @@ export function installRemoteCatalog(
           skillCache.set(key, { value: result, expires: Date.now() + CATALOG_TTL_MS })
           return result
         } catch (error) {
-          ctx.logger.debug('dsh-waypoint: remote skill catalog unavailable: %s', String(error))
+          // Same reasoning as the command catalog above: a host that lacks
+          // `session.catalog` never reaches this block, so a failure here is a
+          // real one and a silent fallback would hide it behind an empty menu.
+          ctx.logger.warn('dsh-waypoint: remote skill catalog unavailable: %s', String(error))
           return originalSkillList(request, signal)
         }
       },

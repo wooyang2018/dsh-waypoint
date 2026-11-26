@@ -316,6 +316,48 @@ describe('remote skill catalog', () => {
       await stop()
     }
   })
+
+  it('answers a cold Session from its recorded preset instead of refusing', async () => {
+    // A Session whose log this host holds but whose Agent is not bound — the
+    // ordinary state after a remote restart or a reconnect. The old code threw
+    // `session/not-live` here, the local adapter degraded to an empty local
+    // list, and a mirrored `/` menu silently lost every remote skill.
+    const h = host()
+    // Detach the Agent only: the Session and its observation still exist.
+    ;(h.ctx as unknown as { agents: unknown }).agents = { get: () => undefined }
+    const service = await agentFor(h)
+    const stop = await serve(service, h.ctx)
+    try {
+      const response = await post('/dsh-waypoint-agent/api/v1/catalog/skills', { sessionId: 'session-remote' }, service.token)
+      assert.equal(response.status, 200, await response.clone().text())
+      const listed = await payload<{ skills: Array<{ name: string }> }>(response)
+      // The observation reports agentPreset 'standard', so the preset branch
+      // answers with that composition rather than the host default.
+      assert.equal(listed.skills.length > 0, true, 'a cold Session still has a menu')
+      assert.equal(listed.skills[0]?.name, 'dsh-doc')
+    } finally {
+      await stop()
+    }
+  })
+
+  it('still refuses to execute on a cold Session', async () => {
+    // Reading a menu must not wake anything, but a command appends its lifecycle
+    // to the Session and therefore genuinely needs the live object.
+    const h = host()
+    ;(h.ctx as unknown as { agents: unknown }).agents = { get: () => undefined }
+    const service = await agentFor(h)
+    const stop = await serve(service, h.ctx)
+    try {
+      const response = await post('/dsh-waypoint-agent/api/v1/commands/execute', {
+        sessionId: 'session-remote',
+        line: '/goal do X',
+      }, service.token)
+      assert.equal(response.status, 409, 'session/not-live maps to 409')
+      assert.equal(h.executions.length, 0, 'nothing ran')
+    } finally {
+      await stop()
+    }
+  })
 })
 
 describe('remote command execution', () => {

@@ -22,7 +22,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { harness, parent } from '../test/mirror_fixture.ts'
+import { harness, parent } from '../test/mirror-fixture.ts'
 
 type RawEvent = {
   seq: number

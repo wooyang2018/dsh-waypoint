@@ -27,7 +27,7 @@ The same two panels in the dark theme:
 This plugin targets the official **DSH Desktop** application. Supported versions:
 
 - [DSH Desktop](https://github.com/deepseek-ai/deepseek-harness) [`0.2.2-rc.5`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.5)
-- Plugin [`1.1.2`](https://www.npmjs.com/package/dsh-waypoint)
+- Plugin [`1.1.4`](https://www.npmjs.com/package/dsh-waypoint)
 - Remote DSH [`0.2.2-rc.5`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.5) (tested; new installs follow the local DSH version)
 - Remote [Node.js `22.19+`](https://nodejs.org/en/download) on Linux/macOS
 - Remote `python3` for **New terminal** only (the remote PTY is a standard-library `pty` helper, not a

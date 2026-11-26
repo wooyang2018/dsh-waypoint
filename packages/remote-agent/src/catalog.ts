@@ -257,6 +257,15 @@ export class RemoteCatalogService {
    * A draft leases the preset's standing composition and releases it in the
    * caller's `finally`; a live Session yields its own Agent, which owns the
    * scope for as long as it exists and therefore needs no lease.
+   *
+   * A Session that is merely *cold* — its log is on this host but no Agent is
+   * bound to it — is not an error. That is the ordinary state after the remote
+   * DSH restarts or a Host reconnects, and the local side opens exactly this
+   * read when a user types `/` in a mirrored conversation they have not resumed.
+   * Such a Session still knows what it ran: its projection or header names the
+   * preset and the directory. Reading the menu must not require waking it, so the
+   * cold case is answered through the same preset lease a draft uses, with the
+   * recorded preset and cwd standing in for the ones a draft would have chosen.
    */
   async #resolve(request: RemoteCatalogRequest, signal?: AbortSignal): Promise<{
     readonly scope: object
@@ -264,8 +273,15 @@ export class RemoteCatalogService {
     release(): Promise<void>
   }> {
     if (request.sessionId !== undefined) {
-      const live = this.#liveSession(request.sessionId)
-      return { scope: live.agent, cwd: await this.#cwdOf(request.sessionId, live.agent, signal), release: noop }
+      const live = this.#liveAgent(request.sessionId)
+      if (live !== undefined) {
+        return { scope: live, cwd: await this.#cwdOf(request.sessionId, live, signal), release: noop }
+      }
+      // Cold: answer from what the log recorded. A Session address still reaches
+      // the preset branch, so an unknown directory or preset fails exactly the
+      // way a draft would.
+      const recorded = await this.#recordedAddress(request.sessionId, signal)
+      return await this.#leasePreset(recorded.agentPreset, recorded.cwd)
     }
     const presets = this.#presets()
     if (presets === undefined) {
@@ -280,17 +296,90 @@ export class RemoteCatalogService {
         message: 'a draft catalog request requires the working directory',
       })
     }
-    // An unknown or unusable preset answers through the same path a session
-    // creation would: the caller must not get a plausible-looking but different
-    // composition's menu.
-    const lease = await presets.acquireScope(request.agentPreset ?? presets.defaultId)
+    return await this.#leasePreset(request.agentPreset, request.cwd)
+  }
+
+  /**
+   * Lease one preset's standing composition for a catalog read.
+   *
+   * An unknown or unusable preset answers through the same path a session
+   * creation would: the caller must not get a plausible-looking but different
+   * composition's menu.
+   *
+   * @param agentPreset - preset to lease, or undefined for the host default.
+   * @param cwd - directory the project roots resolve against.
+   * @returns the leased scope and its release.
+   */
+  async #leasePreset(agentPreset: string | undefined, cwd: string): Promise<{
+    readonly scope: object
+    readonly cwd: string
+    release(): Promise<void>
+  }> {
+    const presets = this.#presets()
+    if (presets === undefined) {
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'this host composes no agent preset registry; a catalog read cannot be resolved',
+      })
+    }
+    if (cwd === '') {
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'resolving a catalog requires the working directory',
+      })
+    }
+    const lease = await presets.acquireScope(agentPreset ?? presets.defaultId)
     return {
       scope: lease.key as object,
-      cwd: request.cwd,
+      cwd,
       // `AsyncDisposable` promises a `PromiseLike`, which the caller's `finally`
       // cannot await chain-style; normalize it once here.
       release: async () => { await lease[Symbol.asyncDispose]() },
     }
+  }
+
+  /**
+   * Read the preset and directory a cold Session recorded.
+   *
+   * The observation's projections are what a resumed Session would restore
+   * (`workingDirectory`, `agentPreset`), and the header carries the `cwd` it was
+   * created with. Both are tried because a Session predating a projection may
+   * only have the header, and a Host that cannot observe the log at all answers
+   * with an empty directory so the caller gets the ordinary "requires the
+   * working directory" refusal rather than a menu from the wrong composition.
+   *
+   * @param sessionId - Session whose Agent is not bound.
+   * @param signal - caller cancellation.
+   * @returns the recorded preset (when known) and directory.
+   */
+  async #recordedAddress(sessionId: string, signal?: AbortSignal): Promise<{
+    readonly agentPreset?: string
+    readonly cwd: string
+  }> {
+    const query = this.#sessionQuery()
+    if (query !== undefined) {
+      try {
+        const observation = await query.observeSession(sessionId as SessionId)
+        try {
+          signal?.throwIfAborted()
+          const values = observation.projections?.values
+          const projected = values?.workingDirectory
+          const header = observation.header.cwd
+          const preset = values?.agentPreset
+          return {
+            ...typeof preset === 'string' && preset !== '' ? { agentPreset: preset } : {},
+            cwd: typeof projected === 'string' && projected !== ''
+              ? projected
+              : typeof header === 'string' ? header : '',
+          }
+        } finally {
+          await observation[Symbol.asyncDispose]?.()
+        }
+      } catch {
+        // Fall through: the caller's own refusal is more useful than this one.
+      }
+    }
+    return { cwd: this.#workdir()?.defaultDirectory ?? '' }
   }
 
   /**
@@ -332,6 +421,25 @@ export class RemoteCatalogService {
   }
 
   /**
+   * The Agent bound to one Session on this host, or undefined when it is cold.
+   *
+   * `commands` and `skills` accept a cold Session — they answer from the recorded
+   * preset — but `execute` cannot: the registry appends the command lifecycle to
+   * the Session, which needs the live object. The two callers therefore ask
+   * different questions, and this answers the weaker one.
+   */
+  #liveAgent(sessionId: string): object | undefined {
+    const agents = (this.ctx as unknown as { get(name: string): unknown }).get('agents') as
+      | { get(id: SessionId): object | undefined }
+      | undefined
+    const agent = agents?.get(sessionId as SessionId)
+    if (agent === undefined) return undefined
+    // An Agent without its Session in the store is a half-built pair; neither
+    // caller can use it, so treat it as cold rather than handing out a scope.
+    return this.ctx.sessions.get(sessionId as SessionId) === undefined ? undefined : agent
+  }
+
+  /**
    * Require the live Session and its Agent for one command.
    *
    * Both are needed and they are not interchangeable: the registry appends the
@@ -347,10 +455,7 @@ export class RemoteCatalogService {
         details: { sessionId },
       })
     }
-    const agents = (this.ctx as unknown as { get(name: string): unknown }).get('agents') as
-      | { get(id: SessionId): object | undefined }
-      | undefined
-    const agent = agents?.get(sessionId as SessionId)
+    const agent = this.#liveAgent(sessionId)
     if (agent === undefined) {
       throw new RemoteProtocolError({
         code: 'session/not-live',
