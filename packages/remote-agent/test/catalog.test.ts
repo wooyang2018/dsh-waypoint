@@ -135,6 +135,20 @@ function host() {
       staged.set(receiptId, { type: 'file', ...request.name === undefined ? {} : { name: request.name } })
       return { receiptId }
     },
+    // Session-addressed overload the agent actually uses: it resolves the Agent
+    // itself, so a forwarded file also works on a cold Session.
+    async uploadStream(request: {
+      readonly sessionId: string
+      readonly data: AsyncIterable<Uint8Array>
+      readonly name?: string
+    }) {
+      const chunks: Uint8Array[] = []
+      for await (const chunk of request.data) chunks.push(chunk)
+      receiptSeq += 1
+      const receiptId = `receipt-${String(receiptSeq)}`
+      staged.set(receiptId, { type: 'file', ...request.name === undefined ? {} : { name: request.name } })
+      return { receiptId }
+    },
   }
 
   const ctx = {

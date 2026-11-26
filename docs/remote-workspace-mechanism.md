@@ -325,6 +325,15 @@ reads the bytes back from the local store and sends them inline as a `file` part
 admits them into *its* store and mints a receipt of its own before the prompt enters its Agent
 (`RemoteAgentService.promptSession`).
 
+That admission happens *before* `sessionController.prompt`, which is the step that resumes a Session
+nobody has opened yet. So at admit time a cold Session has no live Agent, and reading `ctx.agents.get()`
+— a synchronous table lookup — answered `undefined`. The agent refused the whole prompt as
+`session/not-live`, although the very next step would have woken it. Text prompts were unaffected
+because they need no Agent until that same step, so "text works, files do not" read as an attachment
+bug when it was a resolution-order one. Admission now goes through `fileUploads.uploadStream`, which
+takes a Session id and resolves the Agent itself, resuming on a miss through the controller's
+registered resolver. One path serves cold and warm Sessions alike.
+
 Two bounds follow. An agent without `session.file-attachment` is refused before anything is sent — an
 older agent would drop the part, and the local transcript would already show the message as accepted.
 And a prompt body is capped at 12 MiB, so an inline file tops out just under 9 MiB once base64 is

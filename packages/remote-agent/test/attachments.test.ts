@@ -67,6 +67,24 @@ function host() {
       staged.set(receiptId, { type: 'file', request })
       return { receiptId }
     },
+    // The Session-addressed overload, which is what the agent uses: it resolves
+    // the Agent itself and so also works for a Session nobody has opened. Kept
+    // separate from `upload` so a test can tell which one ran.
+    async uploadStream(request: {
+      readonly sessionId: string
+      readonly data: AsyncIterable<Uint8Array>
+      readonly name?: string
+    }) {
+      const chunks: Uint8Array[] = []
+      for await (const chunk of request.data) chunks.push(chunk)
+      const bytes = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)))
+      const record = { data: bytes.toString('base64'), ...request.name === undefined ? {} : { name: request.name } }
+      uploadedFiles.push(record)
+      receiptSeq += 1
+      const receiptId = `receipt-${String(receiptSeq)}`
+      staged.set(receiptId, { type: 'file', request: record })
+      return { receiptId }
+    },
   }
 
   const attachments = {

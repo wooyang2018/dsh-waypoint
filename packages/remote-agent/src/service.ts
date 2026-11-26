@@ -111,6 +111,21 @@ interface PendingApproval {
  * the Agent scope for every browser upload.
  */
 interface ForwardedFileUploads {
+  /**
+   * Persist raw chunks for one Session without aggregating the upload.
+   *
+   * Takes a Session id rather than an Agent on purpose: this overload resolves
+   * the Agent itself (`resolveAgent`), and that resolution wakes a cold Session
+   * through the controller's registered resolver. The `upload(agent, …)` form
+   * below requires a caller who already holds a live Agent, which is exactly
+   * what a mirrored prompt does not have on a Session nobody has opened yet.
+   */
+  uploadStream(request: {
+    readonly sessionId: never
+    readonly data: AsyncIterable<Uint8Array>
+    readonly signal?: AbortSignal
+    readonly name?: string
+  }): Promise<{ readonly receiptId: unknown }>
   upload(
     agent: never,
     request: { readonly data: string; readonly name?: string },
@@ -551,16 +566,22 @@ export class RemoteAgentService {
   /**
    * Admit bytes forwarded by the local plugin and return this host's receipt.
    *
-   * Goes through `fileUploads.upload` rather than `attachments.saveFile` so the
-   * upload is staged under the receiving Agent exactly as a browser upload is:
-   * the mirror forwards what a composer sent, and the remote must end up in the
-   * same state it would have reached had the file been picked there. A direct
+   * Goes through `fileUploads` rather than `attachments.saveFile` so the upload
+   * is staged under the receiving Agent exactly as a browser upload is: the
+   * mirror forwards what a composer sent, and the remote must end up in the same
+   * state it would have reached had the file been picked there. A direct
    * `saveFile` would store the bytes but leave nothing for prompt admission to
    * resolve, and the resulting `FILE_NOT_STAGED` reads as a client bug.
    *
-   * The Agent, not just its Session, is required: staging is keyed by the exact
-   * `Session` object the Agent owns, so a lookup that only proved the Session
-   * exists would mint a receipt under an entry admission never reads.
+   * Resolution order matters and was the bug. An attachment is admitted *before*
+   * `promptSession` hands the prompt to `sessionController.prompt`, so at this
+   * point a Session that nobody has opened yet has no live Agent. Reading
+   * `ctx.agents.get()` — a synchronous table lookup — therefore answered
+   * `undefined` and this refused the prompt as `session/not-live`, even though
+   * the very next step would have woken the Session. A text prompt never hit it
+   * because it needs no Agent until that same step. `uploadStream` resolves the
+   * Agent itself and, on a miss, runs the controller's registered resolver,
+   * which resumes the Session — so a cold Session now admits its first file.
    *
    * @param sessionId - Session the forwarded prompt targets.
    * @param data - canonical base64 of the exact file bytes.
@@ -569,14 +590,6 @@ export class RemoteAgentService {
    */
   async #admitForwardedFile(sessionId: string, data: string, name: string | undefined): Promise<string> {
     this.assertLiveSession(sessionId)
-    const agent = this.ctx.agents.get(sessionId as SessionId)
-    if (agent === undefined) {
-      throw new RemoteProtocolError({
-        code: 'session/not-live',
-        message: `session ${sessionId} has no live Agent to admit an attachment`,
-        details: { sessionId },
-      })
-    }
     const uploads = this.#fileUploadsService()
     if (uploads === undefined) {
       throw new RemoteProtocolError({
@@ -585,11 +598,11 @@ export class RemoteAgentService {
       })
     }
     try {
-      const stored = await uploads.upload(
-        agent as never,
-        { data, ...name === undefined ? {} : { name } },
-        new AbortController().signal,
-      )
+      const stored = await uploads.uploadStream({
+        sessionId: sessionId as never,
+        data: singleChunk(Buffer.from(data, 'base64')),
+        ...name === undefined ? {} : { name },
+      })
       return String(stored.receiptId)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1325,6 +1338,20 @@ function translateModelSelectionError(error: unknown, request: SelectModelReques
       model: typeof details.model === 'string' ? details.model : request.model,
     },
   })
+}
+
+/**
+ * Present already-held bytes as the one-chunk stream `uploadStream` consumes.
+ *
+ * The forwarded payload arrives as a single base64 string, so the stream exists
+ * only to satisfy the store's streaming contract; it never splits the file, and
+ * a zero-byte file still yields one empty chunk rather than an empty stream that
+ * the store would reject.
+ * @param data - exact file bytes.
+ * @returns an async iterable of exactly one chunk.
+ */
+async function* singleChunk(data: Uint8Array): AsyncIterable<Uint8Array> {
+  yield data
 }
 
 function toWorkspaceLike(workspace: Workspace): WorkspaceLike {

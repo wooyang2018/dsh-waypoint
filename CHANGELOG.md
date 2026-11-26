@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- **A forwarded file now reaches a Session nobody has opened yet.** An attachment is admitted before
+  `promptSession` hands the prompt to `sessionController.prompt`, and that hand-off is what resumes a
+  cold Session — so at admit time there was no live Agent. The agent read `ctx.agents.get()`, a
+  synchronous table lookup, answered `undefined`, and refused the whole prompt as `session/not-live`
+  even though the next step would have woken it. Text prompts never hit it because they need no Agent
+  until that same step, which made "text works, files do not" look like an attachment bug rather than
+  a resolution-order one. Admission now uses `fileUploads.uploadStream`, which takes a Session id and
+  resolves the Agent itself — resuming on a miss through the controller's registered resolver — so one
+  path serves cold and warm Sessions.
+- The same bug affected every "cold Session plus attachment" entry, not only mirrored ones: a browser
+  upload to a Session opened for the first time failed the same way. It surfaced as the generic
+  "remote agent returned an error", because `session/not-live` carries no user-facing wording.
 - **A prompt the mirror refuses now tells the user instead of vanishing.** The failure was reported
   through `agent/error`, which the Host relays into the client Session's `lastAgentError` — a field no
   component renders. So a refused prompt produced no visible reaction at all, and a correct refusal
