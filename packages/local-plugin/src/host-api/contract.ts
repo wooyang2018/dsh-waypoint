@@ -76,12 +76,38 @@ export interface MirroredWorkspace {
  * part of the browser bundle's type graph (`tsconfig.client.json` includes it),
  * and the mirror service pulls in Node-only modules. `kind` is a stable code and
  * the client owns the wording, matching `messages.ts`.
+ *
+ * A notice always names the local Session it concerns. The claim heartbeat is
+ * answered for whichever Session the page has open, and the client shows a
+ * notice only for that same Session — a failure that belongs to a conversation
+ * the user has since left is not worth interrupting them for, and showing it
+ * against the wrong transcript would read as a failure of what they are looking
+ * at now.
  */
-export interface HostNotice {
+export type HostNotice = RemoteArchiveFailedNotice | MirrorPromptFailedNotice
+
+/** The remote half of an archive failed while the local half stood. */
+export interface RemoteArchiveFailedNotice {
   readonly kind: 'remoteArchiveFailed'
   readonly localSessionId: string
   readonly hostId: string
   readonly remoteSessionId: string
+}
+
+/**
+ * A prompt could not be forwarded to the remote Session.
+ *
+ * The text is not prose: it is a `UiText` reference, so the client localizes it
+ * with the same `formatUiText` it uses for RPC failures, and parameters such as
+ * the offending path survive the trip. Without this the failure only reached
+ * `agent/error` → `lastAgentError`, which no component renders — the user saw a
+ * message vanish with no explanation.
+ */
+export interface MirrorPromptFailedNotice {
+  readonly kind: 'mirrorPromptFailed'
+  readonly localSessionId: string
+  /** Stable localizable reference, rendered by `formatUiText`. */
+  readonly ui: UiText
 }
 
 /** Browser-safe state snapshot. */

@@ -248,7 +248,7 @@ export class RemoteHostsService {
     this.config = config
     this.#store = new HostStore(`${config.stateDir}/hosts.json`)
     this.#localDshVersion = options.localDshVersion ?? resolveLocalDshVersion()
-    this.#provisioner = new RemoteProvisioner(config, this.#localDshVersion)
+    this.#provisioner = new RemoteProvisioner(config, this.#localDshVersion, ctx.logger)
     this.#resolveModelKey = options.resolveModelKey
   }
 

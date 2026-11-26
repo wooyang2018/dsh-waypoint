@@ -11,7 +11,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { InstallerError, NodeProvisionError, resolveScpBinary, type InstallerErrorCode } from '@dsh-waypoint/installer'
+import { InstallerError, NodeProvisionError, resolveScpBinary, runRemote, type InstallerErrorCode } from '@dsh-waypoint/installer'
 import { provisionRemoteAgent } from '@dsh-waypoint/installer'
 import { MINIMUM_NODE_VERSION } from '@dsh-waypoint/installer'
 import { isAgentLive } from '@dsh-waypoint/protocol'
@@ -59,10 +59,23 @@ export function resolveRemoteDshVersion(
 export class RemoteProvisioner {
   readonly #config: ResolvedConfig
   readonly #localDshVersion: string | undefined
+  /**
+   * Where the hand-installed-profile warning goes.
+   *
+   * Injected rather than resolved from a Context because this class is also
+   * constructed by tests that have no Host context, and a warning is the only
+   * thing that needs it.
+   */
+  readonly #logger: { warn(message: string, ...args: unknown[]): void } | undefined
 
-  constructor(config: ResolvedConfig, localDshVersion: string | undefined = resolveLocalDshVersion()) {
+  constructor(
+    config: ResolvedConfig,
+    localDshVersion: string | undefined = resolveLocalDshVersion(),
+    logger?: { warn(message: string, ...args: unknown[]): void },
+  ) {
     this.#config = config
     this.#localDshVersion = localDshVersion
+    this.#logger = logger
   }
 
   /**
@@ -105,6 +118,7 @@ export class RemoteProvisioner {
     options.onProgress?.('preparing')
     const proxyUrl = this.#config.remoteInstallProxy.trim() || undefined
     if (proxyUrl !== undefined) options.onProgress?.('proxyPreparing')
+    await this.#warnAboutHandInstalledProfile(target)
     try {
       await provisionRemoteAgent({
         target: target.canonical,
@@ -160,6 +174,71 @@ export class RemoteProvisioner {
       baselinePid,
       options.onProgress,
       options.signal,
+    )
+  }
+
+  /**
+   * Warn when someone installed into the remote profile by hand.
+   *
+   * The agent is installed by {@link provisionRemoteAgent}, which uses pnpm. A
+   * manual `npm install` inside `~/.dsh/profiles/web` is not equivalent: npm
+   * materialises every `peerDependencies` entry as a real package, and
+   * `dsh-system-prompt` then registers `deployment:persona-prefix` a second time
+   * alongside the copy DSH core already loaded. The profile still starts and the
+   * agent still answers `health`, so nothing looks wrong — but **every Session
+   * resume fails** with `persona: prompt section already registered`. A cold
+   * Session is exactly what a mirrored prompt needs to resume, so the visible
+   * symptom is "any attachment sent to a mirrored Session is refused", which
+   * reads as a bug in this repository rather than in the host's profile.
+   *
+   * Detection only. Removing `node_modules` here would be overreach: the host is
+   * the operator's, and they may have installed plugins of their own with pnpm.
+   * A probe that cannot run — no SSH, no permissions, an old shell — is silent on
+   * purpose, because turning a failed probe into a failed connection would be
+   * worse than the problem being reported.
+   *
+   * @param target - validated SSH target being provisioned.
+   */
+  async #warnAboutHandInstalledProfile(target: ParsedSshTarget): Promise<void> {
+    const profileDir = `${this.#config.remoteDshHome}/profiles/web`
+    let stdout: string | undefined
+    try {
+      const result = await runRemote(
+        { destination: target.destination } as Parameters<typeof runRemote>[0],
+        handInstalledProfileProbe(profileDir),
+        {
+          binary: this.#config.sshBinary,
+          strictHostKeyChecking: this.#config.strictHostKeyChecking,
+          timeoutMs: this.#config.probeTimeoutMs,
+          verbose: false,
+          // The probe reads a directory listing, never the agent state file, but
+          // there is nothing useful to echo either way.
+          echoStdout: false,
+        },
+      )
+      stdout = result.stdout
+    } catch {
+      // An unreachable host, a missing shell, or a refused command all mean the
+      // probe learned nothing. Provisioning decides what to do about that.
+      return
+    }
+    const finding = handInstalledProfileFinding(stdout)
+    if (finding === undefined) return
+    this.#logger?.warn(
+      'dsh-waypoint: %s has a hand-installed profile (%s)',
+      target.canonical,
+      finding.packages > 0
+        ? `${String(finding.packages)} @deepseek-ai package(s) in ${profileDir}/node_modules`
+        : `${profileDir}/package-lock.json`,
+    )
+    this.#logger?.warn(
+      'dsh-waypoint: npm installs peerDependencies as real packages, so dsh-system-prompt '
+      + 'registers "deployment:persona-prefix" a second time and EVERY Session resume fails with '
+      + '"persona: prompt section already registered". A cold Session cannot be resumed, so '
+      + 'attachments sent to a mirrored Session are refused — which reads as a bug here rather '
+      + 'than in the host profile. Do not install into a remote profile by hand. Fix: '
+      + `rm -rf ${profileDir}/node_modules ${profileDir}/package-lock.json && pnpm install, `
+      + 'or delete the agent state file and let the plugin re-provision.',
     )
   }
 
@@ -439,6 +518,60 @@ export function agentVersionDiffers(actual: string | undefined, expected: string
   if (actual === undefined || actual === '') return true
   const comparison = compareVersions(actual, expected)
   return comparison === undefined ? actual !== expected : comparison !== 0
+}
+
+/**
+ * Report what a hand-installed profile looks like, or `undefined` when it is clean.
+ *
+ * Split from the probe so the decision is testable without SSH: the command
+ * writes `<package count> <1|0 for an npm lockfile>` and nothing else.
+ * @param report - stdout of the probe, or undefined when the probe could not run.
+ * @returns the offending condition, or undefined for a clean/unknown profile.
+ */
+export function handInstalledProfileFinding(
+  report: string | undefined,
+): { readonly packages: number; readonly npmLock: boolean } | undefined {
+  if (report === undefined) return undefined
+  const [packagesRaw, lockRaw] = report.trim().split(/\s+/u)
+  const packages = Number(packagesRaw ?? '')
+  if (!Number.isFinite(packages)) return undefined
+  const npmLock = lockRaw === '1'
+  if (packages === 0 && !npmLock) return undefined
+  return { packages, npmLock }
+}
+
+/**
+ * The one SSH command that reports a profile's install state.
+ *
+ * Kept as a pure string builder so a test can assert the probe asks for exactly
+ * what the finding understands, and so the path is quoted in one place.
+ * @param profileDir - absolute remote profile directory.
+ * @returns a POSIX shell command printing `<count> <lockflag>`.
+ */
+export function handInstalledProfileProbe(profileDir: string): string {
+  // One round trip, no glob: the count and the lockfile answer both come back
+  // from a shell that may be `sh` rather than bash. A missing directory exits 0
+  // with no output, which the finding reads as "nothing to report".
+  return [
+    `cd ${quoteShell(profileDir)} 2>/dev/null || exit 0`,
+    `pkgs=$(ls node_modules/@deepseek-ai 2>/dev/null | wc -l | tr -d " ")`,
+    `lock=$(test -f package-lock.json && echo 1 || echo 0)`,
+    `echo "$pkgs $lock"`,
+  ].join('; ')
+}
+
+/**
+ * Quote one path for a POSIX shell command line.
+ *
+ * The probe embeds a `DSH_HOME`-derived path in a command string sent through
+ * SSH, and that path comes from configuration. Single quotes keep a `$`, a
+ * space, or a backtick from being interpreted; an embedded single quote is
+ * closed, escaped, and reopened the standard way.
+ * @param value - literal path.
+ * @returns the path as a single-quoted shell word.
+ */
+function quoteShell(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`
 }
 
 function progressForLine(line: string): HostDetail | undefined {

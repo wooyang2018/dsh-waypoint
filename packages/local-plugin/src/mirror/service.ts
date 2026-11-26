@@ -13,9 +13,9 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { realpathSync } from 'node:fs'
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { realpathSync, type Stats } from 'node:fs'
+import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { createScope, scopeTarget, type Scope } from '@deepseek-ai/dsh-scope'
 import type {} from '@deepseek-ai/dsh-user-approval'
@@ -38,6 +38,7 @@ import type {
   RemoteWorkspace,
   PromptContentPart,
   PromptDeliveryMode,
+  PromptFilePart,
 } from '@dsh-waypoint/protocol'
 import { resolveDshHome, type ResolvedConfig } from '../config.ts'
 import { LocalError } from '../errors.ts'
@@ -119,9 +120,7 @@ interface MirrorState {
 export type MirrorNotice = HostNotice
 
 /** A queued notice plus the moment it stops being worth showing. */
-interface QueuedNotice extends MirrorNotice {
-  readonly expiresAt: number
-}
+type QueuedNotice = MirrorNotice & { readonly expiresAt: number }
 
 interface PendingUser {
   readonly message: unknown
@@ -133,8 +132,13 @@ interface PendingUser {
    * message another client sent: the queue shifted whatever arrived. Matching
    * on text cannot bind the wrong entry, and an unmatched remote message then
    * falls through to a normal append instead of overwriting a local one.
+   *
+   * Mutable because the forwarded text is not always the composed text: a local
+   * file reference is replaced on the way out, and the remote echoes the
+   * replacement. `#sendPrompt` settles this to the text it actually sent before
+   * the request leaves, so the echo still pairs with this entry.
    */
-  readonly text: string
+  text: string
   localSeq: number
 }
 
@@ -1798,6 +1802,13 @@ export class RemoteMirrorService {
     try {
       const { text, content } = await this.#promptContent(message, runtime)
       if (this.#detached(runtime)) throw new Error('remote mirror is no longer active')
+      // Pair the optimistic entry with the text that will come back. Local file
+      // references are rewritten on the way out (see `#resolveTextReferences`),
+      // and the remote echoes the rewritten text, so recording the original here
+      // would leave this entry unmatched — the replayed `user/message` would then
+      // be appended as history instead of reusing the bubble the user is looking
+      // at. Assignment before the send is what keeps that pairing intact.
+      pending.text = text
       let candidate = selection
       // Skip a selection the remote catalog does not offer, so the common case
       // costs no failed round trip at all. The rejection fallback below stays as
@@ -1869,9 +1880,34 @@ export class RemoteMirrorService {
     }
   }
 
+  /**
+   * Tell the user that one prompt could not be forwarded.
+   *
+   * Two channels, because they serve different readers. `agent/error` is the
+   * machine-readable notification other Host services consume; it lands on the
+   * client Session's `lastAgentError`, which **no component renders** — so on its
+   * own it is invisible. The queued notice is what the page can actually show:
+   * it rides the existing claim heartbeat to a toast, carrying the localized
+   * reference and its parameters.
+   *
+   * The `ui` reference is taken from the error when it has one, so a specific
+   * cause (a missing path, a directory) reaches the user verbatim. Anything else
+   * — a dropped tunnel, a refused request — falls back to one generic sentence
+   * rather than a raw host message, which `messages.ts` forbids rendering.
+   *
+   * @param runtime - mirror whose prompt failed.
+   * @param error - failure as caught.
+   */
   #reportPromptError(runtime: MirrorRuntime, error: unknown): void {
     runtime.lastError = error instanceof Error ? error.message : String(error)
     this.#ctx.logger.warn('dsh-waypoint: remote prompt failed: %s', runtime.lastError)
+    this.#queueNotice({
+      kind: 'mirrorPromptFailed',
+      localSessionId: runtime.record.localSessionId,
+      ui: error instanceof LocalError && error.ui !== undefined
+        ? error.ui
+        : { key: 'error.mirrorPromptFailed' },
+    })
     try {
       const emit = this.#ctx.emit as unknown as (name: string, payload: unknown) => void
       emit.call(this.#ctx, 'agent/error', {
@@ -1890,7 +1926,14 @@ export class RemoteMirrorService {
    * admission put them, and carried inline to the remote: a staged receipt is
    * per-Host authority and cannot cross the tunnel (see `PromptFilePart`).
    *
-   * Two refusals rather than a silent drop:
+   * A text part also carries local file references, and those are resolved here
+   * too — see {@link #resolveTextReferences}. The Desktop application turns
+   * every non-image file the user picks into an `@<path>` reference instead of
+   * an upload (its preload exposes a host-path bridge that the composer prefers
+   * over uploading), so on a mirrored Session those paths would otherwise reach
+   * the remote as text naming a file that exists only on this machine.
+   *
+   * Refusals rather than a silent drop:
    *
    * - A `file` part on a host without `session.file-attachment` fails here. An
    *   older agent would `route/not-found` or drop it, and either way the local
@@ -1899,6 +1942,8 @@ export class RemoteMirrorService {
    *   limit named, instead of a generic `request/too-large` from the agent's
    *   framing layer. The 9 MiB figure is the 12 MiB body cap minus base64's
    *   4/3 expansion; keeping both numbers in one place makes the reason clear.
+   * - A local path that cannot be forwarded fails with the path named, rather
+   *   than being sent as text the remote cannot open.
    *
    * @param message - local user message.
    * @param runtime - mirror that will forward the prompt.
@@ -1909,6 +1954,8 @@ export class RemoteMirrorService {
     runtime: MirrorRuntime,
   ): Promise<{ text: string; content: PromptContentPart[] }> {
     const content: PromptContentPart[] = []
+    /** Object ids already forwarded, so one file is never carried twice. */
+    const forwarded = new Set<string>()
     const attachments = this.#ctx.get('attachments') as unknown as {
       readImage(ref: unknown): Promise<{
         data: Uint8Array
@@ -1919,7 +1966,9 @@ export class RemoteMirrorService {
     } | undefined
     for (const part of promptParts(message)) {
       if (part.type === 'text') {
-        content.push({ type: 'text', text: part.text })
+        const resolved = await this.#resolveTextReferences(part.text, runtime, forwarded)
+        if (resolved.text !== '') content.push({ type: 'text', text: resolved.text })
+        content.push(...resolved.files)
         continue
       }
       if (attachments === undefined) throw new Error('本地附件服务不可用')
@@ -1959,6 +2008,11 @@ export class RemoteMirrorService {
           },
         ),
       )
+      // An attached file is keyed by its own identity, so the same file arriving
+      // again as an `@` reference is not carried twice.
+      const identity = attachmentIdentity(part.attachment)
+      if (identity !== undefined && forwarded.has(identity)) continue
+      if (identity !== undefined) forwarded.add(identity)
       content.push({
         type: 'file',
         data: data.toString('base64'),
@@ -1972,6 +2026,114 @@ export class RemoteMirrorService {
       .trim()
     if (content.length === 0) throw new Error('消息内容为空')
     return { text, content }
+  }
+
+  /**
+   * Turn `@<local absolute path>` references in one text part into files.
+   *
+   * The Desktop application resolves a picked non-image file to a path rather
+   * than an upload whenever its preload bridge is present, so a mirrored Session
+   * receives text where the remote would need bytes. This resolves such a
+   * reference against the *local* filesystem and forwards the bytes, replacing
+   * the reference with a short note so the remote never sees a path it cannot
+   * open.
+   *
+   * Only an `@`-prefixed absolute path is considered. That restriction is what
+   * keeps ordinary prose containing slashes — or a Windows drive letter
+   * mentioned in passing — from being read as a file request. The path is then
+   * confirmed with `stat`, so the decision to forward rests on the filesystem
+   * rather than on how the text looks.
+   *
+   * @param text - one text content part.
+   * @param runtime - mirror forwarding the prompt.
+   * @param forwarded - object ids already carried, mutated as files are added.
+   * @returns the rewritten text plus the file parts it produced.
+   */
+  async #resolveTextReferences(
+    text: string,
+    runtime: MirrorRuntime,
+    forwarded: Set<string>,
+  ): Promise<{ text: string; files: PromptFilePart[] }> {
+    const files: PromptFilePart[] = []
+    if (!text.includes('@')) return { text, files }
+    if (!this.#hosts.supportsAgent(runtime.record.hostId, 'session.file-attachment')) {
+      // Without the capability the bytes cannot cross, so a reference would be
+      // sent as text the remote cannot read. Say so instead, naming the path.
+      const reference = localPathReferences(text)[0]
+      if (reference === undefined) return { text, files }
+      throw new LocalError('agent/unavailable', 'the remote agent cannot forward file attachments', {
+        retryable: false,
+        ui: { key: 'error.mirrorAttachmentUnsupported' },
+      })
+    }
+    let rewritten = text
+    for (const reference of localPathReferences(text)) {
+      const resolved = await this.#readLocalFile(reference.path)
+      if (resolved === undefined) {
+        // The text mentioned an `@absolute-path` that is not a readable local
+        // file. That is the one case worth failing loudly: sending it unchanged
+        // gives the remote a path from another machine.
+        throw new LocalError('request/invalid', `local path is not readable: ${reference.path}`, {
+          retryable: false,
+          ui: { key: 'error.mirrorLocalPathUnavailable', params: { path: reference.path } },
+        })
+      }
+      if (resolved.kind === 'directory') {
+        throw new LocalError('request/invalid', `local path is a directory: ${reference.path}`, {
+          retryable: false,
+          ui: { key: 'error.mirrorLocalPathIsDirectory', params: { path: reference.path } },
+        })
+      }
+      const identity = `sha256:${createHash('sha256').update(resolved.data).digest('hex')}`
+      if (!forwarded.has(identity)) {
+        forwarded.add(identity)
+        files.push({
+          type: 'file',
+          data: resolved.data.toString('base64'),
+          name: resolved.name,
+        })
+      }
+      // The bytes now travel with the prompt, so the path itself would only
+      // name a location this machine has. Keep the reading context, drop the
+      // path.
+      rewritten = rewritten.split(reference.token).join(`[${resolved.name}]`)
+    }
+    return { text: rewritten.trim(), files }
+  }
+
+  /**
+   * Read one local file selected by an `@` reference.
+   *
+   * `stat` decides, not the text: an `@`-prefixed absolute path is a *candidate*
+   * and only the filesystem can say whether it names a readable file. A miss, a
+   * directory, or an oversized file each answer distinctly so the caller can
+   * report the right cause.
+   *
+   * @param path - absolute path as written in the prompt.
+   * @returns the bytes plus a display name, a directory marker, or undefined.
+   */
+  async #readLocalFile(
+    path: string,
+  ): Promise<{ kind: 'file'; data: Buffer; name: string } | { kind: 'directory' } | undefined> {
+    let info: Stats
+    try {
+      info = await stat(path)
+    } catch {
+      return undefined
+    }
+    if (!info.isFile()) return info.isDirectory() ? { kind: 'directory' } : undefined
+    if (info.size > MAX_FORWARDED_FILE_BYTES) {
+      throw new LocalError(
+        'request/invalid',
+        `local file exceeds the ${String(MAX_FORWARDED_FILE_MB)} MB forward limit: ${path}`,
+        {
+          retryable: false,
+          ui: { key: 'error.mirrorAttachmentTooLarge', params: { limit: MAX_FORWARDED_FILE_MB } },
+        },
+      )
+    }
+    const data = await readFile(path)
+    return { kind: 'file', data, name: basename(path) }
   }
 
   /** Route cancellation to the remote session only after the remote accepts it. */
@@ -2301,6 +2463,15 @@ export class RemoteMirrorService {
   /** Log a lazy materialization failure without turning the blank Session into a local run. */
   reportBlankFailure(agent: LazyRemoteMirrorAgent, error: unknown): void {
     this.#ctx.logger.warn('dsh-waypoint: could not start remote Session for %s: %s', agent.id, String(error))
+    // Same two channels as `#reportPromptError`: the notice is the one the page
+    // can render, and a failure to start the Session must not be silent either.
+    this.#queueNotice({
+      kind: 'mirrorPromptFailed',
+      localSessionId: String(agent.id),
+      ui: error instanceof LocalError && error.ui !== undefined
+        ? error.ui
+        : { key: 'error.mirrorPromptFailed' },
+    })
     try {
       const emit = this.#ctx.emit as unknown as (name: string, payload: unknown) => void
       emit.call(this.#ctx, 'agent/error', {
@@ -5063,6 +5234,67 @@ type MirrorPromptPart =
   | { readonly type: 'text'; readonly text: string }
   | { readonly type: 'image'; readonly attachment: unknown; readonly name?: string }
   | { readonly type: 'file'; readonly attachment: unknown; readonly name?: string }
+
+/**
+ * Stable identity for one staged attachment, so the same file is carried once.
+ * @param attachment - attachment object a prompt part carries.
+ * @returns the object id when it has one.
+ */
+function attachmentIdentity(attachment: unknown): string | undefined {
+  if (typeof attachment !== 'object' || attachment === null) return undefined
+  const id = (attachment as { attachmentId?: unknown }).attachmentId
+  return typeof id === 'string' && id !== '' ? id : undefined
+}
+
+/** One `@`-prefixed local absolute path found in a text part. */
+interface LocalPathReference {
+  /** Exact substring to replace once the file travels as bytes. */
+  readonly token: string
+  /** Absolute path, with any surrounding quotes removed. */
+  readonly path: string
+}
+
+/**
+ * Find `@`-prefixed absolute local paths in one text part.
+ *
+ * Deliberately narrow. A candidate must be introduced by `@` *and* be absolute
+ * in a host spelling (`C:\…`, `\\server\share\…`, or `/…`), because the false
+ * positives that matter are ordinary prose: a bare `a/b`, a drive letter in a
+ * sentence, an `@mention`. Requiring the prefix keeps this from reading any of
+ * those as a file request, and the caller still confirms each hit with `stat`
+ * before anything is forwarded.
+ *
+ * The quoted form `@"…"` is recognized because that is how the composer itself
+ * spells a path containing spaces.
+ *
+ * @param text - one text content part.
+ * @returns distinct references in the order they appear.
+ */
+function localPathReferences(text: string): LocalPathReference[] {
+  const found: LocalPathReference[] = []
+  const seen = new Set<string>()
+  // Quoted first so a path with spaces is taken whole rather than up to the
+  // first space by the unquoted pattern.
+  const patterns: readonly RegExp[] = [
+    /@"([^"\r\n]+)"/gu,
+    /@([A-Za-z]:[\\/][^\s"'<>|]*)/gu,
+    /@(\/{1}[^\s"'<>|]*)/gu,
+  ]
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const token = match[0]
+      const raw = match[1]
+      if (token === undefined || raw === undefined) continue
+      if (seen.has(token)) continue
+      const path = raw.trim()
+      // A lone separator or a bare drive root is not a file request.
+      if (path === '' || /^[A-Za-z]:[\\/]?$/u.test(path) || /^\/{1,2}$/u.test(path)) continue
+      seen.add(token)
+      found.push({ token, path })
+    }
+  }
+  return found
+}
 
 /**
  * Split a local prompt message into the parts worth forwarding.

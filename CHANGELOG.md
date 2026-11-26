@@ -4,6 +4,47 @@
 
 ### Fixed
 
+- **A forwarded file now reaches a Session nobody has opened yet.** An attachment is admitted before
+  `promptSession` hands the prompt to `sessionController.prompt`, and that hand-off is what resumes a
+  cold Session — so at admit time there was no live Agent. The agent read `ctx.agents.get()`, a
+  synchronous table lookup, answered `undefined`, and refused the whole prompt as `session/not-live`
+  even though the next step would have woken it. Text prompts never hit it because they need no Agent
+  until that same step, which made "text works, files do not" look like an attachment bug rather than
+  a resolution-order one. Admission now uses `fileUploads.uploadStream`, which takes a Session id and
+  resolves the Agent itself — resuming on a miss through the controller's registered resolver — so one
+  path serves cold and warm Sessions.
+- The same bug affected every "cold Session plus attachment" entry, not only mirrored ones: a browser
+  upload to a Session opened for the first time failed the same way. It surfaced as the generic
+  "remote agent returned an error", because `session/not-live` carries no user-facing wording.
+- **A prompt the mirror refuses now tells the user instead of vanishing.** The failure was reported
+  through `agent/error`, which the Host relays into the client Session's `lastAgentError` — a field no
+  component renders. So a refused prompt produced no visible reaction at all, and a correct refusal
+  looked like a message that disappeared. The failure now also queues a notice on the channel the
+  archive-failure toast already used: it rides the claim heartbeat and becomes a toast, carrying the
+  localizable reference and its `{path}` parameter so the specific cause reaches the user. A cause with
+  no localizable text falls back to one generic sentence rather than a raw host message.
+- Notices are shown only while the Session they belong to is still the one on screen, so a failure from
+  a conversation the user has left does not interrupt them or point at the wrong transcript.
+- **A file picked in the Desktop application now reaches a mirrored Session.** The Desktop preload
+  exposes a host-path bridge, and the composer prefers a path over an upload whenever that bridge
+  answers — so a non-image file became an `@path` reference instead of an attachment, and a mirrored
+  Session sent that path as ordinary text. The remote could not open it: `relativizeToCwd` strips the
+  workspace root only when the path is under it, and a mirror's root is an empty local anchor, so the
+  reference usually arrived as an absolute path on the *user's* machine. Images were unaffected
+  because the composer short-circuits them to the upload branch first, and `dsh web` was unaffected
+  because it has no bridge at all — which is exactly why the failure could not be reproduced in a
+  browser.
+- The plugin now resolves such a reference itself (`#resolveTextReferences`): an `@`-prefixed absolute
+  path is confirmed with `stat` and forwarded as a `file` part through the channel a picked
+  attachment already uses. The `@` prefix is required so prose containing `src/main/index.ts` or a
+  bare `C:` is never read as a request, and `stat` — not the shape of the text — decides whether
+  something is forwarded.
+- A reference that cannot be forwarded now fails with the path named, instead of travelling as text
+  the remote cannot open: a missing path, a directory, a file over the forward limit, or a remote agent
+  without `session.file-attachment` each report their own cause.
+- The rewritten text replaces `@<path>` with `[<name>]`, and the pending entry records the text
+  actually sent. Pairing an echoed `user/message` is by text, so keeping the original reference there
+  would have appended the echo as a second bubble.
 - **A mirrored `/compact` now shows its compaction card.** The card is built from two pieces of remote
   evidence, and both were being filtered as "not the conversation": the `compaction/summary` carrying
   the text and token accounting, and the `user/message` whose `surfaceOp` replaces the compacted span.

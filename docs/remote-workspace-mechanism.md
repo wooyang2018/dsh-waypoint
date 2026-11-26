@@ -325,10 +325,96 @@ reads the bytes back from the local store and sends them inline as a `file` part
 admits them into *its* store and mints a receipt of its own before the prompt enters its Agent
 (`RemoteAgentService.promptSession`).
 
+That admission happens *before* `sessionController.prompt`, which is the step that resumes a Session
+nobody has opened yet. So at admit time a cold Session has no live Agent, and reading `ctx.agents.get()`
+— a synchronous table lookup — answered `undefined`. The agent refused the whole prompt as
+`session/not-live`, although the very next step would have woken it. Text prompts were unaffected
+because they need no Agent until that same step, so "text works, files do not" read as an attachment
+bug when it was a resolution-order one. Admission now goes through `fileUploads.uploadStream`, which
+takes a Session id and resolves the Agent itself, resuming on a miss through the controller's
+registered resolver. One path serves cold and warm Sessions alike.
+
 Two bounds follow. An agent without `session.file-attachment` is refused before anything is sent — an
 older agent would drop the part, and the local transcript would already show the message as accepted.
 And a prompt body is capped at 12 MiB, so an inline file tops out just under 9 MiB once base64 is
 applied; the plugin checks that itself so the failure names the file, not the wire size.
+
+#### Why a picked file is not always an attachment
+
+The Desktop application does not upload every picked file. Its preload exposes a host-path bridge:
+
+```js
+// lib/preload-app.cjs — installed only under the `dsh-app:` protocol
+electron.contextBridge.exposeInMainWorld("__DSH_HOST_PATHS__", {
+  pathFor: (file) => electron.webUtils.getPathForFile(file),
+})
+```
+
+and the composer prefers a path over an upload whenever that bridge answers:
+
+```ts
+// ui-conversation/src/client/apply.ts — addFiles
+const path = bridge?.pathFor(file) ?? ''
+if (path === '' || (!directory && isImageMediaType(file.type))) {
+  uploads.push(file)          // image → real attachment
+  continue
+}
+references.push({ source: 'reference', ref: formatFileMention({ path: relative, kind: 'file' }) })
+                             // non-image → @ reference, never uploaded
+```
+
+So on the Desktop, **a non-image file becomes `@<path>` text and is never staged**, while an image
+still uploads. In `dsh web` the bridge is absent, `path` is `''`, and every file takes the upload
+branch — which is why the same action behaves differently in the two carriers, and why this failure
+cannot be reproduced in a browser.
+
+That text is harmless locally and useless remotely: `relativizeToCwd` strips the workspace root only
+when the path is under it, and a mirrored Session's root is an empty local anchor, so the reference
+usually survives as an absolute path naming a file on *this* machine.
+
+`#resolveTextReferences` closes that gap. It scans each text part for `@`-prefixed absolute paths,
+confirms each with `stat`, and forwards a readable file as a `file` part — the same channel a picked
+attachment uses. Two properties make it safe to run on every prompt:
+
+- **The `@` prefix is required**, so prose containing `src/main/index.ts` or a bare `C:` is never read
+  as a request. A test pins that.
+- **`stat` decides, not the text.** "Looks like a path" is not evidence; "is a readable file here" is.
+
+What cannot be forwarded fails loudly rather than travelling as text the remote cannot open: a missing
+path, a directory, an oversized file, or a host without `session.file-attachment` each raise their own
+error naming the path. The rewritten text replaces `@<path>` with `[<name>]`, and `#sendPrompt` records
+that rewritten text on the pending entry — the remote echoes it, and pairing is by text, so keeping the
+original there would append the echo as a second bubble.
+
+#### How a refused prompt becomes visible
+
+Raising an error is not the same as reporting one, and the difference cost a debugging round: a prompt
+the mirror refused produced **no visible reaction at all**. The failure travelled
+
+```text
+#reportPromptError → ctx.emit('agent/error', …)
+  → session-controller relays it → emit('api-session/error', …)
+  → client Session.handleAgentError() → this.lastAgentError = message
+  → ✗ no component renders lastAgentError
+```
+
+so a correct refusal looked like a message that simply vanished. (`promptError`, the neighbouring
+field, *is* rendered by `InputBar`; `lastAgentError` is written and never read.)
+
+The visible channel is the notice queue that the archive-failure path already used. `#queueNotice`
+holds an entry in memory, `host/session/open/claim` hands it to the next heartbeat, and the page turns
+it into a toast. `MirrorPromptFailedNotice` joins it carrying a `UiText` reference, so the client
+localizes with the same `formatUiText` it uses for RPC failures and the `{path}` parameter survives the
+trip — one mechanism instead of a bespoke kind per cause.
+
+Every notice names its `localSessionId`, and the client shows one only while that Session is still the
+one on screen. A prompt failure belongs to the conversation the user was in; reporting it against a
+different transcript would blame the wrong thing, and interrupting someone who has moved on is not
+worth it either.
+
+A cause with no `LocalError.ui` — a dropped tunnel, a refused request — falls back to one generic
+sentence. Raw host messages are never rendered: `messages.ts` states why, and the client owns the
+wording.
 
 #### Why a mirror's Agent reports no model
 
