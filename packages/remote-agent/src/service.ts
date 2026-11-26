@@ -575,13 +575,15 @@ export class RemoteAgentService {
    *
    * Resolution order matters and was the bug. An attachment is admitted *before*
    * `promptSession` hands the prompt to `sessionController.prompt`, so at this
-   * point a Session that nobody has opened yet has no live Agent. Reading
-   * `ctx.agents.get()` — a synchronous table lookup — therefore answered
-   * `undefined` and this refused the prompt as `session/not-live`, even though
-   * the very next step would have woken the Session. A text prompt never hit it
-   * because it needs no Agent until that same step. `uploadStream` resolves the
-   * Agent itself and, on a miss, runs the controller's registered resolver,
-   * which resumes the Session — so a cold Session now admits its first file.
+   * point a Session that nobody has opened yet is not necessarily resident: the
+   * `sessions` table holds what this process has loaded, not what the store has.
+   * Gating on it therefore refused perfectly resumable prompts, and reading
+   * `ctx.agents.get()` did the same one layer later — both answered for a
+   * process-local view while the controller was about to resume from
+   * persistence. `uploadStream` resolves the Session and its Agent itself,
+   * resuming on a miss, so it is the only authority consulted here; a Session it
+   * genuinely cannot produce is refused by that resolution and the failure is
+   * translated below.
    *
    * @param sessionId - Session the forwarded prompt targets.
    * @param data - canonical base64 of the exact file bytes.
@@ -589,7 +591,6 @@ export class RemoteAgentService {
    * @returns the receipt prompt admission resolves.
    */
   async #admitForwardedFile(sessionId: string, data: string, name: string | undefined): Promise<string> {
-    this.assertLiveSession(sessionId)
     const uploads = this.#fileUploadsService()
     if (uploads === undefined) {
       throw new RemoteProtocolError({

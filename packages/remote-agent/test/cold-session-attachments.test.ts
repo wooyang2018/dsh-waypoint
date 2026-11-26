@@ -57,6 +57,8 @@ function host(options: { readonly cold: boolean; readonly uploadStreamFails?: bo
   const calls: string[] = []
   const streamedNames: Array<string | undefined> = []
   let receiptSeq = 0
+  /** Set by a case whose Session must fail resolution, as a real miss would. */
+  const state = { failResolve: false }
 
   const session = { id: 'session-remote', append() {}, header: { cwd: '/srv' } }
   const agent = { session, ctx: {} }
@@ -80,6 +82,9 @@ function host(options: { readonly cold: boolean; readonly uploadStreamFails?: bo
     }) {
       calls.push('uploadStream')
       if (options.uploadStreamFails === true) throw new Error('store is full')
+      // A real `uploadStream` resolves the Session first; a miss throws before
+      // any bytes are written, which is what this case imitates.
+      if (state.failResolve) throw new Error(`session "${request.sessionId}" is not attached`)
       streamedNames.push(request.name)
       // Draining the stream is part of the contract: an implementation that
       // passed an empty iterable would "succeed" while sending nothing.
@@ -136,7 +141,7 @@ function host(options: { readonly cold: boolean; readonly uploadStreamFails?: bo
     webServer,
   }
 
-  return { ctx, captured, staged, calls, streamedNames }
+  return { ctx, captured, staged, calls, streamedNames, state }
 }
 
 async function agentFor(h: ReturnType<typeof host>): Promise<RemoteAgentService> {
@@ -250,20 +255,23 @@ describe('a forwarded file that cannot be staged', () => {
   })
 })
 
-describe('a Session that does not exist at all', () => {
-  it('is still refused before any upload is attempted', async () => {
-    // `assertLiveSession` guards a genuinely missing Session; that check must
-    // survive the resolution-order fix rather than being replaced by it.
+describe('a Session the controller cannot resolve', () => {
+  it('surfaces the controller refusal rather than pre-judging liveness', async () => {
+    // The agent no longer gates on `sessions.get` before uploading: that table
+    // only holds Sessions already resident in this process, while the controller
+    // resumes one from persistence. A Session it genuinely cannot produce is
+    // refused by the upload resolution itself, which is the authority that
+    // matters, and the failure still reaches the caller.
     const h = host({ cold: true })
-    ;(h.ctx.sessions as { get: (id: string) => unknown }).get = () => undefined
+    h.state.failResolve = true
     const service = await agentFor(h)
     const server = await serve(service, h.ctx)
     try {
       const result = await postFilePrompt(server, 'cold.md')
 
-      assert.notEqual(result.status, 200)
-      assert.deepEqual(h.calls, [], 'no upload for a Session that is not attached')
-      assert.match(result.body, /not-live|not live/u)
+      assert.notEqual(result.status, 200, 'a Session that cannot be resumed must not be accepted')
+      assert.equal(h.captured.length, 0, 'nothing may reach the controller without its receipt')
+      assert.match(result.body, /attachment was refused|not attached/u)
     } finally { await server.stop() }
   })
 })
