@@ -213,6 +213,14 @@ interface MirrorRuntime {
    */
   closedTurns: Set<number>
   /**
+   * Remote question ids the host reported closed while the local card was up.
+   *
+   * A closed question is answered by nobody: the remote dropped its record, so a
+   * submission would be rejected as `not pending`. Listing the id here keeps the
+   * abort path from reporting `cancelled` for a wait it did not cause.
+   */
+  expiredQuestions: Set<string>
+  /**
    * Set once the remote log is observed moving backwards.
    *
    * A remote that restarts can resume its sequence numbers from the start. That
@@ -660,6 +668,14 @@ export class RemoteMirrorService {
   #pendingQuestions = new Map<string, RemoteQuestionRequest[]>()
   /** Question ids currently being dispatched, so a replayed id cannot double-dispatch. */
   #answeringQuestions = new Set<string>()
+  /**
+   * The local wait each in-flight question is holding, keyed by remote question id.
+   *
+   * Kept so an expiry frame can abort exactly the card whose window closed. The
+   * wait is otherwise unreachable: `#dispatchQuestion` blocks on it, and nothing
+   * else knows which question a given card belongs to.
+   */
+  #questionWaits = new Map<string, AbortController>()
   #questionStreams = new Map<string, AbortController>()
   #mirrorsInFlight = new Map<string, Promise<MirrorRecord | undefined>>()
   #pendingBlanks = new Map<string, PendingBlankSession>()
@@ -2804,6 +2820,10 @@ export class RemoteMirrorService {
       try {
         for await (const frame of this.#hosts.followQuestions(host.id, controller.signal)) {
           if (frame.type === 'request') void this.#handleQuestion(host.id, frame.request)
+          // A closed window arrives while the local card is still showing. Abort
+          // that card's wait so it disappears with its own explanation instead of
+          // accepting an answer the remote can no longer receive.
+          else if (frame.type === 'expired') this.#expireQuestion(host.id, frame.id, frame.reason)
         }
       } catch (error) {
         if (!controller.signal.aborted) {
@@ -2871,6 +2891,7 @@ export class RemoteMirrorService {
       return
     }
     const local = new AbortController()
+    this.#questionWaits.set(request.id, local)
     let outcome: RemoteQuestionOutcome = { kind: 'delegated' }
     try {
       const waterfall = this.#ctx.waterfall as unknown as (
@@ -2906,9 +2927,40 @@ export class RemoteMirrorService {
       // out its own timeout for an answer that is never coming.
       this.#ctx.logger.debug('dsh-waypoint: local question bridge ended: %s', String(error))
       outcome = { kind: 'cancelled' }
+    } finally {
+      this.#questionWaits.delete(request.id)
     }
     if (runtime.stopped) return
+    if (runtime.expiredQuestions.delete(request.id)) {
+      // The remote already reported this question closed and has dropped its
+      // record, so answering would only earn a `not pending` rejection. The card
+      // was aborted for the same reason; there is nothing left to tell anyone.
+      return
+    }
     await this.#answerRemoteQuestion(hostId, request.id, outcome)
+  }
+
+  /**
+   * Close the local card whose remote window expired.
+   *
+   * The abort is what the card actually sees: its wait rejects, the composer
+   * clears the draft, and the user is left with the explanation rather than an
+   * input that would be rejected on submit.
+   * @param hostId - host that reported the expiry.
+   * @param questionId - remote question id, as sent on the stream.
+   * @param reason - operator-facing sentence for why it closed.
+   */
+  #expireQuestion(hostId: string, questionId: string, reason: string): void {
+    const wait = this.#questionWaits.get(questionId)
+    if (wait === undefined) return
+    this.#questionWaits.delete(questionId)
+    // Mark it so the abort path does not report `cancelled`: the remote knows
+    // already, and a second report would be rejected as `not pending`.
+    for (const runtime of this.#runtimes.values()) {
+      if (runtime.record.hostId === hostId) runtime.expiredQuestions.add(questionId)
+    }
+    this.#ctx.logger.info('dsh-waypoint: question %s closed on the remote: %s', questionId, reason)
+    wait.abort(new Error(reason))
   }
 
   /** Hold one question until its mirror runtime exists and a client shows it. */
@@ -3285,6 +3337,7 @@ export class RemoteMirrorService {
       skippedRemoteSeqs: new Set(),
       changesTurns: new Map(seededChanges),
       closedTurns: new Set(),
+      expiredQuestions: new Set(),
       diverged: undefined,
     } satisfies MirrorRuntime
     // The remote log is the authority on which model this Session actually used.

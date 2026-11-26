@@ -150,9 +150,20 @@ export interface RemoteQuestionRequest {
 }
 
 /** Question stream frame: ready, then one request per pending question. */
+/**
+ * Question stream frame: ready, then one request per pending question.
+ *
+ * `expired` reports that a question's foreground window closed on the remote.
+ * The local card must stop offering an answer at that point: the remote turn has
+ * already continued, and a submission afterwards cannot reach the model — DSH's
+ * late-reply channel requires the exact live Agent that asked, which is
+ * unregistered by then. Closing the card is the only honest option, so the frame
+ * exists rather than leaving a card that accepts answers nobody will receive.
+ */
 export type RemoteQuestionFrame =
   | { readonly type: 'ready' }
   | { readonly type: 'request'; readonly request: RemoteQuestionRequest }
+  | { readonly type: 'expired'; readonly id: string; readonly reason: string }
 
 /** One answered question, as the asking host will hand it to the model. */
 export interface RemoteQuestionAnswerItem {

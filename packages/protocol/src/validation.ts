@@ -139,6 +139,7 @@ function isQuestionRequest(value: unknown): value is RemoteQuestionRequest {
 export function isRemoteQuestionFrame(value: unknown): value is RemoteQuestionFrame {
   if (!isRecord(value)) return false
   if (value.type === 'ready') return true
+  if (value.type === 'expired') return isString(value.id) && isString(value.reason)
   return value.type === 'request' && isQuestionRequest(value.request)
 }
 
