@@ -29,6 +29,13 @@
   `sessionSkillCatalog.list` forward for a mirrored Session and delegate unchanged for everything else.
   A draft mirror answers through its preset without creating a remote Session; executing a command
   materializes one first, because the registry logs its lifecycle there.
+- **That menu no longer empties out when the remote Session is cold.** After a remote DSH restart or a
+  reconnect no Agent is bound to the Session, which is the ordinary state and exactly when someone types
+  `/` in a conversation they have not resumed. The read answered `session/not-live`, the local adapter
+  degraded to its own list, and the menu lost every remote command and skill with only a `debug` line to
+  show for it. It is now answered the way a draft already was — lease the preset the log recorded and
+  resolve the directory from the same observation a resume restores — so reading a menu never wakes a
+  Session. `execute` still requires the live Session, because a command appends its lifecycle to it.
 - **A command run in a mirrored Session now renders where it belongs.** The remote's `command/done`
   carries `sourceEventSeq` in the remote numbering, and the chat command node adopts that value as the
   event it follows, so an unremapped citation pointed at whatever local event happened to carry that
