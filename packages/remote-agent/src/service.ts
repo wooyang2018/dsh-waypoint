@@ -631,22 +631,28 @@ export class RemoteAgentService {
   }
 
   /**
-   * Keep an expired question answerable until the local card lets go of it.
+   * Mark an expired question answerable until the local card lets go of it.
    *
    * The record deliberately outlives the waterfall: `askTimed` has already
    * returned `{ pending: true }`, so nothing awaits the original promise, but the
    * Session projection still lists the call as `continued` and DSH still accepts
    * a late reply for it. Dropping the record here is what used to turn a user's
    * answer into `request/invalid`.
+   *
+   * The entry is upgraded in place rather than replaced: its `agent` is the live
+   * root that asked, and the live-reply path needs exactly that instance.
+   * @param id - wire id of the question whose window closed.
    */
-  #parkExpiredQuestion(request: RemoteQuestionRequest, source: AskUserQuestionRequest): void {
-    this.#pendingQuestions.set(request.id, {
-      request,
+  #parkExpiredQuestion(id: string): void {
+    const existing = this.#pendingQuestions.get(id)
+    if (existing === undefined) return
+    this.#pendingQuestions.set(id, {
+      request: existing.request,
       // Never resolved through the waterfall again; the late-reply path owns it.
       resolve: () => {},
       settled: () => false,
       expired: true,
-      agent: source.agent,
+      agent: existing.agent,
     })
   }
 
@@ -745,17 +751,33 @@ export class RemoteAgentService {
       questions: request.questions.map(toRemoteQuestionItem),
     }
     let timedOut = false
+    let expiredCallId: string | undefined
     const outcome = await new Promise<RemoteQuestionOutcome>(resolve => {
       let settled = false
-      const finish = (value: RemoteQuestionOutcome): void => {
+      const finish = (value: RemoteQuestionOutcome, keep = false): void => {
         if (settled) return
         settled = true
         if (timer !== undefined) clearTimeout(timer)
         request.signal?.removeEventListener('abort', onAbort)
-        this.#pendingQuestions.delete(id)
+        // `keep` marks an expiry: the foreground wait is gone but the question
+        // is still answerable, so the record must survive to carry a late reply.
+        if (!keep) this.#pendingQuestions.delete(id)
         resolve(value)
       }
-      const onAbort = (): void => { finish({ kind: 'cancelled' }) }
+      const onAbort = (): void => {
+        // Two very different events abort this signal. DSH's own timed wait
+        // closes with an `ASK_TIMED_OUT` reason and leaves the call answerable
+        // as a late reply; a cancelled turn carries any other reason. Treating
+        // them alike is what deleted the record an answer would have needed.
+        const reason = request.signal?.reason as { code?: unknown } | undefined
+        if (reason?.code === 'ASK_TIMED_OUT') {
+          timedOut = true
+          expiredCallId = projected.callId
+          finish({ kind: 'cancelled' }, true)
+          return
+        }
+        finish({ kind: 'cancelled' })
+      }
       // No clock by default, for the same reason `dsh-user-questions` has none:
       // the blocking tool is an `await`, and a bridge should not be the only
       // party that decides a person has taken too long. A deployment may opt
@@ -765,7 +787,8 @@ export class RemoteAgentService {
       const timer = timeout > 0
         ? setTimeout(() => {
             timedOut = true
-            finish({ kind: 'cancelled' })
+            expiredCallId = projected.callId
+            finish({ kind: 'cancelled' }, true)
           }, timeout)
         : undefined
       timer?.unref?.()
@@ -785,11 +808,11 @@ export class RemoteAgentService {
     })
     // A timed question that expired is *not* a decision. `askTimed` has already
     // returned `{ pending: true }` to the model and the turn moved on, but the
-    // question stays answerable in the projection as `continued` — so the
-    // record must survive here too, and a late answer must take the steer path
-    // rather than resolve a waterfall nobody is awaiting any more.
-    if (timedOut && projected.callId !== undefined) {
-      this.#parkExpiredQuestion(projected, request)
+    // question stays answerable in the projection as `continued` — so the record
+    // must survive here too, and a late answer must take the steer path rather
+    // than resolve a waterfall nobody is awaiting any more.
+    if (timedOut && expiredCallId !== undefined) {
+      this.#parkExpiredQuestion(id)
       throw questionError('the question window closed; it remains answerable as a late reply', 'ASK_TIMED_OUT')
     }
     if (outcome.kind === 'delegated') return await next()
