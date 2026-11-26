@@ -396,6 +396,12 @@ The remote agent config remains available for advanced deployments:
   attachment store when the mirror replays them, so the first open of a long history fetches them
   once; if the remote object has since been pruned, a file card still shows its name and size while
   an image renders as a placeholder.
+- In the Desktop application a picked non-image file becomes an `@path` reference rather than an
+  upload, so a mirrored session receives text naming a file only your machine has. The plugin resolves
+  such a reference against the local filesystem and forwards the file itself; when it cannot (a missing
+  path, a directory, an oversized file, or a remote agent too old to accept one) it reports that
+  instead of sending a path the remote cannot open. `dsh web` is unaffected: there every picked file is
+  uploaded directly.
 - A forwarded dev-server port is published at `http://127.0.0.1:<port>/`; the sidebar browser's
   iframe policy (`X-Frame-Options`, mixed content) still applies, so a host that refuses to be
   embedded needs its own header change or the **Open in system browser** action. When the local port

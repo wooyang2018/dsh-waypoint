@@ -4,6 +4,26 @@
 
 ### Fixed
 
+- **A file picked in the Desktop application now reaches a mirrored Session.** The Desktop preload
+  exposes a host-path bridge, and the composer prefers a path over an upload whenever that bridge
+  answers — so a non-image file became an `@path` reference instead of an attachment, and a mirrored
+  Session sent that path as ordinary text. The remote could not open it: `relativizeToCwd` strips the
+  workspace root only when the path is under it, and a mirror's root is an empty local anchor, so the
+  reference usually arrived as an absolute path on the *user's* machine. Images were unaffected
+  because the composer short-circuits them to the upload branch first, and `dsh web` was unaffected
+  because it has no bridge at all — which is exactly why the failure could not be reproduced in a
+  browser.
+- The plugin now resolves such a reference itself (`#resolveTextReferences`): an `@`-prefixed absolute
+  path is confirmed with `stat` and forwarded as a `file` part through the channel a picked
+  attachment already uses. The `@` prefix is required so prose containing `src/main/index.ts` or a
+  bare `C:` is never read as a request, and `stat` — not the shape of the text — decides whether
+  something is forwarded.
+- A reference that cannot be forwarded now fails with the path named, instead of travelling as text
+  the remote cannot open: a missing path, a directory, a file over the forward limit, or a remote agent
+  without `session.file-attachment` each report their own cause.
+- The rewritten text replaces `@<path>` with `[<name>]`, and the pending entry records the text
+  actually sent. Pairing an echoed `user/message` is by text, so keeping the original reference there
+  would have appended the echo as a second bubble.
 - **A mirrored `/compact` now shows its compaction card.** The card is built from two pieces of remote
   evidence, and both were being filtered as "not the conversation": the `compaction/summary` carrying
   the text and token accounting, and the `user/message` whose `surfaceOp` replaces the compacted span.

@@ -330,6 +330,53 @@ older agent would drop the part, and the local transcript would already show the
 And a prompt body is capped at 12 MiB, so an inline file tops out just under 9 MiB once base64 is
 applied; the plugin checks that itself so the failure names the file, not the wire size.
 
+#### Why a picked file is not always an attachment
+
+The Desktop application does not upload every picked file. Its preload exposes a host-path bridge:
+
+```js
+// lib/preload-app.cjs — installed only under the `dsh-app:` protocol
+electron.contextBridge.exposeInMainWorld("__DSH_HOST_PATHS__", {
+  pathFor: (file) => electron.webUtils.getPathForFile(file),
+})
+```
+
+and the composer prefers a path over an upload whenever that bridge answers:
+
+```ts
+// ui-conversation/src/client/apply.ts — addFiles
+const path = bridge?.pathFor(file) ?? ''
+if (path === '' || (!directory && isImageMediaType(file.type))) {
+  uploads.push(file)          // image → real attachment
+  continue
+}
+references.push({ source: 'reference', ref: formatFileMention({ path: relative, kind: 'file' }) })
+                             // non-image → @ reference, never uploaded
+```
+
+So on the Desktop, **a non-image file becomes `@<path>` text and is never staged**, while an image
+still uploads. In `dsh web` the bridge is absent, `path` is `''`, and every file takes the upload
+branch — which is why the same action behaves differently in the two carriers, and why this failure
+cannot be reproduced in a browser.
+
+That text is harmless locally and useless remotely: `relativizeToCwd` strips the workspace root only
+when the path is under it, and a mirrored Session's root is an empty local anchor, so the reference
+usually survives as an absolute path naming a file on *this* machine.
+
+`#resolveTextReferences` closes that gap. It scans each text part for `@`-prefixed absolute paths,
+confirms each with `stat`, and forwards a readable file as a `file` part — the same channel a picked
+attachment uses. Two properties make it safe to run on every prompt:
+
+- **The `@` prefix is required**, so prose containing `src/main/index.ts` or a bare `C:` is never read
+  as a request. A test pins that.
+- **`stat` decides, not the text.** "Looks like a path" is not evidence; "is a readable file here" is.
+
+What cannot be forwarded fails loudly rather than travelling as text the remote cannot open: a missing
+path, a directory, an oversized file, or a host without `session.file-attachment` each raise their own
+error naming the path. The rewritten text replaces `@<path>` with `[<name>]`, and `#sendPrompt` records
+that rewritten text on the pending entry — the remote echoes it, and pairing is by text, so keeping the
+original there would append the echo as a second bubble.
+
 #### Why a mirror's Agent reports no model
 
 `RemoteMirrorAgent.model.current()` returns `undefined`, and that is deliberate rather than an

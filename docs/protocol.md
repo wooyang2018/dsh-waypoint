@@ -566,13 +566,12 @@ only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
-`index.ts` exports 169 symbols in total. They split into 77 contract symbols and 92 symbols that no
-`index.ts` exports 151 symbols in total. They split into 69 contract symbols and 82 symbols that no
+`index.ts` exports 169 symbols in total. They split into 78 contract symbols and 91 symbols that no
 other package consumes, of which 2 are referenced nowhere at all. Every name below is listed
 explicitly, and `scripts/check/protocol-surface.mjs` recomputes these numbers from the source tree; run it
 whenever you add or remove an export, and a test fails if the two disagree.
 
-**Import contract (77 symbols).** Consumed by another package's production code through a named
+**Import contract (78 symbols).** Consumed by another package's production code through a named
 import, or reached through `RemoteAgentClient`'s signatures. Changing or removing one of these is a
 cross-package change. Test files are not counted as consumers: a test that imports a path builder to
 build a URL does not make it part of the contract.
@@ -586,10 +585,10 @@ build a URL does not make it part of the contract.
 - Envelopes and errors (4): `ApiSuccess`, `ApiFailure`, `RemoteProtocolError`, `httpStatusForCode`
 - Host and workspace (5): `AgentCapability`, `HostInfo`, `RemoteWorkspace`, `CreateWorkspaceRequest`,
   `ListWorkspacesResult`
-- Sessions and prompts (14): `RemoteSessionSummary`, `RemoteSessionEvent`, `SessionSnapshot`,
+- Sessions and prompts (15): `RemoteSessionSummary`, `RemoteSessionEvent`, `SessionSnapshot`,
   `SessionStreamFrame`, `ListSessionsResult`, `RemoteAssistantFrame`, `AcceptedResult`,
   `CreateSessionRequest`, `CreateSessionResult`, `PromptSessionRequest`, `PromptContentPart`,
-  `PromptDeliveryMode`, `SelectModelRequest`, `AttachmentReadRequest`
+  `PromptFilePart`, `PromptDeliveryMode`, `SelectModelRequest`, `AttachmentReadRequest`
 - Remote catalogs (5): `RemoteCommandDescriptor`, `RemoteCommandCatalogResult`,
   `RemoteSkillCatalogResult`, `RemoteSkillEntry`, `isRemoteCommandAttachmentList`
 - Remote command parts (1): `RemoteCommandAttachment`
@@ -606,11 +605,11 @@ build a URL does not make it part of the contract.
   `RemoteApprovalRequest`, `JsonValue`, `WebUrlResult`
 - Questions (3): `RemoteQuestionAnswerItem`, `RemoteQuestionOutcome`, `RemoteQuestionRequest`
 
-**Internal (92 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
+**Internal (91 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
 private: they carry no cross-package guarantee, and nothing outside `packages/protocol/src` should
 start importing them without promoting them to the contract above.
 
-*Used inside `packages/protocol/src` (90).*
+*Used inside `packages/protocol/src` (89).*
 
 - Guards (35): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`, `isCreateSessionResult`,
   `isCursor`, `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`,
@@ -626,10 +625,10 @@ start importing them without promoting them to the contract above.
   `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionArchivePath`,
   `sessionUnarchivePath`, `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`,
   `terminalAttachPath`, `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
-- Types, constants, and functions used inside the package (39): `AttachmentReadResult`,
+- Types, constants, and functions used inside the package (38): `AttachmentReadResult`,
   `CursorAcceptance`, `DEFAULT_REQUEST_TIMEOUT_MS`, `DISCOVERY_STATE_VERSION`, `JsonPrimitive`,
   `MAX_SUPPORTED_PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`,
-  `PromptFilePart`, `PromptImagePart`, `ProtocolErrorCode`, `ProtocolNegotiation`,
+  `PromptImagePart`, `ProtocolErrorCode`, `ProtocolNegotiation`,
   `RemoteAgentClientOptions`, `RemoteCatalogRequest`, `RemoteChangesDiffRequest`,
   `RemoteChangesSummaryRequest`, `RemoteCommandExecuteRequest`, `RemoteCommandExecuteResult`,
   `RemoteCommandInput`, `RemoteCommandOutcome`, `RemoteDirectoryEntry`, `RemoteFailure`,
