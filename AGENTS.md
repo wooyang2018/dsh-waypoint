@@ -87,6 +87,38 @@ The script imports that function and passes the flag, so the install runs the Ho
 `runProfilePnpm` — including the `reconcile` pass that appends the package to `dsh.profile.bundles`.
 A hand-edited manifest skips that pass.
 
+**Never install anything into a remote host's profile by hand.** The agent is installed by
+`provisionRemoteAgent` (`packages/installer`), which uses **pnpm** through a managed bootstrap. That is
+not interchangeable with `npm install`: npm materialises every `peerDependencies` entry as a real
+package, and `dsh-system-prompt` then registers `deployment:persona-prefix` a second time alongside
+the copy DSH core already loaded.
+
+What makes it expensive to diagnose is that **nothing looks broken**. The profile boots, the agent
+answers `health`, and ordinary text prompts behave. What fails is **every Session resume**:
+
+```
+resume failed: persona (@deepseek-ai/dsh-persona):
+prompt section "deployment:persona-prefix" is already registered
+```
+
+A mirrored prompt starts on a cold Session — one the Host has not resumed — so a forwarded attachment
+is admitted only after that resume succeeds. The user-visible symptom is therefore "attachments sent
+to a mirrored Session are refused", and the code that refuses (`#admitForwardedFile`) is ours, so the
+report points at this repository rather than at the host. It also takes out `POST /sessions` and any
+text prompt to a cold Session, which is the clue that it is not attachment-specific.
+
+Check a host before blaming an end-to-end failure on this plugin:
+
+```sh
+ls ~/.dsh/profiles/web/node_modules/@deepseek-ai/   # a pnpm profile has this absent or empty
+ls ~/.dsh/profiles/web/package-lock.json            # an npm profile leaves this behind
+```
+
+Either one present means someone installed by hand. Fix it by removing both and running `pnpm
+install`, or by deleting the agent state file and letting the Host re-provision. `ensureInstalled`
+probes for this on every connect and logs a warning naming the host, so the damage announces itself
+the next time the plugin touches the machine.
+
 ### Test files
 
 Test files are kebab-case: `alias-groups.test.ts`, not `alias_groups.test.ts`. Fixtures follow the

@@ -2,7 +2,7 @@
 
 How to verify this repository's behaviour, cheapest layer first, and what each layer can and cannot
 prove. Read [Running against a real host](#running-against-a-real-host) before any end-to-end run —
-two failure modes there look exactly like bugs in this plugin but are not.
+three failure modes there look exactly like bugs in this plugin but are not.
 
 ## Contents
 
@@ -96,8 +96,40 @@ The job installs into no DSH profile and calls no model provider. Bumping a DSH 
 
 ## Running against a real host
 
-Two properties of this setup defeat a naive end-to-end attempt, and both produce failures that look
-like defects in this plugin. Check them before reading any result as a code bug.
+Three properties of this setup defeat a naive end-to-end attempt, and all three produce failures that
+look like defects in this plugin. Check them before reading any result as a code bug.
+
+### A hand-installed remote profile breaks every resume
+
+The agent must be installed by `provisionRemoteAgent`, which uses **pnpm**. Installing into
+`~/.dsh/profiles/web` with `npm install` is not equivalent: npm materialises each `peerDependencies`
+entry as a real package, and `dsh-system-prompt` then registers `deployment:persona-prefix` a second
+time alongside the copy DSH core loaded.
+
+Nothing appears broken — the profile boots, the agent answers `health`, and text prompts behave. What
+fails is **every Session resume**:
+
+```
+resume failed: persona (@deepseek-ai/dsh-persona):
+prompt section "deployment:persona-prefix" is already registered
+```
+
+A mirrored prompt begins on a cold Session, and a forwarded attachment is admitted only after that
+resume succeeds, so the symptom reads as "attachments to a mirrored Session are refused" — pointing
+at `#admitForwardedFile` rather than at the host. `POST /sessions` and any text prompt to a cold
+Session fail the same way, which is the clue that it is not attachment-specific.
+
+Confirm the profile is clean before an end-to-end run:
+
+```sh
+ls ~/.dsh/profiles/web/node_modules/@deepseek-ai/   # a pnpm profile has this absent or empty
+ls ~/.dsh/profiles/web/package-lock.json            # an npm profile leaves this behind
+```
+
+If either exists, remove `node_modules` and `package-lock.json` and run `pnpm install`, or delete the
+agent state file and let the Host re-provision. The plugin's `ensureInstalled` probes for this on every
+connect and logs a warning naming the host, so a profile damaged this way announces itself on the next
+connection rather than during a later investigation.
 
 ### The desktop app overwrites a remote agent you are testing
 
