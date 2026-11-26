@@ -68,9 +68,6 @@ Everything below works against a real SSH host, with no client fork:
 - `ask_user_question` cards bridged into the local UI too, so a remote agent that needs a decision
   does not stall waiting for an answer that only ever appeared in the remote Web UI
 
-What is **not** supported — Windows remotes, relay/NAT traversal — is listed under
-[Known limits](#known-limits), together with the workaround when there is one.
-
 > Remote file and terminal operations require the agent-backed API. If the connected remote agent is older, file/terminal actions fail with a Reinstall instruction instead of opening extra SSH connections.
 
 ## Install

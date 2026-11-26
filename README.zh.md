@@ -63,8 +63,6 @@
 - `ask_user_question` 提问卡片同样接入本地 UI：远端 agent 需要人做决定时，不会再因为「答案只出现在远端
   Web UI」而一直卡住
 
-**不支持**的部分——Windows 远端、relay/NAT 穿透——列在[已知限制](#已知限制)里，并附有可用的替代做法。
-
 > 文件/终端操作要求新版 agent API。远端 agent 过旧时，操作会提示 Reinstall，而不会再额外建立 SSH 连接。
 
 ## 安装
