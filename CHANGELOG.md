@@ -45,6 +45,18 @@
 - The rewritten text replaces `@<path>` with `[<name>]`, and the pending entry records the text
   actually sent. Pairing an echoed `user/message` is by text, so keeping the original reference there
   would have appended the echo as a second bubble.
+- **The right-sidebar file panel now opens a local path instead of failing on it.** Reading a file by
+  its own absolute path in a mirrored Session reported
+  `读取失败：remote file path is outside the mirrored workspace: C:/…/plugin.json`. The path resolver
+  saw three cases — a remote absolute path, a path inside the local anchor, and a remote absolute path
+  outside the workspace — and threw for everything else, which is what a Windows drive path is: absolute
+  in the local syntax, impossible in the remote one. Naming the mirror was the wrong reading. Such a path
+  can only exist on this machine, so it now answers "local-only" and the adapter's existing not-mirrored
+  branch serves it from the stock service — the same branch that already handles every ordinary local
+  workspace. The reference is not an accident either: the Desktop composer turns a picked non-image file
+  into an `@<path>` reference, so a mirrored transcript holds these paths by design. The refusal that
+  remains is a relative path escaping the anchor, which is a statement about the request rather than
+  about the mirror.
 - **A mirrored `/compact` now shows its compaction card.** The card is built from two pieces of remote
   evidence, and both were being filtered as "not the conversation": the `compaction/summary` carrying
   the text and token accounting, and the `user/message` whose `surfaceOp` replaces the compacted span.

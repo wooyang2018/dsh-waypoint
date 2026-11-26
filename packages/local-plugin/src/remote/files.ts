@@ -196,6 +196,21 @@ function agentFor(hosts: RemoteHostsService, hostId: string, capability: AgentCa
   return hosts.agentFor(hostId)
 }
 
+/**
+ * Decide where one call is served from: the remote agent, or the stock service.
+ *
+ * Three outcomes, and each adapter method above already spells all three:
+ *
+ * - `undefined` because the root is no mirror — the stock service answers.
+ * - `undefined` because the path is local-only (see `resolveRemoteFileTarget`) —
+ *   the stock service answers, which is how a mirrored Session still opens a
+ *   file the Desktop composer referenced by its own absolute path.
+ * - a target — the call goes to the owning host's agent.
+ *
+ * A delegated call must reach the binding taken before installation, never the
+ * replacement installed above it; calling back through the service would
+ * recurse. Every caller holds that original for exactly this reason.
+ */
 function targetOf(
   mirrors: RemoteMirrorService,
   workspaceRoot: string,

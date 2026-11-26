@@ -48,13 +48,16 @@ export interface RemotePathRequest {
  * Remote absolute paths win first so transcript links and tool cards keep
  * working. Local anchor paths (absolute or relative) come next. A remote
  * absolute path outside the workspace root is passed through to the host
- * agent, matching transcript/editor behavior.
+ * agent, matching transcript/editor behavior. A path absolute only in the
+ * *local* syntax names something this machine alone can spell, so it has no
+ * remote counterpart at all.
  *
  * @param request - the two path namespaces and the caller's path.
- * @returns the normalized local path, remote path, and workspace-relative path.
+ * @returns the normalized local path, remote path, and workspace-relative path;
+ * `undefined` when the path is local-only and must be served from this machine.
  * @throws when a relative path escapes the local workspace anchor.
  */
-export function resolveRemoteFileTarget(request: RemotePathRequest): RemoteFileTarget {
+export function resolveRemoteFileTarget(request: RemotePathRequest): RemoteFileTarget | undefined {
   const { localPath, remotePath } = request
   const anchor = localPath.resolve(request.workspaceRoot)
   const remoteRoot = remotePath.resolve(request.remoteRoot)
@@ -102,6 +105,15 @@ export function resolveRemoteFileTarget(request: RemotePathRequest): RemoteFileT
       workspaceRoot: anchor,
     }
   }
+
+  // A path only this machine can spell (`C:\…`, `\\server\share\…`) is a local
+  // path: no POSIX remote root can contain it, and forwarding it to the agent
+  // would name a file the remote does not have. Answering "local-only" lets the
+  // caller read it from disk — the Desktop composer references picked files by
+  // local path, so a mirrored Session's transcript legitimately holds them.
+  // This stays after the anchor test above, which is what still maps a local
+  // path *inside* the mirror to the remote checkout.
+  if (localPath.isAbsolute(request.path)) return undefined
 
   throw Object.assign(
     new Error(`remote file path is outside the mirrored workspace: ${request.path}`),

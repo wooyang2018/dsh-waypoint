@@ -88,6 +88,34 @@ describe('remote workspace files over the agent', () => {
     assert.equal(result.absolutePath, join(anchor, 'a.txt'))
   })
 
+  it('serves a local-only absolute path from the stock service', { skip: process.platform !== 'win32' }, async () => {
+    // A mirrored Session's transcript can hold this machine's own absolute paths
+    // (the Desktop composer references picked files by path). Such a path has no
+    // remote counterpart, so the call must reach the stock service — not the
+    // agent, which would name a file the remote does not have, and not a
+    // refusal, which is what the sidebar showed as "读取失败" for a local path.
+    let stockReads = 0
+    const service = {
+      async read() { stockReads += 1; return { absolutePath: 'local', version: 'v', bytes: 1, offset: 1, lines: 1, text: 'local', eof: true } },
+      async readBytes() { throw new Error('unused') },
+      async stat() { throw new Error('unused') },
+      async list() { throw new Error('unused') },
+      async changes() { throw new Error('unused') },
+    }
+    const calls: string[] = []
+    const client = {
+      async fileRead(path: string) { calls.push(`read:${path}`); return { absolutePath: path, version: 'v', bytes: 1, offset: 1, lines: 1, text: 'remote', eof: true } },
+    }
+    const hosts = { supportsAgent: () => true, agentFor: () => client }
+    const mirrors = { remoteFileContext: () => ({ hostId: 'h', remoteRoot: '/remote' }) }
+    installRemoteWorkspaceFiles({ get: () => service } as never, mirrors as never, hosts as never)
+    const scope = { workspaceRoot: anchor }
+    const localOnly = String.raw`C:\Users\alice\appdata\plugin.json`
+    assert.equal((await service.read(scope, localOnly, { offset: 1, limit: 2 }, new AbortController().signal)).text, 'local')
+    assert.equal(stockReads, 1, 'the stock service answers a local-only path')
+    assert.deepEqual(calls, [], 'the agent is never asked for a path only this machine can spell')
+  })
+
   it('restores prototype methods and leaves a foreign replacement alone', async () => {
     // Mirrors the stock shape: implementations live on the prototype, so the
     // service has no own property for them. Restoring must delete our own

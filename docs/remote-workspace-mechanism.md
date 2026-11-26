@@ -732,7 +732,19 @@ side differ:
    (so transcript links and tool cards keep working), then relative or absolute paths inside the anchor,
    and finally a remote absolute path outside the anchor is still allowed through to the agent
    (`resolveRemoteFileTarget` in `src/remote/remote-path.ts`). This rule is what lets a Windows client
-   browse a Linux workspace.
+   browse a Linux workspace. A path that is absolute only in the **local** syntax — `C:\…`,
+   `\\server\share\…` — answers `undefined` instead, and the adapter's existing "not mirrored" branch
+   serves it from the stock service. No POSIX remote root can contain such a path and forwarding it would
+   name a file the remote does not have, so reading it from this machine's disk is the only answer that
+   can succeed. The refusal that remains is narrower than the message once suggested: it covers a
+   *relative* path that escapes the anchor, which is a request-shapedness rule rather than a statement
+   about the mirror.
+
+   The local-only case is not hypothetical, and §5.4's "Why a picked file is not always an attachment" is
+   what produces it: the Desktop composer turns a picked non-image file into an `@<path>` reference, so a
+   mirrored Session's transcript holds this machine's absolute paths by design. Reading one used to fail
+   as `remote file path is outside the mirrored workspace`, and the sidebar rendered that as
+   `读取失败：…` — an error naming the mirror for a path the mirror was never asked about.
 
 ### 6.2 The native file panel, and why one interception layer is enough
 

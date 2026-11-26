@@ -84,6 +84,40 @@ describe('remote file target paths', () => {
     assert.equal(target.relativePath, '..foo')
   })
 
+  it('reports a local-only absolute path instead of refusing it', () => {
+    // The Desktop composer turns a picked non-image file into an `@<path>`
+    // reference, so a mirrored transcript legitimately holds this machine's own
+    // absolute paths. No POSIX remote root can contain one, and forwarding it
+    // would name a file the remote does not have: the answer is "local-only",
+    // which makes the caller read it from disk.
+    assert.equal(
+      resolveRemoteFileTarget(windows(String.raw`C:\Users\alice\appdata\plugin.json`)),
+      undefined,
+    )
+    assert.equal(
+      resolveRemoteFileTarget(windows('C:/Users/alice/appdata/plugin.json')),
+      undefined,
+    )
+  })
+
+  it('reports a UNC path as local-only', () => {
+    assert.equal(
+      resolveRemoteFileTarget(windows(String.raw`\\server\share\file.txt`)),
+      undefined,
+    )
+  })
+
+  it('treats a drive-relative path as relative, not as local-only', () => {
+    // `C:file.txt` names no fixed location — it depends on the drive's current
+    // directory — and Node's `win32.isAbsolute` says so. It therefore keeps the
+    // pre-existing behaviour of every relative path: resolved against the
+    // anchor, so it never leaves the mirror. Pinned because "absolute locally"
+    // is exactly the condition the local-only branch tests.
+    const target = resolveRemoteFileTarget(windows('C:file.txt'))
+    assert.equal(target?.relativePath, 'file.txt')
+    assert.equal(target?.remotePath, '/home/ubuntu/file.txt')
+  })
+
   it('rejects a relative path that escapes the anchor', () => {
     assert.throws(
       () => resolveRemoteFileTarget(windows('../outside')),
