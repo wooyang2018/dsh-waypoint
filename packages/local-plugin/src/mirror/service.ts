@@ -120,9 +120,7 @@ interface MirrorState {
 export type MirrorNotice = HostNotice
 
 /** A queued notice plus the moment it stops being worth showing. */
-interface QueuedNotice extends MirrorNotice {
-  readonly expiresAt: number
-}
+type QueuedNotice = MirrorNotice & { readonly expiresAt: number }
 
 interface PendingUser {
   readonly message: unknown
@@ -1882,9 +1880,34 @@ export class RemoteMirrorService {
     }
   }
 
+  /**
+   * Tell the user that one prompt could not be forwarded.
+   *
+   * Two channels, because they serve different readers. `agent/error` is the
+   * machine-readable notification other Host services consume; it lands on the
+   * client Session's `lastAgentError`, which **no component renders** — so on its
+   * own it is invisible. The queued notice is what the page can actually show:
+   * it rides the existing claim heartbeat to a toast, carrying the localized
+   * reference and its parameters.
+   *
+   * The `ui` reference is taken from the error when it has one, so a specific
+   * cause (a missing path, a directory) reaches the user verbatim. Anything else
+   * — a dropped tunnel, a refused request — falls back to one generic sentence
+   * rather than a raw host message, which `messages.ts` forbids rendering.
+   *
+   * @param runtime - mirror whose prompt failed.
+   * @param error - failure as caught.
+   */
   #reportPromptError(runtime: MirrorRuntime, error: unknown): void {
     runtime.lastError = error instanceof Error ? error.message : String(error)
     this.#ctx.logger.warn('dsh-waypoint: remote prompt failed: %s', runtime.lastError)
+    this.#queueNotice({
+      kind: 'mirrorPromptFailed',
+      localSessionId: runtime.record.localSessionId,
+      ui: error instanceof LocalError && error.ui !== undefined
+        ? error.ui
+        : { key: 'error.mirrorPromptFailed' },
+    })
     try {
       const emit = this.#ctx.emit as unknown as (name: string, payload: unknown) => void
       emit.call(this.#ctx, 'agent/error', {
@@ -2440,6 +2463,15 @@ export class RemoteMirrorService {
   /** Log a lazy materialization failure without turning the blank Session into a local run. */
   reportBlankFailure(agent: LazyRemoteMirrorAgent, error: unknown): void {
     this.#ctx.logger.warn('dsh-waypoint: could not start remote Session for %s: %s', agent.id, String(error))
+    // Same two channels as `#reportPromptError`: the notice is the one the page
+    // can render, and a failure to start the Session must not be silent either.
+    this.#queueNotice({
+      kind: 'mirrorPromptFailed',
+      localSessionId: String(agent.id),
+      ui: error instanceof LocalError && error.ui !== undefined
+        ? error.ui
+        : { key: 'error.mirrorPromptFailed' },
+    })
     try {
       const emit = this.#ctx.emit as unknown as (name: string, payload: unknown) => void
       emit.call(this.#ctx, 'agent/error', {

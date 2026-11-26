@@ -377,6 +377,36 @@ error naming the path. The rewritten text replaces `@<path>` with `[<name>]`, an
 that rewritten text on the pending entry — the remote echoes it, and pairing is by text, so keeping the
 original there would append the echo as a second bubble.
 
+#### How a refused prompt becomes visible
+
+Raising an error is not the same as reporting one, and the difference cost a debugging round: a prompt
+the mirror refused produced **no visible reaction at all**. The failure travelled
+
+```text
+#reportPromptError → ctx.emit('agent/error', …)
+  → session-controller relays it → emit('api-session/error', …)
+  → client Session.handleAgentError() → this.lastAgentError = message
+  → ✗ no component renders lastAgentError
+```
+
+so a correct refusal looked like a message that simply vanished. (`promptError`, the neighbouring
+field, *is* rendered by `InputBar`; `lastAgentError` is written and never read.)
+
+The visible channel is the notice queue that the archive-failure path already used. `#queueNotice`
+holds an entry in memory, `host/session/open/claim` hands it to the next heartbeat, and the page turns
+it into a toast. `MirrorPromptFailedNotice` joins it carrying a `UiText` reference, so the client
+localizes with the same `formatUiText` it uses for RPC failures and the `{path}` parameter survives the
+trip — one mechanism instead of a bespoke kind per cause.
+
+Every notice names its `localSessionId`, and the client shows one only while that Session is still the
+one on screen. A prompt failure belongs to the conversation the user was in; reporting it against a
+different transcript would blame the wrong thing, and interrupting someone who has moved on is not
+worth it either.
+
+A cause with no `LocalError.ui` — a dropped tunnel, a refused request — falls back to one generic
+sentence. Raw host messages are never rendered: `messages.ts` states why, and the client owns the
+wording.
+
 #### Why a mirror's Agent reports no model
 
 `RemoteMirrorAgent.model.current()` returns `undefined`, and that is deliberate rather than an

@@ -66,6 +66,7 @@ export const UI_TEXT_KEYS = [
   'error.mirrorAttachmentTooLarge',
   'error.mirrorLocalPathUnavailable',
   'error.mirrorLocalPathIsDirectory',
+  'error.mirrorPromptFailed',
   'error.agentVersionMismatch',
   'error.agentStartTimeout',
   'error.agentInstallFailed',

@@ -19,6 +19,7 @@ import { installNativeWorkspaceRouting } from './routing.ts'
 import { installModelCatalogMerge } from './model-catalog-merge.ts'
 import { installLoopbackLinkRouting } from './link-forwarding.ts'
 import { NS, en, zh, type LocaleFace } from './locale.ts'
+import { formatUiText } from './errors.ts'
 import { showToast } from './toast.ts'
 import { installWorkspaceAddMenu } from './workspace-add.ts'
 import { installWorkspaceDeleteCopy } from './workspace-delete-copy.ts'
@@ -65,8 +66,22 @@ export function apply(ctx: Context): void {
         // itself: the host writes the local archive first and the remote call
         // can take up to the request timeout, so the toast must not block the
         // click. The heartbeat collects whatever is waiting.
+        //
+        // A notice names the Session it belongs to and is shown only while that
+        // Session is still the one on screen. A prompt failure the user has
+        // already navigated away from is not worth interrupting them for, and
+        // reporting it against the transcript they are reading now would point
+        // at the wrong conversation.
+        const open = currentSessionId()
         for (const notice of claimed.notices ?? []) {
-          if (notice.kind === 'remoteArchiveFailed') showToast(t('toast.remoteArchiveFailed'))
+          if (open === undefined || notice.localSessionId !== open) continue
+          if (notice.kind === 'remoteArchiveFailed') {
+            showToast(t('toast.remoteArchiveFailed'))
+            continue
+          }
+          // The host sends a localizable reference, never prose, so the wording
+          // and its `{param}` placeholders are rendered here.
+          showToast(formatUiText(t, notice.ui))
         }
         if (active && claimed.localSessionId !== undefined) {
           // Do not steal focus if the user moved on to another Session while

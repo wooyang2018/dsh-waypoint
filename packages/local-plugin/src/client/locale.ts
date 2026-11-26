@@ -70,6 +70,7 @@ export const zh = {
     '这个路径只在本地存在（{path}），远端会话读不到它。请改用附件（+ / 拖拽 / 粘贴），或把文件放进远端工作区后按路径引用。',
   'error.mirrorLocalPathIsDirectory':
     '这个路径在本地是目录（{path}），远端会话无法读取它的内容。请改为指定目录里的具体文件，或放进远端工作区。',
+  'error.mirrorPromptFailed': '这条消息没能转发到远端会话，远端没有收到它。请检查远端连接后重试。',
   'error.operationFailed': '操作失败',
   'error.unavailable': '无法连接本地远程宿主服务',
   'error.internal': '插件内部错误',
@@ -255,6 +256,8 @@ export const en: Record<CopyKey, string> = {
     'This path exists only on your machine ({path}), so the remote Session cannot read it. Attach the file instead (+ / drag / paste), or place it in the remote workspace and reference its path.',
   'error.mirrorLocalPathIsDirectory':
     'This path is a local directory ({path}), so the remote Session cannot read its contents. Name a file inside it, or place the directory in the remote workspace.',
+  'error.mirrorPromptFailed':
+    'This message could not be forwarded to the remote Session, so the remote never received it. Check the remote connection and try again.',
   'error.operationFailed': 'Operation failed',
   'error.unavailable': 'Cannot reach the local remote-host service',
   'error.internal': 'Plugin internal error',

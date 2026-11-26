@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- **A prompt the mirror refuses now tells the user instead of vanishing.** The failure was reported
+  through `agent/error`, which the Host relays into the client Session's `lastAgentError` — a field no
+  component renders. So a refused prompt produced no visible reaction at all, and a correct refusal
+  looked like a message that disappeared. The failure now also queues a notice on the channel the
+  archive-failure toast already used: it rides the claim heartbeat and becomes a toast, carrying the
+  localizable reference and its `{path}` parameter so the specific cause reaches the user. A cause with
+  no localizable text falls back to one generic sentence rather than a raw host message.
+- Notices are shown only while the Session they belong to is still the one on screen, so a failure from
+  a conversation the user has left does not interrupt them or point at the wrong transcript.
 - **A file picked in the Desktop application now reaches a mirrored Session.** The Desktop preload
   exposes a host-path bridge, and the composer prefers a path over an upload whenever that bridge
   answers — so a non-image file became an `@path` reference instead of an attachment, and a mirrored
