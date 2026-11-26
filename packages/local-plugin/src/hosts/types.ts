@@ -61,6 +61,15 @@ export interface HostRecord {
    * older builds behaving exactly as they did.
    */
   readonly modelSource?: ModelSource | null
+  /**
+   * Whether this host may be installed and updated by this plugin.
+   *
+   * Absent means "follow the profile default". Turning it off is the supported
+   * way to hand-maintain a remote: provisioning reinstalls the profile on every
+   * connect, so anything edited in the remote's DSH installation is otherwise
+   * replaced without warning. While it is off the plugin only reads that host.
+   */
+  readonly autoProvision?: boolean | null
   readonly autoConnect: boolean
   readonly createdAt: string
   readonly updatedAt: string
@@ -196,6 +205,13 @@ export interface HostView {
    * Settings page renders one value without knowing the fallback rules.
    */
   readonly modelSource: ModelSource
+  /**
+   * Effective auto-provision setting for this host.
+   *
+   * Resolved against the profile default so the Settings card renders one value
+   * without knowing the fallback rule.
+   */
+  readonly autoProvision: boolean
   /** Set when the remote DSH runtime is older than the local one. */
   readonly dshUpdate: DshUpdate | null
   /** Set while an automatic reconnect is scheduled. */
@@ -287,8 +303,20 @@ export function idleRuntime(): HostRuntime {
   }
 }
 
-/** Project one record + runtime into the browser-safe view. */
-export function toHostView(record: HostRecord, runtime: HostRuntime, defaultSource: ModelSource): HostView {
+/**
+ * Project one record + runtime into the browser-safe view.
+ *
+ * @param record - durable host record.
+ * @param runtime - live lifecycle state.
+ * @param defaultSource - profile default credential source.
+ * @param defaultAutoProvision - profile default for installing this host.
+ */
+export function toHostView(
+  record: HostRecord,
+  runtime: HostRuntime,
+  defaultSource: ModelSource,
+  defaultAutoProvision = true,
+): HostView {
   return {
     id: record.id,
     label: record.label,
@@ -300,6 +328,7 @@ export function toHostView(record: HostRecord, runtime: HostRuntime, defaultSour
     updatedAt: record.updatedAt,
     hasToken: record.token !== null,
     modelSource: record.modelSource ?? defaultSource,
+    autoProvision: record.autoProvision ?? defaultAutoProvision,
     phase: runtime.phase,
     localPort: runtime.localPort,
     localUrl: runtime.localUrl,

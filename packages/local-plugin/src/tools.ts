@@ -25,7 +25,20 @@ function toJsonObject(value: unknown): JsonObject {
 }
 
 /** Host-writing tools that may connect over SSH or provision a remote runtime. */
-const HOST_WRITE_TOOLS = new Set(['remote_host_add', 'remote_host_connect', 'remote_host_provision', 'remote_host_restart'])
+/**
+ * Host-writing tools that may connect over SSH or provision a remote runtime.
+ *
+ * `remote_host_auto_provision` is here even though it writes nothing itself: it
+ * decides whether every later connect may reinstall that host, so approving it is
+ * approving a standing change in what this plugin does to a machine.
+ */
+const HOST_WRITE_TOOLS = new Set([
+  'remote_host_add',
+  'remote_host_connect',
+  'remote_host_provision',
+  'remote_host_restart',
+  'remote_host_auto_provision',
+])
 
 /**
  * Require an explicit approval before model-facing host writes. These tools can
@@ -139,8 +152,27 @@ export function registerRemoteTools(ctx: Context, service: RemoteHostsService): 
   }))
 
   ctx.tools.register(defineTool({
-    name: 'remote_host_restart',
-    description: 'Restart the remote DSH service without reinstalling it, preserving installed remote plugins, then reconnect. Requires the installer-owned systemd user unit; use remote_host_provision for nohup installs.',
+    name: 'remote_host_auto_provision',
+    description: 'Turn automatic install/update of a remote host on or off. Set it to false to hand-maintain that host: the plugin then only reads it, so edits made to its DSH installation (agent presets, patch files) are no longer replaced on the next connect. Disabling installs nothing; enabling re-checks on the next connect.',
+    parameters: {
+      hostId: { type: 'string', required: true, description: 'Registered host id.' },
+      enabled: { type: 'boolean', required: true, description: 'false to stop this plugin from writing to the host.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { host: { type: 'object', additionalProperties: true, required: true } },
+      },
+      render: renderJson,
+    },
+    async execute(args) {
+      return { host: toJsonObject(await service.setAutoProvision(args.hostId, args.enabled)) }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'remote_host_restart',    description: 'Restart the remote DSH service without reinstalling it, preserving installed remote plugins, then reconnect. Requires the installer-owned systemd user unit; use remote_host_provision for nohup installs.',
     parameters: {
       hostId: { type: 'string', required: true, description: 'Registered host id.' },
     },

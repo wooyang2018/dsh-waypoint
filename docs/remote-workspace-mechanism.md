@@ -428,7 +428,106 @@ uses the client's 500 ms `host/session/open/claim` request as a visibility heart
 request is queued and dispatched once it is opened. This is not laziness — it avoids dumping a dozen
 historical approvals onto the screen after one reconnect.
 
-### 5.7 Archive: one decision, two logs
+### 5.7 Questions: the same bridge, one different decision
+
+`ask_user_question` needs the same treatment as an approval and gets it the same way: the remote
+agent prepends a listener to DSH's `user-questions/request` waterfall (`#bindQuestions`), replays the
+pending set over `GET /questions/events`, and the local side rebuilds the waterfall through
+`scopeTarget(runtime.agent, runtime.agent)` before posting the outcome to `POST /questions/answer`
+(`#ensureQuestionStream` / `#dispatchQuestion` in `service.ts`, `streamQuestions` in
+`packages/remote-agent/src/http.ts`). Why the rebuild rather than a forward is 5.6's reason twice
+over: `dsh-api-remotes` owns the forwarding to a browser, but only for a request carrying its scoped
+Agent, and that Agent is the local façade, which only this side can supply.
+
+Two rules have no approval analogue.
+
+**The stream's existence is the claim.** Before claiming, the agent checks whether any question
+stream is attached (`hasQuestionSubscriber`). Without one it calls `next()` and the remote Web UI
+answers as it always did. An approval can afford to claim and resolve `unavailable` — that reads as a
+refusal — but a question resolves into a **tool result the model acts on**, so "nobody was listening"
+must never become "the user declined".
+
+**Delegation is a third outcome.** `delegated` says no local mirror can show this question (the
+workspace was removed, or no Session is mounted), so the remote should fall through to its own UI.
+The local side sends it instead of `cancelled` for exactly that case, and the remote maps it straight
+to `next()`.
+
+Three smaller decisions follow from the same shape:
+
+- **No `wait` on the wire.** Only the call id travels. A `timed: true` wait would have the local card
+  attach to a foreground wait stream owned by *this* Host's `userQuestions` service, which has never
+  heard of a remote call, so the countdown stays remote and the card renders as blocking.
+- **Neither seam has a clock by default.** `questionTimeoutMs` and `approvalTimeoutMs` both default to
+  `0`, meaning wait indefinitely, because neither `dsh-user-questions` nor `dsh-user-approval` contains
+  a timer: their vocabulary is about *who* answered, not how long they took, and `unavailable` means
+  "no answerer was reachable". A deployment may opt into a bound. When a question's expires it fails
+  with `ASK_UNANSWERED`, deliberately not `ASK_CANCELLED` — the user withdrawing a question and the
+  question never being seen are different facts, and reporting the second as the first tells the model
+  a human considered it. An approval's expiry answers `unavailable`, which is the truthful vocabulary
+  for it.
+- **An expiry never fabricates an answer.** Returning an empty batch would tell the model the user
+  skipped the question, which is a different fact again.
+- **A partial batch is rejected.** `assertCompleteBatch` requires each question exactly once, which
+  only the owner of the asked questions can check; the gateway validated the shape, not the
+  correspondence to this call.
+
+#### The anchor, and why a timed mirror needs one
+
+Two mechanisms only run if the Session log declares the **timed** `ask_user_question` schema — one
+that carries a `timeout` parameter:
+
+- DSH's `userQuestions` projection ignores every `tool/call` until a `request/header` declares it
+  (`if (!fold.timed) return fold`), so without it the fold stays empty and no `continued` row ever
+  appears.
+- `askTimed` is only reachable through that schema.
+
+A mirrored Session almost never contains that header: the seed is a truncated tail capped by
+`mirrorMaxEvents`, while the header sits at the start of the conversation. Replaying the remote
+header verbatim is not the fix either — a local `request/header` describes the tools *this* Session's
+model can call, and no local model runs the remote's tools.
+
+So the mirror writes its own anchor (`declaresTimedQuestions` / `localQuestionHeader` in
+`src/mirror/service.ts`): when the snapshot window proves the remote asked timed questions, one local
+`request/header` is seeded ahead of every replayed event, listing **only** `ask_user_question`. Remote
+headers are stripped from the seed in both cases, for the same reason `toWireEvent` drops
+`developer/message` tool-change blocks. A window with no header at all is not evidence of a timed
+tool, so nothing is invented — the mirror simply keeps its previous behaviour.
+
+With the anchor in place, the remote's pending `tool/result` folds the call to `continued`, the
+projection publishes it, and the local card renders the state DSH already supports: `waitState:
+'continued'`, no countdown (`countdown` is `undefined` without a deadline, by design).
+
+#### When the window closes
+
+`askTimed` returns `{ pending: true }` to the model and the turn continues, while the Session projection
+keeps the call as `continued`. The question is nominally still answerable, but not through this bridge,
+and the reason is a DSH constraint rather than a gap here: `userQuestions.answer()` — the documented
+late-reply path — requires the exact live `Agent` that asked (`agents.get(agent.id) !== agent` rejects
+it with `CALLER_NOT_LIVE`), and that instance is unregistered once the turn ends. An answer submitted
+afterwards therefore cannot reach the model.
+
+The bridge says so instead of accepting it. On expiry the agent emits an `expired` frame carrying the
+question id and drops its record; the local side aborts that card's wait, so the composer clears with
+the reason rather than offering an input whose submission would be rejected. Both sides forget the
+question at the same moment, which keeps a late submission honest: it fails as `not pending` instead of
+being silently swallowed.
+
+Verified against a real host by configuring its `tool-ask-user` row with `mode: timed, timeout: 15`:
+the tool result becomes `{ pending: true }`, the turn completes, and the local card closes. Answering
+inside the window still delivers normally — the only difference is the `callId` the request carries,
+which the blocking schema never supplies.
+
+Turning that on for a host is deliberately not a setting. The row lives inside an agent preset, and a
+profile patch replaces a preset's whole `plugins` list rather than merging one row, so supporting it
+would make this plugin responsible for mirroring DSH's tool table on every release. A host whose
+operator wants it can edit that preset directly — after turning off automatic deployment for that host,
+which is what keeps the edit from being reverted.
+
+`intent` is copied verbatim in both directions. It names a presentation the *asking* host chose, and
+DSH's own rule is that a tag a UI does not recognise falls back to the generic option list, so
+dropping an unknown one would make version skew silently change the card.
+
+### 5.8 Archive: one decision, two logs
 
 Archiving a mirrored Session has to reach the remote Session, and restoring it has to come back the
 same way. Both halves are installed together, for a reason that is easy to miss.

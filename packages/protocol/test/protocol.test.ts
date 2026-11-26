@@ -9,6 +9,7 @@ import {
   PROTOCOL_VERSION,
   RemoteAgentClient,
   RemoteProtocolError,
+  isRemoteQuestionFrame,
   matchAgentRoute,
   negotiateProtocol,
   parseSseStream,
@@ -43,6 +44,14 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 function readAuth(req: IncomingMessage): string | undefined {
   const header = req.headers.authorization
   return header?.startsWith('Bearer ') === true ? header.slice('Bearer '.length) : undefined
+}
+
+/** Collect one request body so a test can assert exactly what the client sent. */
+async function readBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+  for await (const chunk of req) chunks.push(chunk as Buffer)
+  const text = Buffer.concat(chunks).toString('utf8')
+  return text === '' ? undefined : JSON.parse(text)
 }
 
 describe('version negotiation', () => {
@@ -126,11 +135,44 @@ describe('SSE parser', () => {
   })
 })
 
+describe('question frame guard', () => {
+  const base = {
+    type: 'request',
+    request: { id: 'q-1', sessionId: 's1', questions: [{ id: 'a', question: 'Pick one' }] },
+  }
+
+  it('accepts a minimal request and the ready frame', () => {
+    assert.equal(isRemoteQuestionFrame(base), true)
+    assert.equal(isRemoteQuestionFrame({ type: 'ready' }), true)
+  })
+
+  it('rejects a request with no questions', () => {
+    assert.equal(isRemoteQuestionFrame({ ...base, request: { id: 'q-1', sessionId: 's1', questions: [] } }), false)
+  })
+
+  it('rejects a malformed question item', () => {
+    const bad = { ...base, request: { ...base.request, questions: [{ question: 'no id' }] } }
+    assert.equal(isRemoteQuestionFrame(bad), false)
+  })
+
+  it('accepts an unknown intent tag instead of rejecting the frame', () => {
+    // A newer Host may declare a presentation this client has never seen. DSH's
+    // rule is that an unknown tag renders as the generic option list, so the
+    // guard must not turn version skew into a dropped question.
+    const withIntent = {
+      ...base,
+      request: { ...base.request, questions: [{ id: 'a', question: 'Pick one', intent: { kind: 'brand-new' } }] },
+    }
+    assert.equal(isRemoteQuestionFrame(withIntent), true)
+  })
+})
+
 describe('RemoteAgentClient', () => {
   let server: Server
   let baseUrl: string
   let archivedPath: string | undefined
   let unarchivedPath: string | undefined
+  let answeredQuestion: unknown
   const token = 'test-token'
 
   before(async () => {
@@ -233,6 +275,35 @@ describe('RemoteAgentClient', () => {
         res.end()
         return
       }
+      if (url.pathname === AGENT_ROUTES.questionEvents) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.write(`event: ready\ndata: ${JSON.stringify({ type: 'ready' })}\n\n`)
+        // Same transport-level keepalive the approval stream uses.
+        res.write('event: heartbeat\ndata: {}\n\n')
+        res.write(`event: request\ndata: ${JSON.stringify({
+          type: 'request',
+          request: {
+            id: 'question-1',
+            sessionId: 's1',
+            callId: 'call-1',
+            questions: [{ id: 'q1', question: 'Which mode?', options: [{ label: 'fast' }, { label: 'safe' }] }],
+          },
+        })}\n\n`)
+        res.end()
+        return
+      }
+      if (url.pathname === AGENT_ROUTES.questionAnswer) {
+        void readBody(req).then(body => {
+          answeredQuestion = body
+          json(res, 200, {
+            ok: true,
+            protocolVersion: PROTOCOL_VERSION,
+            serverTime: new Date().toISOString(),
+            data: { accepted: true },
+          })
+        })
+        return
+      }
       json(res, 404, {
         ok: false,
         protocolVersion: PROTOCOL_VERSION,
@@ -298,5 +369,45 @@ describe('RemoteAgentClient', () => {
     const frames = []
     for await (const frame of client.followApprovals(new AbortController().signal)) frames.push(frame)
     assert.deepEqual(frames.map(frame => frame.type), ['ready', 'request'])
+  })
+
+  it('skips question-stream heartbeats instead of failing the stream', async () => {
+    const client = new RemoteAgentClient({ baseUrl, token })
+    const frames = []
+    for await (const frame of client.followQuestions(new AbortController().signal)) frames.push(frame)
+    assert.deepEqual(frames.map(frame => frame.type), ['ready', 'request'])
+    const request = frames[1]
+    assert.ok(request?.type === 'request')
+    // `callId` must survive the wire: the local card is keyed by it.
+    assert.equal(request.request.callId, 'call-1')
+    assert.equal(request.request.questions[0]?.id, 'q1')
+  })
+
+  it('posts a question outcome to the question route', async () => {
+    const client = new RemoteAgentClient({ baseUrl, token })
+    await client.answerQuestion('question-1', { kind: 'delegated' })
+    assert.deepEqual(answeredQuestion, { id: 'question-1', outcome: { kind: 'delegated' } })
+  })
+
+  it('routes question paths distinctly from approval paths', () => {
+    assert.deepEqual(matchAgentRoute(AGENT_ROUTES.questionEvents), { kind: 'question-events' })
+    assert.deepEqual(matchAgentRoute(AGENT_ROUTES.questionAnswer), { kind: 'question-answer' })
+    assert.deepEqual(matchAgentRoute(AGENT_ROUTES.approvalEvents), { kind: 'approval-events' })
+  })
+})
+
+describe('question expiry frame', () => {
+  // A closed window must reach the card that is still showing it. Without this
+  // frame the local wait never ends and the user submits into a rejection.
+  it('accepts an expired frame carrying an id and a reason', () => {
+    assert.equal(isRemoteQuestionFrame({ type: 'expired', id: 'q-1', reason: 'window closed' }), true)
+  })
+
+  it('rejects an expired frame without an id', () => {
+    assert.equal(isRemoteQuestionFrame({ type: 'expired', reason: 'window closed' }), false)
+  })
+
+  it('rejects an expired frame with a non-string reason', () => {
+    assert.equal(isRemoteQuestionFrame({ type: 'expired', id: 'q-1', reason: 7 }), false)
   })
 })

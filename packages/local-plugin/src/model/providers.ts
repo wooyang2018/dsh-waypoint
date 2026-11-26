@@ -171,6 +171,11 @@ export interface OverlayRow {
  * exactly the local list. `agent-default-model` is rewritten in the same
  * overlay because the previous default may no longer exist.
  *
+ * Only top-level rows belong here. A row nested inside an agent preset (the
+ * `ask_user_question` schema, for instance) cannot be reached from this file:
+ * overriding it means replacing that preset's whole `plugins` list, which would
+ * make this plugin responsible for mirroring DSH's tool table.
+ *
  * @param providers - providers to publish; an empty list removes the override.
  * @param defaultSelection - provider/model the remote should default to.
  * @returns overlay text, or undefined when there is nothing to publish.

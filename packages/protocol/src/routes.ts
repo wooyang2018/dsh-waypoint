@@ -19,6 +19,8 @@ export const AGENT_ROUTES = {
   webUrl: `${AGENT_API_PREFIX}/web-url`,
   approvalEvents: `${AGENT_API_PREFIX}/approvals/events`,
   approvalAnswer: `${AGENT_API_PREFIX}/approvals/answer`,
+  questionEvents: `${AGENT_API_PREFIX}/questions/events`,
+  questionAnswer: `${AGENT_API_PREFIX}/questions/answer`,
   fileStat: `${AGENT_API_PREFIX}/files/stat`,
   fileList: `${AGENT_API_PREFIX}/files/list`,
   fileRead: `${AGENT_API_PREFIX}/files/read`,
@@ -56,6 +58,8 @@ export type AgentRoute =
   | { readonly kind: 'web-url' }
   | { readonly kind: 'approval-events' }
   | { readonly kind: 'approval-answer' }
+  | { readonly kind: 'question-events' }
+  | { readonly kind: 'question-answer' }
   | { readonly kind: 'file-stat' }
   | { readonly kind: 'file-list' }
   | { readonly kind: 'file-read' }
@@ -204,6 +208,10 @@ export function matchAgentRoute(pathname: string): AgentRoute | undefined {
       return { kind: 'approval-events' }
     case AGENT_ROUTES.approvalAnswer:
       return { kind: 'approval-answer' }
+    case AGENT_ROUTES.questionEvents:
+      return { kind: 'question-events' }
+    case AGENT_ROUTES.questionAnswer:
+      return { kind: 'question-answer' }
     case AGENT_ROUTES.fileStat:
       return { kind: 'file-stat' }
     case AGENT_ROUTES.fileList:

@@ -60,6 +60,8 @@
 - 右侧栏浏览器预览远端 dev server，经 loopback 端口转发（见下文）
 - 主机/工作区/Session 的 Agent 工具
 - 审批提示接入本地 UI
+- `ask_user_question` 提问卡片同样接入本地 UI：远端 agent 需要人做决定时，不会再因为「答案只出现在远端
+  Web UI」而一直卡住
 
 **不支持**的部分——Windows 远端、relay/NAT 穿透——列在[已知限制](#已知限制)里，并附有可用的替代做法。
 
@@ -80,7 +82,7 @@ DSH 会从 npm 安装 bundle。这个包已经包含远端 agent 资源，不需
 如果 npmjs.com 对刚发布版本的 `latest` 解析仍旧滞后，可以改为安装当前的精确版本：
 
 ```text
-dsh-waypoint@1.1.3
+dsh-waypoint@1.1.4
 ```
 
 每次发新版本时同步更新这个版本号。
@@ -354,6 +356,8 @@ dsh-remote-local-plugin`），避免同时出现两个设置分区；再按 `doc
   发现、隧道、会话镜像、文件与终端路由（英文正文：[remote-workspace-mechanism.md](docs/remote-workspace-mechanism.md)）
 - [镜像会话的远端目录](docs/specs/2026-11-26-remote-catalog-bridge.md)——镜像会话里 `/` 命令、
   技能与命令执行的设计（英文）
+- [远程工作区原理](docs/remote-workspace-mechanism.md)——远端目录如何变成侧边栏里的工作区：
+  发现、隧道、会话镜像、文件与终端路由
 - [Operations guide](docs/operations.md)
 - [Development](docs/development.md)
 - [Testing](docs/testing.md)

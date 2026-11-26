@@ -54,6 +54,7 @@ export type HostApiEndpoint =
   | 'host/session/mirror'
   | 'host/session/model'
   | 'host/model-source'
+  | 'host/auto-provision'
   | 'host/node-install'
   | 'host/files/list'
   | 'host/files/read'
@@ -235,6 +236,7 @@ export interface HostApiPayloads {
     reasoningEffort?: string
   }
   'host/model-source': { hostId: string; source: ModelSource }
+  'host/auto-provision': { hostId: string; enabled: boolean }
   'host/node-install': { hostId: string }
   'host/files/list': { sessionId: string; path: string }
   'host/files/read': { sessionId: string; path: string; offset?: number; limit?: number }
@@ -280,6 +282,7 @@ export interface HostApiValues {
   'host/session/mirror': MirrorTarget
   'host/session/model': AcceptedResult
   'host/model-source': HostView
+  'host/auto-provision': HostView
   'host/node-install': HostView
   'host/files/list': MirrorFileResult
   'host/files/read': MirrorFileResult

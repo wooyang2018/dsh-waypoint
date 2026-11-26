@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { createScope, scopeTarget, type Scope } from '@deepseek-ai/dsh-scope'
 import type {} from '@deepseek-ai/dsh-user-approval'
+import type {} from '@deepseek-ai/dsh-user-questions/types'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-api-session-controller/types'
 import { appendPluginRecord } from '@deepseek-ai/dsh-session'
@@ -27,6 +28,9 @@ import type { Workspace, WorkspaceId, WorkspaceDomainState } from '@deepseek-ai/
 import type {
   ApprovalOutcome,
   RemoteApprovalRequest,
+  RemoteQuestionAnswerItem,
+  RemoteQuestionOutcome,
+  RemoteQuestionRequest,
   RemoteAssistantFrame,
   RemoteSessionEvent,
   RemoteSessionSummary,
@@ -210,6 +214,14 @@ interface MirrorRuntime {
    * for the same turn is skipped rather than closing it twice.
    */
   closedTurns: Set<number>
+  /**
+   * Remote question ids the host reported closed while the local card was up.
+   *
+   * A closed question is answered by nobody: the remote dropped its record, so a
+   * submission would be rejected as `not pending`. Listing the id here keeps the
+   * abort path from reporting `cancelled` for a wait it did not cause.
+   */
+  expiredQuestions: Set<string>
   /**
    * Set once the remote log is observed moving backwards.
    *
@@ -686,6 +698,25 @@ export class RemoteMirrorService {
   #visibleSessions = new Map<string, number>()
   #registrations = new Map<string, () => Promise<void>>()
   #approvalStreams = new Map<string, AbortController>()
+  /**
+   * Questions waiting for a visible mirror, keyed by host and remote Session.
+   *
+   * The counterpart of {@link #pendingApprovals}: a question that arrives while
+   * its Session is not on screen waits rather than popping a card for a
+   * conversation nobody is reading.
+   */
+  #pendingQuestions = new Map<string, RemoteQuestionRequest[]>()
+  /** Question ids currently being dispatched, so a replayed id cannot double-dispatch. */
+  #answeringQuestions = new Set<string>()
+  /**
+   * The local wait each in-flight question is holding, keyed by remote question id.
+   *
+   * Kept so an expiry frame can abort exactly the card whose window closed. The
+   * wait is otherwise unreachable: `#dispatchQuestion` blocks on it, and nothing
+   * else knows which question a given card belongs to.
+   */
+  #questionWaits = new Map<string, AbortController>()
+  #questionStreams = new Map<string, AbortController>()
   #mirrorsInFlight = new Map<string, Promise<MirrorRecord | undefined>>()
   #pendingBlanks = new Map<string, PendingBlankSession>()
   /**
@@ -861,6 +892,8 @@ export class RemoteMirrorService {
     this.#registrations.clear()
     for (const controller of this.#approvalStreams.values()) controller.abort()
     this.#approvalStreams.clear()
+    for (const controller of this.#questionStreams.values()) controller.abort()
+    this.#questionStreams.clear()
     this.#runtimes.clear()
     const pendingBlanks = [...this.#pendingBlanks.values()]
     this.#pendingBlanks.clear()
@@ -1450,7 +1483,10 @@ export class RemoteMirrorService {
     if (sessionId === undefined) return
     this.#visibleSessions.set(sessionId, now)
     const runtime = [...this.#runtimes.values()].find(item => item.record.localSessionId === sessionId)
-    if (runtime !== undefined) this.#flushPendingApprovals(runtime.record)
+    if (runtime !== undefined) {
+      this.#flushPendingApprovals(runtime.record)
+      this.#flushPendingQuestions(runtime.record)
+    }
   }
 
   /** Whether a connected client reported this Session visible within the freshness window. */
@@ -2492,6 +2528,7 @@ export class RemoteMirrorService {
       if (record.hostId === host.id) this.#workspaceRemoved(record)
     }
     this.#ensureApprovalStream(host)
+    this.#ensureQuestionStream(host)
     await this.#reconcileTestHidden(host)
     // Read once per pass: the getter returns the durable array, so consulting
     // it per Session would be O(sessions x archived). Guarded rather than
@@ -3022,11 +3059,205 @@ export class RemoteMirrorService {
     })
   }
 
+  #ensureQuestionStream(host: HostView): void {
+    if (this.#questionStreams.has(host.id)) return
+    // An agent that cannot answer has nothing to say; the remote browser keeps
+    // the question and this host behaves exactly as it did before the bridge.
+    // A hosts service that cannot answer the capability question at all (a test
+    // double, or a host whose info has not arrived) is treated the same way:
+    // the bridge is an addition, never a reason to fail a sync pass.
+    let supported = false
+    try {
+      supported = this.#hosts.supportsAgent(host.id, 'question.follow')
+    } catch {
+      supported = false
+    }
+    if (!supported) return
+    const controller = new AbortController()
+    this.#questionStreams.set(host.id, controller)
+    void (async () => {
+      try {
+        for await (const frame of this.#hosts.followQuestions(host.id, controller.signal)) {
+          if (frame.type === 'request') void this.#handleQuestion(host.id, frame.request)
+          // A closed window arrives while the local card is still showing. Abort
+          // that card's wait so it disappears with its own explanation instead of
+          // accepting an answer the remote can no longer receive.
+          else if (frame.type === 'expired') this.#expireQuestion(host.id, frame.id, frame.reason)
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          this.#ctx.logger.warn('dsh-waypoint: question stream %s failed: %s', host.id, String(error))
+        }
+      } finally {
+        this.#questionStreams.delete(host.id)
+      }
+    })()
+  }
+
+  /**
+   * Dispatch one remote question at most once.
+   *
+   * A reconnecting stream replays every unanswered question, so the same id
+   * arrives again while its card may still be on screen. Dispatching it twice
+   * would stack a second card over the first and send two competing outcomes.
+   */
+  async #handleQuestion(hostId: string, request: RemoteQuestionRequest): Promise<void> {
+    const questionKey = `${hostId}\u0000${request.sessionId}\u0000${request.id}`
+    if (this.#answeringQuestions.has(questionKey)) return
+    this.#answeringQuestions.add(questionKey)
+    try {
+      await this.#dispatchQuestion(hostId, request)
+    } finally {
+      this.#answeringQuestions.delete(questionKey)
+    }
+  }
+
+  /**
+   * Bridge one remote question to the local question UI.
+   *
+   * The local waterfall is rebuilt rather than forwarded: `dsh-api-remotes`
+   * forwards `user-questions/request` to the browser for us, but only for a
+   * request carrying its scoped Agent, which only this side can supply.
+   *
+   * Three outcomes reach the remote, and the difference matters:
+   *
+   * - `answer` — the batch the local card produced.
+   * - `delegated` — no mirror can take it (removed workspace, unmounted
+   *   Session). The remote then falls through to its own browser UI instead of
+   *   parking the turn for a question this side will never show.
+   * - `cancelled` — the card was closed, or the local wait aborted.
+   */
+  async #dispatchQuestion(hostId: string, request: RemoteQuestionRequest): Promise<void> {
+    const runtime = [...this.#runtimes.values()].find(
+      item => item.record.hostId === hostId && item.record.remoteSessionId === request.sessionId,
+    )
+    if (runtime === undefined) {
+      const mirror = this.#state.sessions[key(hostId, request.sessionId)]
+      // A removed workspace will never show this Session again, so hand the
+      // question to the remote UI rather than queueing it forever.
+      const removed = mirror !== undefined && Object.values(this.#state.workspaces).some(workspace =>
+        workspace.hostId === hostId && workspace.anchor === mirror.anchor && workspace.removed)
+      if (removed) {
+        await this.#answerRemoteQuestion(hostId, request.id, { kind: 'delegated' })
+        return
+      }
+      // The mirror may not be mounted yet; hold it until a client shows it.
+      this.#enqueueQuestion(hostId, request)
+      return
+    }
+    if (!this.isSessionVisible(runtime.record.localSessionId)) {
+      this.#enqueueQuestion(hostId, request)
+      return
+    }
+    const local = new AbortController()
+    this.#questionWaits.set(request.id, local)
+    let outcome: RemoteQuestionOutcome = { kind: 'delegated' }
+    try {
+      const waterfall = this.#ctx.waterfall as unknown as (
+        thisArg: unknown,
+        name: string,
+        request: unknown,
+        next: () => Promise<unknown>,
+      ) => Promise<unknown>
+      const answer = await waterfall(
+        scopeTarget(runtime.agent as never, runtime.agent as never),
+        'user-questions/request',
+        {
+          questions: request.questions as never,
+          agent: runtime.agent as never,
+          signal: local.signal,
+          // `wait` carries the call id only. A `timed: true` here would have the
+          // local card attach to a foreground wait stream on *this* Host's
+          // userQuestions service, which never heard of a remote call, so the
+          // countdown stays on the remote and the card renders as blocking.
+          ...request.callId === undefined ? {} : { wait: { callId: request.callId as never } },
+        },
+        async () => {
+          throw noLocalAnswerer()
+        },
+      ) as { answers?: RemoteQuestionAnswerItem[] }
+      const answers = Array.isArray(answer?.answers) ? answer.answers : []
+      outcome = answers.length === 0
+        ? { kind: 'cancelled' }
+        : { kind: 'answer', answers }
+    } catch (error) {
+      // A closed card and a cancelled turn both surface here. Reporting
+      // `cancelled` is what lets the remote tool call finish instead of waiting
+      // out its own timeout for an answer that is never coming.
+      this.#ctx.logger.debug('dsh-waypoint: local question bridge ended: %s', String(error))
+      outcome = { kind: 'cancelled' }
+    } finally {
+      this.#questionWaits.delete(request.id)
+    }
+    if (runtime.stopped) return
+    if (runtime.expiredQuestions.delete(request.id)) {
+      // The remote already reported this question closed and has dropped its
+      // record, so answering would only earn a `not pending` rejection. The card
+      // was aborted for the same reason; there is nothing left to tell anyone.
+      return
+    }
+    await this.#answerRemoteQuestion(hostId, request.id, outcome)
+  }
+
+  /**
+   * Close the local card whose remote window expired.
+   *
+   * The abort is what the card actually sees: its wait rejects, the composer
+   * clears the draft, and the user is left with the explanation rather than an
+   * input that would be rejected on submit.
+   * @param hostId - host that reported the expiry.
+   * @param questionId - remote question id, as sent on the stream.
+   * @param reason - operator-facing sentence for why it closed.
+   */
+  #expireQuestion(hostId: string, questionId: string, reason: string): void {
+    const wait = this.#questionWaits.get(questionId)
+    if (wait === undefined) return
+    this.#questionWaits.delete(questionId)
+    // Mark it so the abort path does not report `cancelled`: the remote knows
+    // already, and a second report would be rejected as `not pending`.
+    for (const runtime of this.#runtimes.values()) {
+      if (runtime.record.hostId === hostId) runtime.expiredQuestions.add(questionId)
+    }
+    this.#ctx.logger.info('dsh-waypoint: question %s closed on the remote: %s', questionId, reason)
+    wait.abort(new Error(reason))
+  }
+
+  /** Hold one question until its mirror runtime exists and a client shows it. */
+  #enqueueQuestion(hostId: string, request: RemoteQuestionRequest): void {
+    const pendingKey = key(hostId, request.sessionId)
+    const queued = this.#pendingQuestions.get(pendingKey)
+    if (queued === undefined) this.#pendingQuestions.set(pendingKey, [request])
+    else if (!queued.some(item => item.id === request.id)) queued.push(request)
+  }
+
+  /** Hand queued questions to the local UI once the mirror is mounted and visible. */
+  #flushPendingQuestions(record: MirrorRecord): void {
+    if (!this.isSessionVisible(record.localSessionId)) return
+    if (!this.#runtimes.has(record.localSessionId)) return
+    const pendingKey = key(record.hostId, record.remoteSessionId)
+    const queued = this.#pendingQuestions.get(pendingKey)
+    if (queued === undefined) return
+    this.#pendingQuestions.delete(pendingKey)
+    for (const request of queued) void this.#handleQuestion(record.hostId, request)
+  }
+
+  /** Report one question outcome, logging rather than throwing on failure. */
+  async #answerRemoteQuestion(
+    hostId: string,
+    questionId: string,
+    outcome: RemoteQuestionOutcome,
+  ): Promise<void> {
+    await this.#hosts.answerQuestion(hostId, questionId, outcome).catch(error => {
+      // The remote may have timed the wait out already; that is not retryable,
+      // because a resent answer would land on whatever question now holds the id.
+      this.#ctx.logger.warn('dsh-waypoint: question answer failed: %s', String(error))
+    })
+  }
+
   /**
    * Ensure exactly one local mirror per remote Session.
    *
-   * Creation is check-then-act across several awaits (workspace and session
-   * discovery, snapshot fetch), so a periodic sync and an on-demand
+   * Creation is check-then-act across several awaits (workspace and session   * discovery, snapshot fetch), so a periodic sync and an on-demand
    * `host/session/create` can both observe no mapping and each create a local
    * Session for the same remote Session. Coalesce every caller by remote
    * identity: the first one creates, the others await and share its result.
@@ -3110,33 +3341,52 @@ export class RemoteMirrorService {
     const filtered = seedEvents.filter(event =>
       !isMirrorNoise(event)
       && !(isCompactionCheckpoint(event) && localSpan(event, new Map(seedEvents.map((e, i) => [e.seq, i]))) === undefined))
+    // Whether the remote agent can ask a *timed* question decides whether the
+    // local `userQuestions` projection can ever track this Session at all: that
+    // fold ignores every `tool/call` until a `request/header` declares an
+    // `ask_user_question` schema carrying a `timeout` parameter.
+    //
+    // The remote header is usually far outside this window (the tail is capped by
+    // `mirrorMaxEvents`), and replaying it verbatim would be wrong anyway — a
+    // local `request/header` describes the tools *this* Session's model sees, and
+    // no local model runs these. So the mirror writes its own anchor instead, and
+    // the anchor carries that single tool and nothing else.
+    const timedQuestions = declaresTimedQuestions(seedEvents)
+    // The remote's own headers are dropped from the seed either way. They
+    // describe the remote model's tool list, and replaying one would make the
+    // local Session claim tools it cannot call — the same reason `toWireEvent`
+    // strips `developer/message` tool-change blocks. When the remote is timed,
+    // the local anchor replaces them; when it is not, the mirror simply has no
+    // header, which is the pre-existing behaviour.
+    const withoutRemoteHeaders = filtered.filter(event => event.type !== 'request/header')
+    const questionAnchor = timedQuestions ? localQuestionHeader(withoutRemoteHeaders) : undefined
     // A subagent address is authorized by the descriptor in the child log. A
     // window that lost it (over-cap child, or a trim that cut the prefix)
     // cannot answer a subagent history read, so leave that child unmirrored
     // instead of publishing a Session the client would reject.
-    if (parentLocalId !== undefined && !filtered.some(event => event.type === 'subagent/descriptor')) {
+    if (parentLocalId !== undefined && !withoutRemoteHeaders.some(event => event.type === 'subagent/descriptor')) {
       this.#ctx.logger.warn(
         'dsh-waypoint: subagent %s has no descriptor in its mirror window; skipping its local mirror',
         remote.sessionId,
       )
       return undefined
     }
-    const seqMap = new Map(filtered.map((event, index) => [event.seq, index]))
+    const seqMap = new Map(withoutRemoteHeaders.map((event, index) => [event.seq, index]))
     let latestTurn = 0
-    for (const event of filtered) {
+    for (const event of withoutRemoteHeaders) {
       if (event.type !== 'turn/start') continue
       const turn = (event.data as { turn?: unknown }).turn
       if (typeof turn === 'number') latestTurn = Math.max(latestTurn, turn)
     }
     const remoteToLocalSeq = new Map<number, number>()
-    for (const [index, event] of filtered.entries()) remoteToLocalSeq.set(event.seq, index)
+    for (const [index, event] of withoutRemoteHeaders.entries()) remoteToLocalSeq.set(event.seq, index)
 
     // A seed never passes through `#appendEvent`, so the announcement turns
     // it would have recorded are collected here and handed to `#mountRuntime`.
     // Without them `changesEvent` cannot map a local seq to a remote turn and
     // the changed-files card is empty for every seeded mirror.
     const seededChanges = new Map<number, number>()
-    for (const [index, event] of filtered.entries()) {
+    for (const [index, event] of withoutRemoteHeaders.entries()) {
       if (event.type !== 'workspace/changes') continue
       const turn = (event.data as { turn?: unknown } | undefined)?.turn
       if (typeof turn === 'number') seededChanges.set(index, turn)
@@ -3184,7 +3434,11 @@ export class RemoteMirrorService {
       ?? (parentLocalId === undefined ? `session-${randomUUID()}` : remote.sessionId)
     let session: Session
     try {
-      const seed = filtered.map((event, index) => toSeedEvent(event, index, seqMap))
+      const seed = withoutRemoteHeaders.map((event, index) => toSeedEvent(event, index, seqMap))
+      // The anchor must precede every `tool/call` in the folded log, so it goes
+      // first. It is a local-only event: it is never sent to the remote and
+      // carries no remote seq, which is why it is not in `seqMap`.
+      if (questionAnchor !== undefined) seed.unshift(questionAnchor)
       const remoteCreatedAt = Date.parse(remote.createdAt)
       session = this.#sessions.create(localId as SessionId, {
         ...seed.length === 0 ? {} : { seed },
@@ -3354,6 +3608,7 @@ export class RemoteMirrorService {
       skippedRemoteSeqs: new Set(),
       changesTurns: new Map(seededChanges),
       closedTurns: new Set(),
+      expiredQuestions: new Set(),
       diverged: undefined,
     } satisfies MirrorRuntime
     // The remote log is the authority on which model this Session actually used.
@@ -3375,6 +3630,7 @@ export class RemoteMirrorService {
     this.#runtimes.set(record.localSessionId, runtime)
     this.#registrations.set(record.localSessionId, async () => { detach(); await agent.scope.dispose() })
     this.#flushPendingApprovals(record)
+    this.#flushPendingQuestions(record)
     const localMode = this.#localSandboxMode(session)
     const remoteMode = latestRemoteSandboxMode(snapshot.events)
     if (localMode !== undefined && remoteMode !== undefined && localMode !== remoteMode) {
@@ -4430,6 +4686,77 @@ function trimmedCompactionSummary(data: unknown): unknown {
 }
 
 /**
+ * Whether any header in this window declares the timed `ask_user_question` schema.
+ *
+ * Mirrors `isTimedAskUserQuestionSchema` in `@deepseek-ai/dsh-user-questions`
+ * rather than importing it: this package must not take a runtime dependency on a
+ * peer the host profile owns, and the rule is three lines of property checks.
+ * A header that declares the schema without a `timeout` parameter is the
+ * blocking legacy tool, which the projection deliberately ignores.
+ * @param events - the raw snapshot window, before noise filtering.
+ * @returns true when the remote asked questions under the timed schema.
+ */
+function declaresTimedQuestions(events: readonly RemoteSessionEvent[]): boolean {
+  for (const event of events) {
+    if (event.type !== 'request/header') continue
+    const tools = (event.data as { header?: { tools?: unknown } } | undefined)?.header?.tools
+    if (!Array.isArray(tools)) continue
+    for (const tool of tools) {
+      if (typeof tool !== 'object' || tool === null) continue
+      const candidate = tool as { name?: unknown; parameters?: { properties?: unknown } }
+      if (candidate.name !== 'ask_user_question') continue
+      const properties = candidate.parameters?.properties
+      if (typeof properties === 'object' && properties !== null && 'timeout' in properties) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Build the local `request/header` that lets the question projection fold.
+ *
+ * Only `ask_user_question` is listed. A local header normally describes every
+ * tool this Session's model can call, but no local model runs the remote's tools
+ * — they execute on the remote host — so listing them here would let other
+ * projections treat remote capabilities as local ones. The question fold matches
+ * by name and needs nothing else.
+ *
+ * `config` reuses the model this mirror already advertises so the header does not
+ * claim a different one.
+ * @param events - the filtered seed events, used to recover the model selection.
+ * @returns a seed-shaped event, or undefined when no local event type fits.
+ */
+function localQuestionHeader(events: readonly RemoteSessionEvent[]): SessionEvent | undefined {
+  const selection = modelOptions(events) ?? FALLBACK_MODEL
+  const event = {
+    type: 'request/header',
+    data: {
+      header: {
+        config: {
+          provider: selection.provider,
+          model: selection.model,
+          ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
+        },
+        tools: [{
+          name: 'ask_user_question',
+          description: 'Ask the user a question; the human may answer after the window closes.',
+          parameters: {
+            type: 'object',
+            properties: {
+              questions: { type: 'array' },
+              timeout: { type: 'number' },
+            },
+            required: ['questions'],
+          },
+        }],
+      },
+      reason: 'initial',
+    },
+  } as unknown as SessionEvent
+  return event
+}
+
+/**
  * Whether an object answers the members a real `Session` exposes.
  *
  * `appendPluginRecord` is the correct way to write a plugin record, but it
@@ -4466,6 +4793,20 @@ function isCompactionCheckpoint(event: RemoteSessionEvent): boolean {
   if (event.type !== 'user/message') return false
   const source = (event.data as { source?: { kind?: unknown } }).source
   return source?.kind === 'compact-checkpoint'
+}
+
+/**
+ * Signal that nobody on this side can answer a bridged question.
+ *
+ * The shape matters more than the class: `dsh-user-questions` restores an error
+ * carrying `name: 'UserQuestionError'` and a `code`, so a plain error in that
+ * shape reaches the caller as a typed `NO_PROVIDER` failure. Building it here
+ * keeps this package free of a value import on a peer the host profile owns.
+ */
+function noLocalAnswerer(): Error {
+  const error = new Error('no local answerer accepted the question')
+  error.name = 'UserQuestionError'
+  return Object.assign(error, { code: 'NO_PROVIDER' })
 }
 
 /**

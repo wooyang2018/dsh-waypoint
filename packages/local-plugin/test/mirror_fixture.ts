@@ -192,6 +192,11 @@ export function harness() {
     'health', 'host.info', 'session.list', 'session.snapshot', 'session.follow',
     'session.prompt', 'session.cancel', 'session.archive', 'file.read',
     'llm.catalog', 'session.file-attachment', 'attachment.read',
+    // The question bridge is optional, so the mirror only starts its stream
+    // behind this check; a fixture that answered `false` would silently skip the
+    // code those tests exist to guard.
+    'question.follow', 'question.answer',
+    'session.catalog', 'session.command',
   ]
   /** Durable objects the fake remote can serve for reverse synchronization. */
   const remoteAttachments = new Map<string, Buffer>()
@@ -369,6 +374,16 @@ export function harness() {
       }
     },
     async *followApprovals() {},
+    /**
+     * The question stream stays open like the real one, so a sync pass that
+     * starts it does not spin: an immediately-ending generator would be pulled
+     * again on every poll.
+     */
+    async *followQuestions(_host: string, signal: AbortSignal) {
+      const aborted = new Promise<void>(resolve => { signal.addEventListener('abort', () => resolve(), { once: true }) })
+      await aborted
+    },
+    async answerQuestion() { return { accepted: true } },
     async *followSessionEvents() {},
     async *followAssistantFrames() {},
     async setSandboxMode() {},

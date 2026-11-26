@@ -71,6 +71,46 @@
 - `RemoteMirrorService.forwardedSelection`, the model a mirror would forward for one local Session.
   It exists because the Agent façade can no longer answer that question, and it is what the
   model-selection tests now assert on.
+## 1.1.4
+
+### Added
+
+- **`ask_user_question` from a mirrored Session now shows its card locally instead of silently
+  disappearing.** Only `approval/request` was bridged, so a remote agent that asked a question waited
+  for an answer that never arrived: the card only ever existed in the remote Web UI, which is exactly
+  the context a mirror user does not have open. The plugin now bridges the second human-interaction
+  seam the same way it bridges the first — the remote agent prepends a listener to
+  `user-questions/request` (`#bindQuestions`), replays the pending set over the new
+  `GET /questions/events`, and the local side rebuilds the waterfall through
+  `scopeTarget(runtime.agent, …)` before returning the answer to `POST /questions/answer`.
+
+  Three rules differ from the approval bridge, and each one is a failure the naive port would have
+  caused. The agent only claims a question while a local stream is attached, because an approval can
+  resolve `unavailable` — which reads as a refusal — while a question resolves into a tool result the
+  model acts on, so "nobody was listening" must never become "the user declined". A new `delegated`
+  outcome reports that no local mirror can show the question, which hands it back to the remote UI
+  instead of reporting a decision a human never made. And the wire carries no `wait` field: a timed
+  wait would make the local card attach to a foreground stream owned by the *local* Host's
+  `userQuestions` service, which has never heard of a remote call.
+
+  Neither bridged seam has a clock by default: `questionTimeoutMs` and `approvalTimeoutMs` both
+  default to `0`, meaning wait indefinitely, because neither `dsh-user-questions` nor
+  `dsh-user-approval` contains a timer. Adding one would make this plugin the only part of the system
+  that decides a person has taken too long, and the thing it produces at that point is not an answer.
+  A deployment may opt in; an expiring question then fails with `ASK_UNANSWERED` rather than
+  `ASK_CANCELLED`, because "the question was never seen" and "the user withdrew it" are different
+  facts. Both capabilities (`question.follow`, `question.answer`) are required before the local side
+  opens the stream, so an older remote agent keeps its current behaviour and an older plugin keeps
+  its current behaviour against a newer agent.
+
+### Fixed
+
+- **A bridged approval no longer gives up after a hard-coded ten minutes.** The remote agent used to
+  answer `unavailable` ten minutes into any approval nobody had replied to. `dsh-user-approval` has
+  no such timer, and its `unavailable` outcome means "no answerer was reachable" — so the constant
+  reported "nobody replied yet" in the vocabulary of "nobody could be asked". The wait is now
+  indefinite by default (`approvalTimeoutMs: 0`); a deployment that wants a bound sets one and gets
+  the same `unavailable` outcome, which is truthful once a timer is genuinely the explanation.
 
 ## 1.1.3
 

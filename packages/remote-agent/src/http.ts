@@ -168,6 +168,9 @@ export async function handleAgentRequest(
         case 'approval-answer':
           sendJson(res, asApprovalAnswer(body, service))
           return
+        case 'question-answer':
+          sendJson(res, asQuestionAnswer(body, service))
+          return
         case 'file-stat':
           sendJson(res, await statFile(asPath(body)))
           return
@@ -247,6 +250,10 @@ export async function handleAgentRequest(
       streamApprovals(service, req, res)
       return
     }
+    if (route.kind === 'question-events') {
+      streamQuestions(service, req, res)
+      return
+    }
     if (route.kind === 'file-watch') {
       await streamFileWatch(req, res, url.searchParams.get('path') ?? '')
       return
@@ -313,6 +320,7 @@ export async function handleAgentRequest(
       case 'catalog-skills':
       case 'command-execute':
       case 'approval-answer':
+      case 'question-answer':
         throw new RemoteProtocolError({ code: 'request/invalid', message: 'POST is required', httpStatus: 405 })
       default:
         // Every POST-only route that is not listed above lands here. Without
@@ -490,8 +498,96 @@ function asApprovalAnswer(value: unknown, service: RemoteAgentService): { accept
   return service.answerApproval(body.id, body.outcome as ApprovalOutcome)
 }
 
-function asWorkspaceRequest(value: unknown): { path: string; title?: string } {
+/**
+ * Read one question outcome out of its request body.
+ *
+ * The three kinds are validated before reaching the service: `answer` must carry
+ * a non-empty batch whose items name their question, and the two delegation
+ * kinds must not smuggle an answer alongside.
+ */
+function asQuestionAnswer(value: unknown, service: RemoteAgentService): { accepted: true } {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
+  }
+  const body = value as Record<string, unknown>
+  if (typeof body.id !== 'string' || body.id === '') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'id must be a non-empty string' })
+  }
+  const outcome = body.outcome
+  if (typeof outcome !== 'object' || outcome === null || Array.isArray(outcome)) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'outcome must be a JSON object' })
+  }
+  const record = outcome as Record<string, unknown>
+  if (record.kind === 'delegated' || record.kind === 'cancelled') {
+    return service.answerQuestion(body.id, { kind: record.kind })
+  }
+  if (record.kind !== 'answer') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'outcome.kind is invalid' })
+  }
+  const answers = record.answers
+  if (!Array.isArray(answers) || answers.length === 0) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'outcome.answers must be a non-empty array' })
+  }
+  const parsed = answers.map(item => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'each answer must be a JSON object' })
+    }
+    const answer = item as Record<string, unknown>
+    if (typeof answer.id !== 'string' || answer.id === '') {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'answer.id must be a non-empty string' })
+    }
+    if (!Array.isArray(answer.selected) || !answer.selected.every(label => typeof label === 'string')) {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'answer.selected must be a string array' })
+    }
+    if (answer.custom !== undefined && typeof answer.custom !== 'string') {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'answer.custom must be a string' })
+    }
+    return {
+      id: answer.id,
+      selected: answer.selected as string[],
+      ...answer.custom === undefined ? {} : { custom: answer.custom },
+    }
+  })
+  return service.answerQuestion(body.id, { kind: 'answer', answers: parsed })
+}
+
+/**
+ * Stream pending questions and every new one.
+ *
+ * The stream registering itself is what tells {@link RemoteAgentService} that a
+ * local bridge is attached, so a question is only claimed while somebody can
+ * answer it. Replaying `questionRequests()` first is what makes a reconnect
+ * recover an unanswered question rather than lose it.
+ */
+function streamQuestions(service: RemoteAgentService, req: IncomingMessage, res: ServerResponse): void {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  })
+  const detach = service.attachQuestionStream()
+  const write = (event: string, data: unknown): void => {
+    if (res.writableEnded) return
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+  }
+  write('ready', { type: 'ready' })
+  for (const request of service.questionRequests()) write('request', { type: 'request', request })
+  const off = service.onQuestionRequest(request => {
+    write('request', { type: 'request', request })
+  })
+  const heartbeat = setInterval(() => { write('heartbeat', {}) }, 15_000)
+  const close = (): void => {
+    clearInterval(heartbeat)
+    off()
+    detach()
+    if (!res.writableEnded) res.end()
+  }
+  req.on('close', close)
+  req.on('error', close)
+}
+
+function asWorkspaceRequest(value: unknown): { path: string; title?: string } {  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
   }
   const body = value as Record<string, unknown>

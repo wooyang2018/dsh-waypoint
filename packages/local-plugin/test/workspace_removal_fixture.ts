@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import type { RemoteApprovalRequest, RemoteSessionSummary, RemoteWorkspace, SessionSnapshot } from '@dsh-waypoint/protocol'
+import type { RemoteApprovalRequest, RemoteQuestionOutcome, RemoteQuestionRequest, RemoteSessionSummary, RemoteWorkspace, SessionSnapshot } from '@dsh-waypoint/protocol'
 import type { ResolvedConfig } from '../src/config.ts'
 import { RemoteMirrorService } from '../src/mirror/service.ts'
 import { installRemoteSessionArchive } from '../src/remote/archive.ts'
@@ -118,6 +118,17 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
     return pending
   }
   const answers: Array<{ hostId: string; requestId: string; outcome: string }> = []
+  /** Questions the fake agent published, keyed by host. */
+  const questions = new Map<string, Array<ReturnType<typeof deferred<RemoteQuestionRequest>>>>()
+  const nextQuestion = (hostId: string) => {
+    const queued = questions.get(hostId) ?? []
+    questions.set(hostId, queued)
+    let pending = queued[0]
+    if (pending === undefined) { pending = deferred<RemoteQuestionRequest>(); queued.push(pending) }
+    return pending
+  }
+  /** Outcomes the plugin reported back for a bridged question. */
+  const questionOutcomes: Array<{ hostId: string; questionId: string; outcome: RemoteQuestionOutcome }> = []
   /** Remote Sessions the plugin archived through the host service. */
   const remoteArchived: Array<{ hostId: string; sessionId: string }> = []
   /** Remote Sessions the plugin unarchived through the host service. */
@@ -129,7 +140,7 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
    * keep the plugin from touching the remote at all, because a remote archived
    * without a way back cannot run a model step.
    */
-  const capabilities = new Set<string>(['session.archive', 'session.unarchive'])
+  const capabilities = new Set<string>(['session.archive', 'session.unarchive', 'question.follow', 'question.answer'])
   /** When set, a remote unarchive fails so the fail-closed path is observable. */
   let failUnarchive: Error | undefined
   /** When set, a remote archive fails so the fail-open path is observable. */
@@ -162,6 +173,22 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
       }
     },
     async answerApproval(hostId: string, requestId: string, outcome: string) { answers.push({ hostId, requestId, outcome }) },
+    followQuestions: async function* (hostId: string, signal: AbortSignal) {
+      const aborted = deferred<undefined>()
+      signal.addEventListener('abort', () => aborted.resolve(undefined), { once: true })
+      while (!signal.aborted) {
+        const request = await Promise.race([nextQuestion(hostId).promise, aborted.promise])
+        if (request === undefined) return
+        // Consume the delivered entry so the next call waits for a new question.
+        const queued = questions.get(hostId)
+        if (queued !== undefined && queued.length > 0) queued.shift()
+        yield { type: 'request', request }
+      }
+    },
+    async answerQuestion(hostId: string, questionId: string, outcome: RemoteQuestionOutcome) {
+      questionOutcomes.push({ hostId, questionId, outcome })
+      return { accepted: true }
+    },
     followSessionEvents: (_host: string, _id: string, _after: number, signal: AbortSignal) =>
       follow(signal, { type: 'event', event: { seq: 1, type: 'turn/end', data: { turn: 1 } } }),
     followAssistantFrames: (_host: string, _id: string, signal: AbortSignal) => follow(signal),
@@ -206,6 +233,11 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
     setFailArchive(error: Error | undefined) { failArchive = error },
     async requestApproval(hostId: string, request: RemoteApprovalRequest) {
       nextApproval(hostId).resolve(request)
+      await new Promise(done => setImmediate(done))
+    },
+    questionOutcomes,
+    async requestQuestion(hostId: string, request: RemoteQuestionRequest) {
+      nextQuestion(hostId).resolve(request)
       await new Promise(done => setImmediate(done))
     },
     get service() { return service },

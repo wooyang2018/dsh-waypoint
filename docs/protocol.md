@@ -144,6 +144,7 @@ check and tunnel watcher schedule a bounded reconnect on any transport failure.
 | `GET` | `/web-url` | `{ path: "/?token=..." }` |
 | `GET` | `/llm/catalog` | `ModelCatalogResult` — the providers/models this host can actually route to |
 | `GET` | `/approvals/events` | SSE `event: ready`, then one `event: request` per pending approval, with `event: heartbeat` keepalives |
+| `GET` | `/questions/events` | SSE `event: ready`, then one `event: request` per pending `ask_user_question` and an `event: expired` when a timed question's window closes, with `event: heartbeat` keepalives |
 | `GET` | `/files/watch?path=...` | SSE `event: file` with `{ kind: "ready" \| "change" }` |
 | `GET` | `/directories?path=...` | `RemoteDirectoryListing` |
 | `GET` | `/terminals` | `{ terminals: RemoteTerminalInfo[] }` |
@@ -166,6 +167,7 @@ Read routes use `GET`. Write routes use `POST` with a JSON body:
 | `POST` | `/catalog/skills` | the same two addressing shapes | `{ skills: RemoteSkillEntry[] }` |
 | `POST` | `/commands/execute` | `{ "sessionId": "…", "line": "/goal do X", "attachments"?: [{ "type": "image", … } \| { "type": "file", "data": "<base64>", "name"?: "…" }] }` | `{ "kind": "settled", commandId, result }` or `{ "kind": "unknown" }` |
 | `POST` | `/approvals/answer` | `{ "id": "…", "outcome": "allowed-once" \| "rejected" \| "cancelled" \| "unavailable" }` | `{ "accepted": true }` |
+| `POST` | `/questions/answer` | `{ "id": "…", "outcome": { "kind": "answer", "answers": [{ "id": "…", "selected": ["…"], "custom"?: "…" }] } \| { "kind": "delegated" } \| { "kind": "cancelled" } }` | `{ "accepted": true }` |
 | `POST` | `/files/stat`, `/files/list`, `/files/read`, `/files/bytes` | `{ "path": "/abs/path", "offset"?, "limit"?, "length"? }` | file/list result |
 | `POST` | `/files/search` | `{ "path": "/abs/root", "query": "…", "excludedPaths"?, "includeHidden"?, "respectGitignore"? }` | `RemoteFileSearchResult` |
 | `POST` | `/git` | `{ "cwd": "/abs/dir", "args": ["status", "--porcelain=v2"], "env"?, "timeoutMs"? }` | `RemoteGitResult` |
@@ -207,6 +209,44 @@ inside a workspace cannot widen a search to the host.
 questions are replayed when a follower connects. Each request carries the remote Session id, tool
 name, optional call id/reason, and localized display text. The local plugin forwards it through the
 local `approval/request` waterfall and posts the decision to `/approvals/answer`.
+
+## Questions
+
+`GET /questions/events` is the approval stream's counterpart for `ask_user_question`: `ready`, then
+one `request` frame per pending question, which are replayed when a follower connects. Each request
+carries the remote Session id, the tool call id, and the questions themselves (id, text, optional
+detail/header/options/multi-select, and the asking host's presentation `intent`).
+
+Three differences from an approval are load-bearing.
+
+**The stream's existence is the capability.** The agent only claims a question while at least one
+stream is attached. With no follower it calls `next()` and lets the remote Web UI keep the question,
+because a claimed question with nobody listening would park the turn until the timeout for no gain.
+The same rule answers version skew: an old plugin never opens the stream, so an upgraded agent
+behaves exactly as before.
+
+**A closed window is announced, not left open.** A timed question that reaches its deadline produces
+an `expired` frame carrying that question's id and a reason, and the agent drops its record. The
+question is not answerable through this bridge afterwards: DSH's late-reply path needs the exact live
+`Agent` that asked, which is unregistered once the turn continues. Reporting the closure lets the
+local card close with an explanation instead of accepting a submission that would be rejected.
+
+**A refusal has three forms.** `POST /questions/answer` takes
+`{ "id": "…", "outcome": … }` where the outcome is one of:
+
+| `outcome.kind` | Meaning |
+|---|---|
+| `answer` | `answers` names every question exactly once; the remote resolves the tool call with it |
+| `delegated` | no mirror can show this question, so the remote should fall through to its own UI |
+| `cancelled` | the card was closed or the wait aborted; the tool call fails as cancelled |
+
+`delegated` exists because "no local mirror" and "the user declined" are different facts. Reporting
+the first as the second would tell the model a human refused a question nobody ever saw.
+
+There is deliberately no `wait` field on the wire. A `timed: true` wait would have the local client
+attach to a foreground wait stream owned by *that* Host's `userQuestions` service, which has never
+heard of a remote call; the countdown therefore stays on the remote and the card renders as
+blocking.
 
 ## Host identity
 
@@ -526,12 +566,13 @@ only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
-`index.ts` exports 162 symbols in total. They split into 74 contract symbols and 88 symbols that no
+`index.ts` exports 169 symbols in total. They split into 77 contract symbols and 92 symbols that no
+`index.ts` exports 151 symbols in total. They split into 69 contract symbols and 82 symbols that no
 other package consumes, of which 2 are referenced nowhere at all. Every name below is listed
 explicitly, and `scripts/check/protocol-surface.mjs` recomputes these numbers from the source tree; run it
 whenever you add or remove an export, and a test fails if the two disagree.
 
-**Import contract (74 symbols).** Consumed by another package's production code through a named
+**Import contract (77 symbols).** Consumed by another package's production code through a named
 import, or reached through `RemoteAgentClient`'s signatures. Changing or removing one of these is a
 cross-package change. Test files are not counted as consumers: a test that imports a path builder to
 build a URL does not make it part of the contract.
@@ -563,41 +604,40 @@ build a URL does not make it part of the contract.
   `RemoteModelReasoning`
 - Approvals, JSON, and Web UI (5): `ApprovalOutcome`, `RemoteApprovalFrame`,
   `RemoteApprovalRequest`, `JsonValue`, `WebUrlResult`
+- Questions (3): `RemoteQuestionAnswerItem`, `RemoteQuestionOutcome`, `RemoteQuestionRequest`
 
-**Internal (88 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
+**Internal (92 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
 private: they carry no cross-package guarantee, and nothing outside `packages/protocol/src` should
 start importing them without promoting them to the contract above.
 
-*Used inside `packages/protocol/src` (86).*
+*Used inside `packages/protocol/src` (90).*
 
-- Guards (34): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`, `isCreateSessionResult`,
-  `isCursor`,
-  `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`, `isModelCatalogResult`,
-  `isProtocolSupported`, `isRecord`, `isRemoteApprovalFrame`, `isRemoteAssistantFrame`,
-  `isRemoteChangesDiff`, `isRemoteChangesSummary`, `isRemoteCommandCatalogResult`,
-  `isRemoteCommandExecuteResult`, `isRemoteDirectoryListing`, `isRemoteFileBytes`,
-  `isRemoteFileListing`, `isRemoteFileSearchResult`, `isRemoteFileStat`, `isRemoteFileText`,
-  `isRemoteFileWatchFrame`, `isRemoteGitResult`, `isRemoteSkillCatalogResult`,
-  `isRemoteTerminalFrame`, `isRemoteTerminalInfo`,
+- Guards (35): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`, `isCreateSessionResult`,
+  `isCursor`, `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`,
+  `isModelCatalogResult`, `isProtocolSupported`, `isRecord`, `isRemoteApprovalFrame`,
+  `isRemoteAssistantFrame`, `isRemoteChangesDiff`, `isRemoteChangesSummary`,
+  `isRemoteCommandCatalogResult`, `isRemoteCommandExecuteResult`, `isRemoteDirectoryListing`,
+  `isRemoteFileBytes`, `isRemoteFileListing`, `isRemoteFileSearchResult`, `isRemoteFileStat`,
+  `isRemoteFileText`, `isRemoteFileWatchFrame`, `isRemoteGitResult`, `isRemoteQuestionFrame`,
+  `isRemoteSkillCatalogResult`, `isRemoteTerminalFrame`, `isRemoteTerminalInfo`,
   `isRemoteTerminalListResult`, `isRemoteWorkspace`, `isRetryableCode`, `isSessionSnapshot`,
   `isSessionStreamFrame`, `isWebUrlResult`
 - Path builders (16): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
   `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionArchivePath`,
   `sessionUnarchivePath`, `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`,
   `terminalAttachPath`, `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
-- Types, constants, and functions used inside the package (36): `RemoteFailure`,
-  `RemoteTerminalListResult`, `SessionSnapshotOptions`, `SetSandboxModeRequest`,
-  `DEFAULT_REQUEST_TIMEOUT_MS`, `parseSseStream`, `CursorAcceptance`,
-  `DISCOVERY_STATE_VERSION`, `JsonPrimitive`, `MAX_SUPPORTED_PROTOCOL_VERSION`,
-  `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`, `PromptImagePart`, `PromptFilePart`,
-  `AttachmentReadResult`, `ProtocolErrorCode`,
-  `ProtocolNegotiation`, `RemoteAgentClientOptions`, `RemoteChangesDiffRequest`,
+- Types, constants, and functions used inside the package (39): `AttachmentReadResult`,
+  `CursorAcceptance`, `DEFAULT_REQUEST_TIMEOUT_MS`, `DISCOVERY_STATE_VERSION`, `JsonPrimitive`,
+  `MAX_SUPPORTED_PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`,
+  `PromptFilePart`, `PromptImagePart`, `ProtocolErrorCode`, `ProtocolNegotiation`,
+  `RemoteAgentClientOptions`, `RemoteCatalogRequest`, `RemoteChangesDiffRequest`,
   `RemoteChangesSummaryRequest`, `RemoteCommandExecuteRequest`, `RemoteCommandExecuteResult`,
-  `RemoteCommandInput`, `RemoteCommandOutcome`, `RemoteCatalogRequest`,
-  `RemoteDirectoryEntry`, `RemoteFileSearchEntryType`,
-  `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteReasoningEffort`, `RemoteSandboxMode`,
-  `RemoteTerminalShell`, `RemoteWorkspaceChangedFile`, `RemoteWorkspaceDiffHunk`,
-  `SessionStreamEndReason`, `SseMessage`
+  `RemoteCommandInput`, `RemoteCommandOutcome`, `RemoteDirectoryEntry`, `RemoteFailure`,
+  `RemoteFileSearchEntryType`, `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteQuestionFrame`,
+  `RemoteQuestionItem`, `RemoteQuestionOption`, `RemoteReasoningEffort`, `RemoteSandboxMode`,
+  `RemoteTerminalListResult`, `RemoteTerminalShell`, `RemoteWorkspaceChangedFile`,
+  `RemoteWorkspaceDiffHunk`, `SessionSnapshotOptions`, `SessionStreamEndReason`,
+  `SetSandboxModeRequest`, `SseMessage`, `parseSseStream`
 
 *Referenced nowhere (2).*
 

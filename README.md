@@ -65,6 +65,8 @@ Everything below works against a real SSH host, with no client fork:
 - Remote dev servers in the right-sidebar browser, through loopback port forwards (see below)
 - Agent tools for host/workspace/session operations
 - Approval prompts bridged into the local UI
+- `ask_user_question` cards bridged into the local UI too, so a remote agent that needs a decision
+  does not stall waiting for an answer that only ever appeared in the remote Web UI
 
 What is **not** supported — Windows remotes, relay/NAT traversal — is listed under
 [Known limits](#known-limits), together with the workaround when there is one.
@@ -88,7 +90,7 @@ If npmjs.com still resolves an older `latest` tag for a newly published release,
 current version instead:
 
 ```text
-dsh-waypoint@1.1.3
+dsh-waypoint@1.1.4
 ```
 
 Keep this pinned version in sync with each release.
@@ -462,7 +464,6 @@ then follow `docs/operations.md` for moving the host registry and cleaning up th
 - [Wire protocol](docs/protocol.md)
 - [Remote workspace mechanism](docs/remote-workspace-mechanism.md) — how a remote directory becomes a
   local workspace: discovery, tunnel, the session mirror, files/terminal routing
-  ([中文版](docs/remote-workspace-mechanism.zh.md))
 - [Host routing for mirrored paths](docs/mirror-host-resolution.md) — why a remote path does not name
   a host, how ambiguity is refused instead of guessed, and what `spawn git ENOENT` actually means
 - [Remote catalogs for mirrored Sessions](docs/specs/2026-11-26-remote-catalog-bridge.md) — the

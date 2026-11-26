@@ -19,6 +19,8 @@ import {
   type AcceptedResult,
   type ApprovalOutcome,
   type RemoteApprovalFrame,
+  type RemoteQuestionFrame,
+  type RemoteQuestionOutcome,
   type RemoteAssistantFrame,
   type CreateSessionRequest,
   type CreateSessionResult,
@@ -295,7 +297,12 @@ export class RemoteHostsService {
   /** One host view. */
   view(id: string): HostView {
     const record = this.#requireRecord(id)
-    return toHostView(record, this.#runtime.get(id) ?? idleRuntime(), this.#defaultModelSource())
+    return toHostView(
+      record,
+      this.#runtime.get(id) ?? idleRuntime(),
+      this.#defaultModelSource(),
+      this.config.autoProvision,
+    )
   }
 
   /** Profile-wide default used by records that never chose explicitly. */
@@ -306,6 +313,21 @@ export class RemoteHostsService {
   /** Effective credential source for one host. */
   #modelSourceFor(record: HostRecord): ModelSource {
     return record.modelSource ?? this.#defaultModelSource()
+  }
+
+  /**
+   * Whether this plugin may install or update one host.
+   *
+   * Guards every path that writes to a remote. Provisioning reinstalls the
+   * profile, which restores the DSH installation's own presets and overlays, so
+   * an operator who edits those files on the remote needs a way to say "leave
+   * this host alone". Resolved here rather than read from config directly so a
+   * record written before this setting existed behaves exactly as it did.
+   * @param record - host about to be written to.
+   * @returns whether installation and reconciliation may proceed.
+   */
+  #autoProvisionFor(record: HostRecord): boolean {
+    return record.autoProvision ?? this.config.autoProvision
   }
 
   /** Parse a destination without touching SSH. */
@@ -522,6 +544,24 @@ export class RemoteHostsService {
     // Reuse provisioning: it stops the tunnel, rewrites the remote environment,
     // and reconnects, which is exactly what a source change needs.
     return this.provision(id)
+  }
+
+  /**
+   * Choose whether this plugin may install and update one host.
+   *
+   * Turning it off is the supported way to hand-maintain a remote. It takes
+   * effect on the next write rather than triggering one: enabling it re-checks
+   * on the next connect, and disabling it must never install anything, which is
+   * the whole point of the setting.
+   * @param id - host to configure.
+   * @param enabled - false to stop touching this host's DSH installation.
+   * @returns the host as it now stands.
+   */
+  async setAutoProvision(id: string, enabled: boolean): Promise<HostView> {
+    this.#assertAlive()
+    const record = this.#requireRecord(id)
+    if (record.autoProvision !== enabled) await this.#saveRecord(id, { autoProvision: enabled })
+    return this.view(id)
   }
 
   async #runUpgrade(id: string, localVersion: string): Promise<void> {    try {
@@ -945,6 +985,26 @@ export class RemoteHostsService {
     }
   }
 
+  /** Follow remote `ask_user_question` requests for one host. */
+  async *followQuestions(id: string, signal: AbortSignal): AsyncGenerator<RemoteQuestionFrame> {
+    const client = this.#requireClient(id)
+    try {
+      yield* client.followQuestions(signal)
+    } catch (error) {
+      throw this.#remoteFailure(id, error)
+    }
+  }
+
+  /** Answer, delegate or cancel one pending remote question. */
+  async answerQuestion(id: string, questionId: string, outcome: RemoteQuestionOutcome): Promise<AcceptedResult> {
+    const client = this.#requireClient(id)
+    try {
+      return await client.answerQuestion(questionId, outcome)
+    } catch (error) {
+      throw this.#remoteFailure(id, error)
+    }
+  }
+
   /** Archive a remote Session whose local mirror was never materialized. */
   async archiveSession(id: string, sessionId: string): Promise<void> {
     const client = this.#requireClient(id)
@@ -1290,7 +1350,7 @@ export class RemoteHostsService {
       await this.#saveRecord(id, { remoteAgentPort: remotePort, token })
     } catch (error) {
       const failure = asLocalError(error, 'ssh/probe-failed')
-      if (this.config.autoProvision && failure.code === 'agent/unavailable') {
+      if (this.#autoProvisionFor(record) && failure.code === 'agent/unavailable') {
         // A previous attempt proved this host cannot be provisioned as it
         // stands. Re-uploading the agent and re-running the whole bootstrap
         // every 30 seconds cannot change that, so stop and keep the original
@@ -1442,7 +1502,10 @@ export class RemoteHostsService {
     tunnel: Tunnel,
   ): Promise<boolean> {
     const expected = bundledAgentVersion()
-    if (!this.config.autoProvision) return false
+    // A host the operator maintains by hand must not be replaced just because
+    // this build ships a different bundle: reinstalling is exactly the write the
+    // setting exists to prevent.
+    if (!this.#autoProvisionFor(this.#requireRecord(id))) return false
     if (!agentVersionDiffers(health.agentVersion, expected)) return false
     // One attempt per connect cycle: #attempts already bounds reconnect loops,
     // and repeating a failed reinstall on every health tick would spin forever.
@@ -1500,7 +1563,11 @@ export class RemoteHostsService {
       this.#modelReconciled.delete(id)
       return false
     }
-    if (this.#modelReconciled.has(id) || !this.config.autoProvision) {
+    // Same rule as the agent-version reconcile: rewriting the remote's model
+    // environment and provider overlay is a write this setting forbids. The
+    // visible consequence is that a hand-maintained host keeps its own providers
+    // even when this profile changes, which is what "leave it alone" means.
+    if (this.#modelReconciled.has(id) || !this.#autoProvisionFor(this.#requireRecord(id))) {
       this.ctx.logger.warn(
         'dsh-waypoint: model environment for %s still differs from this profile (%s vs %s)',
         id,
