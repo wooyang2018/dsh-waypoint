@@ -4,7 +4,7 @@ import * as React from 'react'
 import * as jsxRuntime from 'react/jsx-runtime'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import type { SshDiscoveryResult } from '../src/hosts/types.ts'
-import { loadClientBundle } from './client_bundle_fixture.ts'
+import { loadClientBundle } from './client-bundle-fixture.ts'
 
 /** Minimal browser surface the panel touches while rendering. */
 function surfaces(): Record<string, unknown> {

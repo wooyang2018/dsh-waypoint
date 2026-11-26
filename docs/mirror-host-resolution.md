@@ -160,6 +160,6 @@ A local Session's Forge panel shares no routing code with a mirrored one: local 
 evidence that mirrored routing works.
 
 Likewise, a unit test with a single-host fixture cannot catch a host-attribution bug at all — the
-fixture has only one host to be wrong about. `packages/local-plugin/test/mirror_remote_path.test.ts`
+fixture has only one host to be wrong about. `packages/local-plugin/test/mirror-remote-path.test.ts`
 therefore builds a two-host catalog, including one host whose `ungrouped` root encloses the other's
 checkout, and asserts that ambiguity refuses rather than resolving.

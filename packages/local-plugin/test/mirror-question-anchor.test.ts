@@ -21,7 +21,7 @@ import { describe, it } from 'node:test'
 // export; the package entry only surfaces the service.
 import { foldUserQuestions } from '@deepseek-ai/dsh-user-questions/src/projection.ts'
 
-import { harness, parent } from './mirror_fixture.ts'
+import { harness, parent } from './mirror-fixture.ts'
 
 /** One remote header whose tool list declares the timed question schema. */
 function timedHeader(seq: number) {

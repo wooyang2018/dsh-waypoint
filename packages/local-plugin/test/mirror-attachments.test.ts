@@ -20,7 +20,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
-import { harness, parent, parentSnapshot } from './mirror_fixture.ts'
+import { harness, parent, parentSnapshot } from './mirror-fixture.ts'
 import { publishVerbatim, syncRemoteAttachment } from '../src/remote/attachments.ts'
 
 const roots: string[] = []

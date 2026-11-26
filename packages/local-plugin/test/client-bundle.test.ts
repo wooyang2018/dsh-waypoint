@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import * as React from 'react'
 import * as jsxRuntime from 'react/jsx-runtime'
-import { loadClientBundle } from './client_bundle_fixture.ts'
+import { loadClientBundle } from './client-bundle-fixture.ts'
 
 interface Registration {
   name: string

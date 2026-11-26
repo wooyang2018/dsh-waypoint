@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { harness, parent, child, grandchild, parentSnapshot, descriptorSnapshot } from './mirror_fixture.ts'
+import { harness, parent, child, grandchild, parentSnapshot, descriptorSnapshot } from './mirror-fixture.ts'
 
 describe('mirror subagent sessions', () => {
   it('mirrors remote subagent children under their local parent, including nested children', async () => {

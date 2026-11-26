@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { deferred, removalFixture } from './workspace_removal_fixture.ts'
+import { deferred, removalFixture } from './workspace-removal-fixture.ts'
 
 describe('mirrored question bridge', () => {
   it('holds a question until the mirror runtime mounts and the Session is visible', async () => {

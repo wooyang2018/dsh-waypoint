@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { registerHostApi } from '../src/host-api/handler.ts'
 import type { RemoteHostsService } from '../src/service.ts'
-import { deferred, removalFixture } from './workspace_removal_fixture.ts'
+import { deferred, removalFixture } from './workspace-removal-fixture.ts'
 
 function timeout<T>(promise: Promise<T>): Promise<T> {
   return Promise.race([promise, new Promise<never>((_, reject) => {

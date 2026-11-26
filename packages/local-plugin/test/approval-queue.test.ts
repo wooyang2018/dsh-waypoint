@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { deferred, removalFixture } from './workspace_removal_fixture.ts'
+import { deferred, removalFixture } from './workspace-removal-fixture.ts'
 
 describe('mirrored approval queue', () => {
   it('holds an approval until the mirror runtime mounts, then dispatches it', async () => {

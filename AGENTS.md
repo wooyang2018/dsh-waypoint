@@ -13,6 +13,19 @@ This repository is intended to be public on GitHub.
 - When releasing a new version, update the pinned install version in `README.md`, `README.zh.md`, and `packages/local-plugin/README.md`.
 - Do not commit generated `lib/` output, tarballs, local DSH state, or credentials.
 
+## Commits
+
+Conventional Commits is required, not a preference: `type(scope): summary`. `type` is one of `feat`,
+`fix`, `docs`, `test`, `chore`, `refactor`, `perf`, `build`, `ci`, or `merge`; `scope` names the area
+(`mirror`, `agent`, `installer`, `client`, `hosts`, `scripts`, `release`, `dsh`).
+
+The body opens with **the problem**, not the change: what was wrong, what it cost, and why the
+obvious reading was wrong. A body that restates the diff adds nothing a reader cannot get from
+`git show`. Wrap at 100 columns.
+
+Merge commits keep the `merge:` prefix and say which lines of work landed and how the conflicts
+resolved — not which files changed.
+
 ## Where to work
 
 **Give a substantial feature its own worktree; do not pile features into the main checkout.** Several
@@ -55,9 +68,34 @@ For a real remote test, point a second profile at throwaway directories under `/
 ### End-to-end runs go through the normal path
 
 Install the local development build into the profile the desktop app loads and let the plugin
-provision the remote itself. Hand-placing an agent package on a host is reverted by re-provisioning,
-so it measures a build that is not running. `desktop` is that profile; `web` and `headless` are not.
+provision the remote itself:
+
+```sh
+node scripts/dev/install-local.mjs              # desktop profile
+node scripts/dev/install-local.mjs --profile web
+```
+
+Hand-placing an agent package on a host is reverted by re-provisioning, so it measures a build that
+is not running. `desktop` is that profile; `web` and `headless` are not.
 See [docs/testing.md](docs/testing.md#running-against-a-real-host) before an end-to-end run.
+
+**Do not install by editing `~/.dsh/profiles/<name>/package.json` and running `pnpm install`.** That
+is exactly what the script replaces. The reserved `desktop` profile is refused by
+`dsh plugin --profile desktop add` at argument-parse time (`rejectElectronProfile` in the launcher),
+and the flag that permits it is an in-process parameter of the exported `runCli`, not a CLI option.
+The script imports that function and passes the flag, so the install runs the Host's own
+`runProfilePnpm` — including the `reconcile` pass that appends the package to `dsh.profile.bundles`.
+A hand-edited manifest skips that pass.
+
+### Test files
+
+Test files are kebab-case: `alias-groups.test.ts`, not `alias_groups.test.ts`. Fixtures follow the
+same rule (`mirror-fixture.ts`). Follow kebab for anything new; rename an old file while you are
+already editing it, rather than in a sweep.
+
+`test/` is **not** covered by `pnpm typecheck`. Adding it pulls `src/client` in through the fixtures
+and fails on DOM types a Node runner genuinely does not have. `test-e2e/` has its own
+`tsconfig.test-e2e.json` and is covered — put a case there when you want type safety.
 
 Keep test workspaces (and their sessions) out of the sidebar with the test-only manifest at
 `$DSH_HOME/waypoint/test-visibility.json`. Hide them rather than deleting them, so the data stays
@@ -93,10 +131,19 @@ downloadable before reporting success; a version whose tarball 404s cannot be re
 what forced 1.0.1. The `Release` workflow builds artifacts and attaches them to the GitHub release
 only.
 
+New entries go under `## Unreleased`. At release time the whole section is renamed to `## <version>`,
+because `scripts/release/release-notes.mjs` matches that heading exactly (`^## <version>$`) and
+publishes it as the GitHub release body. A dated heading (`## 1.1.0 — 2026-11-21`) silently fails
+that match, and the Release workflow stops after build, typecheck, and test have all gone green.
+
 ## Documentation map
 
-README.md lists every document. The ones an agent reaches for while working in
-this repository:
+`README.md` lists every document. Only `README.md` has a Chinese pair; edit both in the same commit.
+The English page is canonical: when they disagree, English is right and the translation follows.
+Every other document is English only — a translated mechanism page diverges faster than anyone
+maintains it.
+
+The documents an agent reaches for while working in this repository:
 
 - `docs/adapting-to-dsh-releases.md` — moving to a new DSH release.
 - `docs/remote-workspace-mechanism.md` — how a remote directory becomes a local
@@ -146,6 +193,20 @@ Two contracts there are load-bearing and easy to break:
 In `scripts/` it is fine to delete `@deepseek-ai/*` or `react/*` entries from a build script's
 `external` list only after checking they are not imports: `build/build-client.mjs` keeps one wildcard
 per module family instead of naming packages the bundle never requires.
+
+Three scripts change this machine or gate a release, so they are worth naming even though
+[docs/development.md](docs/development.md) already tabulates the whole directory:
+
+- `scripts/dev/install-local.mjs` — build, pack, and install into a profile, including the reserved
+  `desktop` one. See [End-to-end runs](#end-to-end-runs-go-through-the-normal-path) for why this is the
+  only supported way in.
+- `scripts/build/clean.mjs` — removes `packages/*/lib`. Safe for the repository but not always
+  harmless: git still tracks a file committed before the ignore rule existed, so removing it appears
+  as an unrelated deletion in the next diff. `--keep-tracked` deletes only untracked files and
+  `--dry-run` prints the plan; `pnpm clean` passes neither.
+- `scripts/release/release-preflight.mjs` — every check that must pass before `pnpm release:publish`.
+  It runs as part of the release flow but is cheap by hand, and each check stands for a mistake that
+  once cost a tag round trip.
 
 ## Committed assets and the scripts that produce them
 

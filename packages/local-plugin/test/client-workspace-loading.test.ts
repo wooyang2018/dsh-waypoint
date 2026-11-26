@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 import * as React from 'react'
 import * as jsxRuntime from 'react/jsx-runtime'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
-import { loadClientBundle } from './client_bundle_fixture.ts'
+import { loadClientBundle } from './client-bundle-fixture.ts'
 
 async function panel(surfaces: Record<string, unknown>) {
   const loaded = await loadClientBundle(surfaces)

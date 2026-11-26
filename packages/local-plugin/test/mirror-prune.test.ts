@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { harness, parent, parentSnapshot } from './mirror_fixture.ts'
+import { harness, parent, parentSnapshot } from './mirror-fixture.ts'
 
 describe('mirror record pruning', () => {
   it('drops a record whose local Session is gone and whose remote is gone', async () => {

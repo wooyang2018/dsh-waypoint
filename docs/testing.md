@@ -288,7 +288,7 @@ node .e2e/ws-check.mjs 27123
 After `pnpm -r build`, run the focused checks from the repository root:
 
 ```sh
-pnpm --filter dsh-waypoint exec node --import tsx --test test/mirror_lifecycle.test.ts test/mirror-subagents.test.ts test/client_workspace_loading.test.ts
+pnpm --filter dsh-waypoint exec node --import tsx --test test/mirror-lifecycle.test.ts test/mirror-subagents.test.ts test/client-workspace-loading.test.ts
 ```
 
 The mirror fixture uses real Cordis contexts and scope disposal with in-memory remote services. It
@@ -303,13 +303,13 @@ reintroduced render loop fail instead of hanging the suite.
 
 ### Local workspace removal
 
-`workspace_removal.test.ts` covers persistent removal, restart/reconnect discovery, explicit re-add,
+`workspace-removal.test.ts` covers persistent removal, restart/reconnect discovery, explicit re-add,
 in-flight snapshots/polls/stream frames, unregistered session directories, subagent placement, host
 isolation, and rejection before remote session creation. It asserts that local removal never cancels
 remote work or deletes cached Sessions. It also covers approvals arriving during or after removal,
 legacy test-hidden mappings, and explicit re-add with a new remote id at the same path.
 
-`workspace_removal_native.test.ts` runs the published DSH workspace registry and storage domain over an
+`workspace-removal-native.test.ts` runs the published DSH workspace registry and storage domain over an
 isolated in-memory backend. It exercises durable deletion, rollback of a failed delete, and a plugin
 starting during a pending delete. No primary local or remote profile is used.
 
@@ -318,7 +318,7 @@ starting during a pending delete. No primary local or remote profile is used.
 Two seams answer a human — `approval/request` and `user-questions/request` — and both are bridged. Three
 facts are worth knowing before changing either.
 
-**`mirror_question_anchor.test.ts` asserts against DSH's own `foldUserQuestions`**, not a copy of it. A
+**`mirror-question-anchor.test.ts` asserts against DSH's own `foldUserQuestions`**, not a copy of it. A
 mirrored Session seeds from a truncated tail, so the remote `request/header` that declares the timed
 `ask_user_question` schema is usually absent; without it the projection ignores every `tool/call` and no
 `continued` row can ever appear. The mirror therefore writes its own anchor, listing only
@@ -398,7 +398,7 @@ it after changing anything in `remote/fs.ts`, `remote/subprocess.ts`,
 After `pnpm -r build`, run the focused checks from the repository root:
 
 ```sh
-pnpm --filter dsh-waypoint exec node --import tsx --test test/mirror_lifecycle.test.ts test/mirror-subagents.test.ts test/mirror-commands.test.ts test/remote-catalog.test.ts test/client_workspace_loading.test.ts
+pnpm --filter dsh-waypoint exec node --import tsx --test test/mirror-lifecycle.test.ts test/mirror-subagents.test.ts test/mirror-commands.test.ts test/remote-catalog.test.ts test/client-workspace-loading.test.ts
 ```
 
 The mirror fixture uses real Cordis contexts and scope disposal with in-memory remote services. It covers model selection and forwarding, explicit choices matching deployment defaults, recorded-model precedence, asynchronous shutdown and subagent pruning, and native resume attempted before persisted mirror mappings finish loading. Ordinary local Agents and the remote façade remain admissible.
@@ -504,20 +504,20 @@ that correlates to it — over the real projection order rather than by calling 
 node --import tsx --test packages/local-plugin/test-e2e/compaction-card.e2e.ts
 ```
 
-`test/mirror_fixture.ts` had to learn about surface placement for this: its `append` forwarded only
+`test/mirror-fixture.ts` had to learn about surface placement for this: its `append` forwarded only
 `(type, data)` and its seed mapping dropped `surfaceOp`, so every assertion about a replacement range
 would have read an appended event and passed vacuously. Both now carry `surfaceOp` and
 `sourceEventSeqs`, which is the shape the real `Session.append` accepts.
 
 ### Local workspace removal regressions
 
-`workspace_removal.test.ts` covers persistent removal, restart/reconnect discovery, explicit re-add,
+`workspace-removal.test.ts` covers persistent removal, restart/reconnect discovery, explicit re-add,
 in-flight snapshots/polls/stream frames, unregistered session directories, subagent placement,
 host isolation, and rejection before remote session creation. It asserts that local removal never
 cancels remote work or deletes cached Sessions. It also covers approvals arriving during or after
 removal, legacy test-hidden mappings, and explicit re-add with a new remote id at the same path.
 
-`workspace_removal_native.test.ts` runs the published DSH workspace registry and storage domain over
+`workspace-removal-native.test.ts` runs the published DSH workspace registry and storage domain over
 an isolated in-memory backend. It exercises durable deletion, rollback of a failed delete, and a
 plugin starting during a pending delete. No primary local or remote profile is used.
 This is not part of `pnpm test`: it needs a reachable host and a DSH runtime. Run it after changing

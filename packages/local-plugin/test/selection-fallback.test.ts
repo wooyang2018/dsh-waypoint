@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { apply } from '../src/index.ts'
-import { harness, parent, parentSnapshot } from './mirror_fixture.ts'
+import { harness, parent, parentSnapshot } from './mirror-fixture.ts'
 
 /**
  * Make the fixture report no usable catalog.

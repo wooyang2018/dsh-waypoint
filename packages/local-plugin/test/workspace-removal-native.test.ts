@@ -4,7 +4,7 @@ import { describe, it } from 'node:test'
 import Storage, { type StorageBackend } from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import WorkspaceRegistry, { WorkspaceId } from '@deepseek-ai/dsh-workspace'
-import { deferred, removalFixture } from './workspace_removal_fixture.ts'
+import { deferred, removalFixture } from './workspace-removal-fixture.ts'
 
 async function nativeFixture() {
   let beforeDelete = async () => {}

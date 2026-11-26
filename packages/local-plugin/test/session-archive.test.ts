@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { removalFixture } from './workspace_removal_fixture.ts'
+import { removalFixture } from './workspace-removal-fixture.ts'
 
 /**
  * Archiving a mirrored Session has to reach the remote Session, and restoring

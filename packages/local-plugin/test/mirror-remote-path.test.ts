@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { harness } from './mirror_fixture.ts'
+import { harness } from './mirror-fixture.ts'
 
 /**
  * A remote path does not name a host on its own, so attribution is layered:

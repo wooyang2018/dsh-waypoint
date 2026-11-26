@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { agentEvents } from '@deepseek-ai/dsh-agent'
 import { createScope } from '@deepseek-ai/dsh-scope'
-import { harness } from './mirror_fixture.ts'
+import { harness } from './mirror-fixture.ts'
 
 describe('lazy remote Session creation', () => {
   it('keeps the native blank Session and creates the remote Session with its selected preset', async () => {

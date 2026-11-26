@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
 import { apply } from '../src/index.ts'
-import { harness, parent, child, parentSnapshot, descriptorSnapshot } from './mirror_fixture.ts'
+import { harness, parent, child, parentSnapshot, descriptorSnapshot } from './mirror-fixture.ts'
 
 async function mounted(children = false) {
   const test = harness()

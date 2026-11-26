@@ -300,7 +300,7 @@ refresh in that one scenario.
   mirrors, the draft route, degradation for an older agent, `mirrorRemoteCatalog: false`, the local
   whitelist, and attachment fail-fast / over-limit / missing-receipt cases.
 - `packages/testkit/src/fake-host.ts` — implements the three new routes for those tests.
-- `packages/local-plugin/test/mirror_lifecycle.test.ts` — `command/done.sourceEventSeq` remapping,
+- `packages/local-plugin/test/mirror-lifecycle.test.ts` — `command/done.sourceEventSeq` remapping,
   and dropping an unmappable value.
 
 **Acceptance**
@@ -344,7 +344,7 @@ refresh in that one scenario.
 | 1 | Protocol: two capabilities, three routes, guards, client methods with per-call timeout | `pnpm -F @dsh-waypoint/protocol test` |
 | 2 | Remote agent: `src/catalog.ts`, capability advertisement, three HTTP routes with the 12 MiB execute body and cancellation wiring | `packages/remote-agent/test/catalog.test.ts` |
 | 3 | Local plugin: `src/remote/catalog.ts`, patch-contract lists, two settings | `remote-catalog.test.ts` |
-| 4 | Mirror: `catalogAddressFor`, `command/done` remapping, the `commands/change` emit | `mirror_lifecycle` additions |
+| 4 | Mirror: `catalogAddressFor`, `command/done` remapping, the `commands/change` emit | `mirror-lifecycle` additions |
 | 5 | Documentation: `docs/protocol.md` capability/route/error tables, `docs/remote-workspace-mechanism.md` §5.3 and a new section (with its Chinese counterpart), and a CHANGELOG entry | Document self-check |
 
 Slices 1 → 2 → 3 → 4 are ordered by dependency; slice 5 can follow slice 3. Each slice ends with

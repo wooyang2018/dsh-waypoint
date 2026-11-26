@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { harness, parent } from './mirror_fixture.ts'
+import { harness, parent } from './mirror-fixture.ts'
 
 type RawEvent = { seq: number; type: string; data: unknown }
 
