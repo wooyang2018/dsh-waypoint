@@ -1,8 +1,90 @@
 # Changelog
 
-## Unreleased
+## 1.1.4
+
+### Added
+
+- **`ask_user_question` from a mirrored Session now shows its card locally instead of silently
+  disappearing.** Only `approval/request` was bridged, so a remote agent that asked a question waited
+  for an answer that never arrived: the card only ever existed in the remote Web UI, which is exactly
+  the context a mirror user does not have open. The plugin now bridges the second human-interaction
+  seam the same way it bridges the first — the remote agent prepends a listener to
+  `user-questions/request` (`#bindQuestions`), replays the pending set over the new
+  `GET /questions/events`, and the local side rebuilds the waterfall through
+  `scopeTarget(runtime.agent, …)` before returning the answer to `POST /questions/answer`.
+
+  Three rules differ from the approval bridge, and each one is a failure the naive port would have
+  caused. The agent only claims a question while a local stream is attached, because an approval can
+  resolve `unavailable` — which reads as a refusal — while a question resolves into a tool result the
+  model acts on, so "nobody was listening" must never become "the user declined". A new `delegated`
+  outcome reports that no local mirror can show the question, which hands it back to the remote UI
+  instead of reporting a decision a human never made. And the wire carries no `wait` field: a timed
+  wait would make the local card attach to a foreground stream owned by the *local* Host's
+  `userQuestions` service, which has never heard of a remote call.
+
+  Neither bridged seam has a clock by default: `questionTimeoutMs` and `approvalTimeoutMs` both
+  default to `0`, meaning wait indefinitely, because neither `dsh-user-questions` nor
+  `dsh-user-approval` contains a timer. Adding one would make this plugin the only part of the system
+  that decides a person has taken too long, and the thing it produces at that point is not an answer.
+  A deployment may opt in; an expiring question then fails with `ASK_UNANSWERED` rather than
+  `ASK_CANCELLED`, because "the question was never seen" and "the user withdrew it" are different
+  facts. Both capabilities (`question.follow`, `question.answer`) are required before the local side
+  opens the stream, so an older remote agent keeps its current behaviour and an older plugin keeps
+  its current behaviour against a newer agent.
+
+- `session.file-attachment` and `attachment.read` capabilities, plus `POST /attachments/read`, so a
+  client can tell before sending whether a host can carry attachments in either direction. An older
+  agent is refused with a Reinstall instruction rather than a silent drop.
+- `session.catalog` and `session.command` capabilities, plus `POST /catalog/commands`,
+  `POST /catalog/skills` and `POST /commands/execute`. Each is separate because they fail differently:
+  an agent without the catalogs keeps its local answer, while an agent without command execution
+  delegates execution instead of accepting a line it cannot run. Both catalog routes accept either a
+  Session id or a draft's `{ agentPreset, cwd }`, so a mirrored conversation shows a populated menu
+  before its first message.
+- `mirrorRemoteCatalog` (default on) and `mirrorCommandTimeoutMs` (default 120 s). A command handler
+  may legitimately run for minutes — `/compact` performs a summarization call — so the request timeout
+  that suits a metadata read would report a failure for work still in progress.
+- `RemoteMirrorService.forwardedSelection`, the model a mirror would forward for one local Session.
+  It exists because the Agent façade can no longer answer that question, and it is what the
+  model-selection tests now assert on.
 
 ### Fixed
+
+- **A bridged approval no longer gives up after a hard-coded ten minutes.** The remote agent used to
+  answer `unavailable` ten minutes into any approval nobody had replied to. `dsh-user-approval` has
+  no such timer, and its `unavailable` outcome means "no answerer was reachable" — so the constant
+  reported "nobody replied yet" in the vocabulary of "nobody could be asked". The wait is now
+  indefinite by default (`approvalTimeoutMs: 0`); a deployment that wants a bound sets one and gets
+  the same `unavailable` outcome, which is truthful once a timer is genuinely the explanation.
+
+- **Archiving a mirrored Session now archives its remote Session, and unarchiving restores it.** The
+  sidebar's Archive action went straight to the Host's `workspaceRegistry`, which knows nothing about
+  mirroring, so only the local projection was hidden: the remote Session stayed alive and listed, the
+  next reconciliation mirrored it again, and the archived conversation reappeared after every restart.
+  The plugin now interposes on the registry's `archiveSession`/`unarchiveSession` — the same one-layer
+  host-side replacement `remote/files.ts` uses for files — and forwards a user's archive to
+  `POST /sessions/:id/archive`, restoring through the new `POST /sessions/:id/unarchive` route and the
+  `session.unarchive` capability added in this release.
+
+  Both directions ship together and are required before the plugin touches the remote at all. DSH's
+  `ArchivedSessionGate` rejects every model step of an archived Session, so a remote archived by a
+  plugin that could not restore it would leave a mirror that opens, shows its history, and silently
+  refuses to answer. On an agent that does not advertise both capabilities the plugin archives locally
+  only, exactly as before; reinstall the remote agent to get the round trip.
+
+  The plugin's own cleanup — removing a workspace, pruning a subagent mirror, hiding a test workspace,
+  abandoning a promotion — never reaches the remote, because `stopActivity` cannot express that
+  distinction (the internal helper always passes `true`); those archives are marked in-process instead.
+  An archived mirror is also no longer recreated on restart, which is what makes the fix hold for
+  records archived before this release as well — nothing is deleted, so unarchiving still works.
+
+- **A failed remote archive is reported instead of failing silently.** The local archive is written
+  first, so a host that is offline or refuses the call leaves the row hidden and cannot resurrect it —
+  but the remote Session is still live, any running turn was never stopped, and nothing retries. The
+  client is now told: a short toast arrives through the heartbeat the page already polls, saying the
+  remote Session could not be archived and is still running. Unarchiving stays fail-closed by contrast;
+  a remote that cannot be restored keeps its local archive rather than handing back a conversation that
+  silently rejects every prompt.
 
 - **A forwarded file now reaches a Session nobody has opened yet.** An attachment is admitted before
   `promptSession` hands the prompt to `sessionController.prompt`, and that hand-off is what resumes a
@@ -122,98 +204,6 @@
   delegated to the stock method. The delegates now forward the call-time receiver, and restore goes
   through `remote/install.ts` so unload puts the instance back. The regression test asserts a local
   `attach` reaches an invocation-carrying receiver; it fails on the previous code.
-
-### Added
-
-- `session.file-attachment` and `attachment.read` capabilities, plus `POST /attachments/read`, so a
-  client can tell before sending whether a host can carry attachments in either direction. An older
-  agent is refused with a Reinstall instruction rather than a silent drop.
-- `session.catalog` and `session.command` capabilities, plus `POST /catalog/commands`,
-  `POST /catalog/skills` and `POST /commands/execute`. Each is separate because they fail differently:
-  an agent without the catalogs keeps its local answer, while an agent without command execution
-  delegates execution instead of accepting a line it cannot run. Both catalog routes accept either a
-  Session id or a draft's `{ agentPreset, cwd }`, so a mirrored conversation shows a populated menu
-  before its first message.
-- `mirrorRemoteCatalog` (default on) and `mirrorCommandTimeoutMs` (default 120 s). A command handler
-  may legitimately run for minutes — `/compact` performs a summarization call — so the request timeout
-  that suits a metadata read would report a failure for work still in progress.
-- `RemoteMirrorService.forwardedSelection`, the model a mirror would forward for one local Session.
-  It exists because the Agent façade can no longer answer that question, and it is what the
-  model-selection tests now assert on.
-## 1.1.4
-
-### Added
-
-- **`ask_user_question` from a mirrored Session now shows its card locally instead of silently
-  disappearing.** Only `approval/request` was bridged, so a remote agent that asked a question waited
-  for an answer that never arrived: the card only ever existed in the remote Web UI, which is exactly
-  the context a mirror user does not have open. The plugin now bridges the second human-interaction
-  seam the same way it bridges the first — the remote agent prepends a listener to
-  `user-questions/request` (`#bindQuestions`), replays the pending set over the new
-  `GET /questions/events`, and the local side rebuilds the waterfall through
-  `scopeTarget(runtime.agent, …)` before returning the answer to `POST /questions/answer`.
-
-  Three rules differ from the approval bridge, and each one is a failure the naive port would have
-  caused. The agent only claims a question while a local stream is attached, because an approval can
-  resolve `unavailable` — which reads as a refusal — while a question resolves into a tool result the
-  model acts on, so "nobody was listening" must never become "the user declined". A new `delegated`
-  outcome reports that no local mirror can show the question, which hands it back to the remote UI
-  instead of reporting a decision a human never made. And the wire carries no `wait` field: a timed
-  wait would make the local card attach to a foreground stream owned by the *local* Host's
-  `userQuestions` service, which has never heard of a remote call.
-
-  Neither bridged seam has a clock by default: `questionTimeoutMs` and `approvalTimeoutMs` both
-  default to `0`, meaning wait indefinitely, because neither `dsh-user-questions` nor
-  `dsh-user-approval` contains a timer. Adding one would make this plugin the only part of the system
-  that decides a person has taken too long, and the thing it produces at that point is not an answer.
-  A deployment may opt in; an expiring question then fails with `ASK_UNANSWERED` rather than
-  `ASK_CANCELLED`, because "the question was never seen" and "the user withdrew it" are different
-  facts. Both capabilities (`question.follow`, `question.answer`) are required before the local side
-  opens the stream, so an older remote agent keeps its current behaviour and an older plugin keeps
-  its current behaviour against a newer agent.
-
-### Fixed
-
-- **A bridged approval no longer gives up after a hard-coded ten minutes.** The remote agent used to
-  answer `unavailable` ten minutes into any approval nobody had replied to. `dsh-user-approval` has
-  no such timer, and its `unavailable` outcome means "no answerer was reachable" — so the constant
-  reported "nobody replied yet" in the vocabulary of "nobody could be asked". The wait is now
-  indefinite by default (`approvalTimeoutMs: 0`); a deployment that wants a bound sets one and gets
-  the same `unavailable` outcome, which is truthful once a timer is genuinely the explanation.
-
-## 1.1.3
-
-### Fixed
-
-- **Archiving a mirrored Session now archives its remote Session, and unarchiving restores it.** The
-  sidebar's Archive action went straight to the Host's `workspaceRegistry`, which knows nothing about
-  mirroring, so only the local projection was hidden: the remote Session stayed alive and listed, the
-  next reconciliation mirrored it again, and the archived conversation reappeared after every restart.
-  The plugin now interposes on the registry's `archiveSession`/`unarchiveSession` — the same one-layer
-  host-side replacement `remote/files.ts` uses for files — and forwards a user's archive to
-  `POST /sessions/:id/archive`, restoring through the new `POST /sessions/:id/unarchive` route and the
-  `session.unarchive` capability added in this release.
-
-  Both directions ship together and are required before the plugin touches the remote at all. DSH's
-  `ArchivedSessionGate` rejects every model step of an archived Session, so a remote archived by a
-  plugin that could not restore it would leave a mirror that opens, shows its history, and silently
-  refuses to answer. On an agent that does not advertise both capabilities the plugin archives locally
-  only, exactly as before; reinstall the remote agent to get the round trip.
-
-  The plugin's own cleanup — removing a workspace, pruning a subagent mirror, hiding a test workspace,
-  abandoning a promotion — never reaches the remote, because `stopActivity` cannot express that
-  distinction (the internal helper always passes `true`); those archives are marked in-process instead.
-  An archived mirror is also no longer recreated on restart, which is what makes the fix hold for
-  records archived before this release as well — nothing is deleted, so unarchiving still works.
-
-- **A failed remote archive is reported instead of failing silently.** The local archive is written
-  first, so a host that is offline or refuses the call leaves the row hidden and cannot resurrect it —
-  but the remote Session is still live, any running turn was never stopped, and nothing retries. The
-  client is now told: a short toast arrives through the heartbeat the page already polls, saying the
-  remote Session could not be archived and is still running. Unarchiving stays fail-closed by contrast;
-  a remote that cannot be restored keeps its local archive rather than handing back a conversation that
-  silently rejects every prompt.
-
 
 ## 1.1.2
 
