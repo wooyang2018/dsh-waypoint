@@ -346,6 +346,80 @@
   opacity: 0.55;
 }
 
+/* Sliding switch for a single on/off setting.
+   The real checkbox stays in the accessibility tree and drives the visual
+   track, so keyboard Space and a screen reader both work without a custom
+   key handler. */
+.dshwp-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+/* Visibly hidden but focusable: `display: none` would drop it from the tab
+   order along with the keyboard affordance this control needs. */
+.dshwp-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.dshwp-switch-track {
+  position: relative;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--dshwp-border-strong);
+  transition: background 140ms ease;
+}
+
+.dshwp-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--dshwp-surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+  transition: transform 140ms ease;
+}
+
+.dshwp-switch input:checked + .dshwp-switch-track {
+  background: var(--dshwp-accent);
+}
+
+.dshwp-switch input:checked + .dshwp-switch-track::after {
+  transform: translateX(16px);
+}
+
+.dshwp-switch input:focus-visible + .dshwp-switch-track {
+  outline: 2px solid var(--dshwp-accent);
+  outline-offset: 2px;
+}
+
+.dshwp-switch input:disabled + .dshwp-switch-track {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.dshwp-switch-text {
+  font-size: 12.5px;
+  color: var(--dshwp-label-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dshwp-switch-track,
+  .dshwp-switch-track::after {
+    transition: none;
+  }
+}
+
 /* ── Redesigned host list ────────────────────────────────────────────
    One container replaces the nested card-in-card box, and each machine is a
    single summary row whose detail opens underneath. */

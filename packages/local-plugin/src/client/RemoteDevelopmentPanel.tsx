@@ -94,10 +94,32 @@ function GlobeIcon(): JSX.Element {
   )
 }
 
+/** Circular arrow, for restarting the remote DSH service in place. */
+function RestartIcon(): JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        d="M13 8a5 5 0 1 1-1.6-3.7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <path
+        d="M13 2.6V5.4h-2.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 function phaseLabel(t: Translate, phase: HostView['phase']): string {
   return t(`phase.${phase}` as CopyKey)
 }
-
 /**
  * Whether a Node.js run is still in flight for this host.
  *
@@ -516,9 +538,9 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
   /**
    * The overflow actions for one host.
    *
-   * Connecting, opening the Web UI and expanding are one click away on the row
-   * itself, so they are not repeated here. What remains is either rarely used
-   * or worth a deliberate step.
+   * Connecting, opening the Web UI, restarting and expanding are one click away
+   * on the row itself, so they are not repeated here. What remains is either
+   * rarely used or worth a deliberate step.
    */
   function hostActions(host: HostView): readonly MenuAction[] {
     const busyNow = busy !== null
@@ -536,17 +558,9 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
         run: () => { void run(`upgrade:${host.id}`, async () => { await api.upgrade(host.id) }) },
       })
     }
-    // Restart starts the second group but deliberately carries no divider: it
-    // is a routine, reversible action, and a rule directly above the first
-    // entry read as a stray line at the top of the menu. Only "Remove" below is
-    // separated, because that one is destructive.
+    // No divider above the first entry: the entries here are all reversible
+    // except "Remove", which carries its own rule at the bottom.
     actions.push(
-      {
-        id: 'restart',
-        label: t('settings.restart'),
-        disabled: busyNow || host.phase === 'installing',
-        run: () => { void run(`restart:${host.id}`, async () => { await api.restart(host.id) }) },
-      },
       {
         // A deliberate, one-off change to what the host runs: it is offered as
         // an action rather than performed during provisioning, so an
@@ -700,6 +714,26 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                     >
                       {busy === `web:${host.id}` ? <span className="dshwp-icon-spin" aria-hidden="true">⋯</span> : <GlobeIcon />}
                     </button>
+                    {/* Restart sits on the row because it is a routine action on
+                        this machine, like connecting or opening its UI. It stays
+                        available while the host is disconnected: restarting is how
+                        a stuck service comes back, so requiring a live connection
+                        first would hide the action exactly when it is needed. */}
+                    <button
+                      type="button"
+                      className="dshwp-icon-btn"
+                      aria-label={t('settings.restart')}
+                      title={t('settings.restart')}
+                      disabled={busy !== null || host.phase === 'installing' || host.phase === 'discovering'}
+                      onClick={event => {
+                        event.stopPropagation()
+                        void run(`restart:${host.id}`, async () => { await api.restart(host.id) })
+                      }}
+                    >
+                      {busy === `restart:${host.id}`
+                        ? <span className="dshwp-icon-spin" aria-hidden="true">⋯</span>
+                        : <RestartIcon />}
+                    </button>
                     <HostActionMenu
                       label={`${t('settings.hostActions')}: ${host.label}`}
                       actions={hostActions(host)}
@@ -749,26 +783,24 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
                     <div className="dshwp-field">
                       <span className="dshwp-field-label">{t('settings.autoProvision')}</span>
                       <span className="dshwp-field-value">
-                        <span className="dshwp-segmented" role="group" aria-label={t('settings.autoProvision')}>
-                          <button
-                            type="button"
-                            className={host.autoProvision ? 'dshwp-seg dshwp-seg-active' : 'dshwp-seg'}
-                            aria-pressed={host.autoProvision === true}
+                        {/* `role="switch"` reads as an on/off setting rather than a
+                            checkbox, and the state shown is the host's own: the
+                            call returns before the next poll, so an optimistic
+                            local value would briefly disagree with it. */}
+                        <label className="dshwp-switch">
+                          <input
+                            type="checkbox"
+                            role="switch"
+                            checked={host.autoProvision}
+                            aria-label={t('settings.autoProvision')}
                             disabled={busy !== null || host.phase === 'installing' || host.phase === 'discovering'}
-                            onClick={() => { void switchAutoProvision(host, true) }}
-                          >
-                            {t('settings.autoProvisionOn')}
-                          </button>
-                          <button
-                            type="button"
-                            className={host.autoProvision ? 'dshwp-seg' : 'dshwp-seg dshwp-seg-active'}
-                            aria-pressed={host.autoProvision === false}
-                            disabled={busy !== null || host.phase === 'installing' || host.phase === 'discovering'}
-                            onClick={() => { void switchAutoProvision(host, false) }}
-                          >
-                            {t('settings.autoProvisionOff')}
-                          </button>
-                        </span>
+                            onChange={event => { void switchAutoProvision(host, event.target.checked) }}
+                          />
+                          <span className="dshwp-switch-track" aria-hidden="true" />
+                          <span className="dshwp-switch-text">
+                            {host.autoProvision ? t('settings.autoProvisionOn') : t('settings.autoProvisionOff')}
+                          </span>
+                        </label>
                         <span
                           className="dshwp-help"
                           title={t('settings.autoProvisionHelp')}
