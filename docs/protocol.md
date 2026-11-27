@@ -196,6 +196,14 @@ surface — both `POST /terminals` (which allocates the PTY and starts the login
 terminal traffic from the local UI travels over the existing SSH tunnel; no per-operation SSH
 connection is opened by the local plugin.
 
+`/files/stat` answers what a path **is**: `type` is `file`, `directory` or `other`, `version` is a
+freshness token for every kind, and `bytes` is present for a regular file only — no size is defined
+for a directory here, and reporting `st_size` for one would invite a caller to page it. `type` is
+optional on the wire, and an absent value means *not reported* rather than `file`: an agent that
+predates the field omits it, and a client that read silence as `file` would misclassify a directory
+on an older host. `read` and `bytes` still refuse a non-regular file with
+`workspace-file/not-regular-file`, because a reader genuinely cannot read a directory.
+
 `/files/search` answers the file panel's search box. Its result carries two independent flags rather
 than one: `truncated` means the match list hit its cap, `incomplete` means the walk stopped early — at
 its entry budget, its depth limit, its deadline, or an unreadable directory. A client must not render a

@@ -1,6 +1,6 @@
 # A remote directory must report its type, and the working directory must resolve remotely
 
-Status: approved design. Implementation follows the slices in §12.
+Status: implemented (§12 records the slices; the CHANGELOG's `Unreleased` section is the release note).
 
 ## 1. Background and goal
 
@@ -249,13 +249,19 @@ one clause so consumers branch on the `FsError` vocabulary they already handle:
 
 ```ts
 if (code === 'workspace-file/not-regular-file') {
-  throw new FsError(`not a regular file on the remote host: ${remotePath}`, 'FS_IO_ERROR', { cause: error })
+  throw new FsError(`not a regular file on the remote host: ${remotePath}`, 'FS_NOT_REGULAR_FILE', { cause: error })
 }
 ```
 
-`FS_IO_ERROR` rather than `FS_NOT_FOUND`: the path exists, it is simply not readable as a file, and
-reporting it absent would send a reader to check a path that is correct — the same reasoning the
-agent's own `EACCES` branch already records.
+`FS_NOT_REGULAR_FILE` rather than `FS_NOT_FOUND` or `FS_IO_ERROR`: the path exists, it is simply not
+readable as a file, and reporting it absent would send a reader to check a path that is correct — the
+same reasoning the agent's own `EACCES` branch already records. `FS_IO_ERROR` says an I/O failure
+happened, which is not what this is. See §11 for why this departed from the first draft of this
+section.
+
+The three reads also go through that translation now, not just `stat` and `readBytes`: `readText` and
+`readByteRange` used to call the agent directly, so a missing remote file reached a caller as
+`workspace-file/not-found` rather than `FS_NOT_FOUND` there.
 
 ### 6.4 A `workingDirectory` adapter (R5, R6, R7, R8)
 
@@ -327,7 +333,8 @@ working file panel into a refusal. The field's absence is the negotiation, and R
 
 `REQUIRED_WORKING_DIRECTORY_METHODS` in `remote/patch-contract.ts` follows the existing pattern
 (literal names, compared against the live service, reported to the Settings state) so a DSH release
-that renames `ensure` produces "routing is off" rather than a silently local cwd.
+that renames `ensure` produces "routing is off" rather than a silently local cwd. The state field is
+`workingDirectoryRouting`, beside the existing `fileRouting`.
 
 ## 7. Edges and failures
 
@@ -370,7 +377,7 @@ that renames `ensure` produces "routing is off" rather than a silently local cwd
   `workspace-file/not-regular-file` and **`text` is not empty-with-zero-lines** (the §6.2 trap).
 - `packages/local-plugin/test/remote-fs.test.ts` — `stat`/`lstat` forward `directory`/`other`;
   an agent response without `type` yields `file`; `readText` on a directory yields an `FsError` with
-  `FS_IO_ERROR`.
+  `FS_NOT_REGULAR_FILE`.
 - `packages/local-plugin/test/remote-working-directory.test.ts` (new) — a mirrored Session resolves
   through the agent and performs **no** local `fs` call (assert the local service was never entered);
   a non-mirror delegates; an absent path raises `WORKING_DIRECTORY_UNAVAILABLE`; ambiguous host
@@ -404,7 +411,22 @@ that renames `ensure` produces "routing is off" rather than a silently local cwd
 - **`set()` is refused for a mirror rather than forwarded.** Forwarding would need a `session.cd`
   route and a decision about which log records the change first. Refusing with a named cause is
   honest and is what the `/cd` affordance should surface; a later change can add the route.
-- **`FS_IO_ERROR` for "not a regular file".** Chosen over `FS_NOT_FOUND` per §6.3.
+- **`FS_NOT_REGULAR_FILE` for "not a regular file".** This spec first named `FS_IO_ERROR`, and the
+  implementation had to depart from it: `@deepseek-ai/dsh-fs` already exports that exact code in
+  `FS_ERROR_CODES`, so the translation needs no invention and loses no information. Both alternatives
+  were rejected for the reason §6.3 gives — the path exists, so `FS_NOT_FOUND` would send a reader to
+  check it, and `FS_IO_ERROR` would describe a transient failure that did not happen.
+- **The refusal code for `set()` is not the stock one.** The adapter raises
+  `RemoteWorkingDirectoryError` rather than importing `WorkingDirectoryError`, because
+  `@deepseek-ai/dsh-working-directory` is optional in a headless composition and a static value
+  import would fail at module load wherever it is absent — taking the file and terminal adapters down
+  with it. `ensure()` keeps the stock `WORKING_DIRECTORY_UNAVAILABLE` code so a caller that already
+  routes on it behaves the same; `set()` uses `WORKING_DIRECTORY_REMOTE`, which no stock branch
+  matches, so the message is what surfaces.
+- **The `working-directory/access` waterfall is not run for a mirror.** That event coordinates a
+  directory access with a *local* resource operation (a checkout being removed). A remote directory
+  has no local resource, and its path would be read by a listener that expects this machine's
+  namespace.
 
 ## 12. Implementation slices
 
