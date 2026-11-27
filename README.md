@@ -469,8 +469,9 @@ then follow `docs/operations.md` for moving the host registry and cleaning up th
   local workspace: discovery, tunnel, the session mirror, files/terminal routing
 - [Host routing for mirrored paths](docs/mirror-host-resolution.md) — why a remote path does not name
   a host, how ambiguity is refused instead of guessed, and what `spawn git ENOENT` actually means
-- [Remote catalogs for mirrored Sessions](docs/specs/2026-11-26-remote-catalog-bridge.md) — the
-  approved design for `/` commands, skills, and command execution in a mirrored Session
+- [Specifications](docs/specs/README.md) — every design document, open and implemented, starting with
+  the [remote catalogs for mirrored
+  Sessions](docs/specs/2026-11-26-remote-catalog-bridge.md) design that shipped in 1.1.4
 - [Operations guide](docs/operations.md)
 - [Development](docs/development.md)
 - [Testing](docs/testing.md)
