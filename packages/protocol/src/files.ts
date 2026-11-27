@@ -8,11 +8,30 @@
  * @module @dsh-waypoint/protocol/files
  */
 
+/**
+ * What one path is, on the wire.
+ *
+ * Not exported: it names one union three exported shapes already spell out, and
+ * promoting it would add a symbol to the protocol surface for no consumer's
+ * benefit.
+ */
+type RemotePathKind = 'file' | 'directory' | 'other'
+
 /** Current metadata for one remote file. */
 export interface RemoteFileStat {
   readonly absolutePath: string
   readonly version: string
+  /** Byte size. Present for a regular file only: no size is defined for a directory here. */
   readonly bytes?: number
+  /**
+   * What the path is.
+   *
+   * Optional on purpose. A stat from an agent that predates this field stays
+   * readable, and an absent value means "not reported" rather than "file" — the
+   * local adapter supplies that reading, so an older agent reproduces the
+   * behaviour it had before this field existed instead of failing validation.
+   */
+  readonly type?: RemotePathKind
 }
 
 /** One line window of a remote text file. */
@@ -33,7 +52,7 @@ export interface RemoteFileBytes extends RemoteFileStat {
 /** One direct child of a remote directory. */
 export interface RemoteFileEntry {
   readonly name: string
-  readonly type: 'file' | 'directory' | 'other'
+  readonly type: RemotePathKind
   readonly size?: number
 }
 
@@ -103,7 +122,7 @@ export interface RemoteFileSearchRequest {
 }
 
 /** What one search hit resolves to. */
-export type RemoteFileSearchEntryType = 'file' | 'directory' | 'other'
+export type RemoteFileSearchEntryType = RemotePathKind
 
 /** One entry a workspace search found. */
 export interface RemoteFileSearchMatch {

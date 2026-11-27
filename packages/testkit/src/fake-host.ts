@@ -27,6 +27,7 @@ import {
   type ApprovalOutcome,
   type HostInfo,
   type RemoteApprovalRequest,
+  type RemoteFileStat,
   type RemoteSessionEvent,
   type RemoteTerminalFrame,
   type RemoteTerminalInfo,
@@ -46,6 +47,16 @@ export interface FakeHostOptions {
   /** Keep SSE open and emit heartbeats; zero ends after replay. */
   readonly holdStreamMs?: number
   readonly heartbeatMs?: number
+  /** Paths this fake can stat, keyed by absolute remote path. */
+  readonly files?: Readonly<Record<string, FakeFile>>
+}
+
+/** One path the fake host can answer `file.stat` for. */
+export interface FakeFile {
+  readonly type: 'file' | 'directory' | 'other'
+  /** Byte size; a directory has none, matching the real agent. */
+  readonly bytes?: number
+  readonly version?: string
 }
 
 /** One observed request, for assertions. */
@@ -90,6 +101,7 @@ export class FakeRemoteHost {
   readonly #fixtures: Fixtures
   readonly #holdStreamMs: number
   readonly #heartbeatMs: number
+  readonly #files = new Map<string, RemoteFileStat>()
   readonly #sessions = new Map<string, FakeSession>()
   readonly #streams = new Map<string, ServerResponse[]>()
   readonly #approvals = new Map<string, RemoteApprovalRequest>()
@@ -108,6 +120,29 @@ export class FakeRemoteHost {
     this.#holdStreamMs = options.holdStreamMs ?? 0
     this.#heartbeatMs = options.heartbeatMs ?? 1_000
     for (const session of this.#fixtures.sessions) this.#sessions.set(session.sessionId, session)
+    for (const [path, file] of Object.entries(options.files ?? {})) this.setFile(path, file)
+  }
+
+  /**
+   * Declare one path this fake can stat.
+   *
+   * The working-directory adapter asks `file.stat` before it commits a mirrored
+   * Session to a directory, so a fake that answers no stat at all cannot exercise
+   * it. An undeclared path answers `workspace-file/not-found`, exactly like the
+   * real agent.
+   *
+   * @param path - absolute remote path.
+   * @param file - what the path is; `bytes` is honoured for a regular file only.
+   */
+  setFile(path: string, file: FakeFile): void {
+    this.#files.set(path, {
+      absolutePath: path,
+      version: file.version ?? `fake-${file.type}`,
+      type: file.type,
+      // A directory has no size in this protocol, so any `bytes` on one is
+      // dropped rather than answered for a shape that cannot carry it.
+      ...file.type === 'file' && file.bytes !== undefined ? { bytes: file.bytes } : {},
+    })
   }
 
   /** Start on an ephemeral loopback port. */
@@ -252,6 +287,22 @@ export class FakeRemoteHost {
             }
             this.#sessions.set(sessionId, session)
             sendJson(res, { sessionId, ...typeof record.agentPreset === 'string' ? { agentPreset: record.agentPreset } : {}})
+            return
+          }
+          case 'file-stat': {
+            const record = body as { path?: unknown }
+            if (typeof record.path !== 'string') {
+              throw new RemoteProtocolError({ code: 'request/invalid', message: 'path is required' })
+            }
+            const known = this.#files.get(record.path)
+            if (known === undefined) {
+              throw new RemoteProtocolError({
+                code: 'workspace-file/not-found',
+                message: `not found: ${record.path}`,
+                details: { path: record.path },
+              })
+            }
+            sendJson(res, known)
             return
           }
           case 'session-archive': {

@@ -136,6 +136,30 @@ describe('remote agent wire contract', () => {
     }
   })
 
+  it('answers file.stat with the path type', async () => {
+    // The working-directory adapter asks this before it commits a mirrored
+    // Session to a directory, so a fake that cannot stat anything leaves that
+    // path untested end to end.
+    host.setFile('/srv/project', { type: 'directory', bytes: 4_096 })
+    host.setFile('/srv/project/a.txt', { type: 'file', bytes: 3 })
+
+    const directory = await client().fileStat('/srv/project')
+    assert.equal(directory.type, 'directory')
+    // A directory has no size in this protocol, so a declared one is dropped
+    // instead of answered.
+    assert.equal(directory.bytes, undefined)
+
+    const regular = await client().fileStat('/srv/project/a.txt')
+    assert.equal(regular.type, 'file')
+    assert.equal(regular.bytes, 3)
+
+    await assert.rejects(client().fileStat('/srv/project/missing'), (error: unknown) => {
+      assert.ok(error instanceof RemoteProtocolError)
+      assert.equal(error.code, 'workspace-file/not-found')
+      return true
+    })
+  })
+
   it('surfaces authentication and protocol failures', async () => {
     await assert.rejects(client('wrong').health(), (error: unknown) => {
       assert.ok(error instanceof RemoteProtocolError)

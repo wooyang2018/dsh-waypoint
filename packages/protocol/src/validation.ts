@@ -303,12 +303,20 @@ export function isSessionStreamFrame(value: unknown): value is SessionStreamFram
 }
 
 
-/** Guard for one remote file stat. */
+/**
+ * Guard for one remote file stat.
+ *
+ * `type` is optional because an older agent omits it; a value other than the
+ * three known kinds is still a malformed envelope, so it is rejected rather than
+ * coerced. The local adapter's `?? 'file'` fallback is what covers absence.
+ */
 export function isRemoteFileStat(value: unknown): value is RemoteFileStat {
   return isRecord(value)
     && isString(value.absolutePath)
     && isString(value.version)
     && (value.bytes === undefined || typeof value.bytes === 'number')
+    && (value.type === undefined
+      || value.type === 'file' || value.type === 'directory' || value.type === 'other')
 }
 
 /** Guard for one remote text page. */

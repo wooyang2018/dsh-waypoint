@@ -8,6 +8,7 @@ import {
   RemoteAgentClient,
   directoryListPath,
   fileWatchPath,
+  isRemoteFileStat,
   matchAgentRoute,
   terminalAttachPath,
   terminalInputPath,
@@ -130,5 +131,24 @@ describe('RemoteAgentClient file and terminal calls', () => {
     const frames = []
     for await (const frame of client.attachTerminal('t1', new AbortController().signal)) frames.push(frame)
     assert.deepEqual(frames.map(frame => frame.type), ['snapshot', 'output', 'state'])
+  })
+})
+
+describe('file stat guard', () => {
+  // The field is optional on the wire so an older agent stays readable; making it
+  // required would turn a cosmetic gap into a protocol error against every agent
+  // that has not been reinstalled.
+  it('accepts a stat without a type', () => {
+    assert.equal(isRemoteFileStat({ absolutePath: '/x', version: '1:2', bytes: 2 }), true)
+  })
+
+  it('accepts every reported type', () => {
+    for (const type of ['file', 'directory', 'other']) {
+      assert.equal(isRemoteFileStat({ absolutePath: '/x', version: '1:2', type }), true, type)
+    }
+  })
+
+  it('rejects a type outside the union', () => {
+    assert.equal(isRemoteFileStat({ absolutePath: '/x', version: '1:2', type: 'symlink' }), false)
   })
 })
