@@ -39,7 +39,7 @@ import {
   type FsPathInfo,
   type FsTarget,
 } from '@deepseek-ai/dsh-fs'
-import type { AgentCapability, RemoteAgentClient } from '@dsh-waypoint/protocol'
+import type { AgentCapability, RemoteAgentClient, RemoteFileStat } from '@dsh-waypoint/protocol'
 import type { RemoteHostsService } from '../service.ts'
 import type { RemoteMirrorService } from '../mirror/service.ts'
 import { LocalError } from '../errors.ts'
@@ -268,6 +268,12 @@ export function installRemoteFileSystem(
    * optional `.gitattributes` inside `try/catch` and tolerates only
    * `FsError` + `FS_NOT_FOUND`. A raw protocol error therefore made a
    * repository without that file fail its entire diff.
+   *
+   * A directory answered to a *read* is the other protocol code that reaches a
+   * caller now that `fileStat` reports a type instead of throwing. It becomes
+   * `FS_NOT_REGULAR_FILE`, not `FS_NOT_FOUND`: the path exists, and telling a
+   * reader it is absent sends them to check a path that is correct.
+   *
    * @param read - the agent call.
    * @param remotePath - the path being read, for the message.
    * @returns the agent's result.
@@ -280,7 +286,29 @@ export function installRemoteFileSystem(
       if (isRemoteNotFound(error)) {
         throw new FsError(`not found on the remote host: ${remotePath}`, 'FS_NOT_FOUND', { cause: error })
       }
+      if (isRemoteNotRegularFile(error)) {
+        throw new FsError(`not a regular file on the remote host: ${remotePath}`, 'FS_NOT_REGULAR_FILE', { cause: error })
+      }
       throw error
+    }
+  }
+
+  /**
+   * Map one agent stat onto the filesystem contract's vocabulary.
+   *
+   * `FsInfo.type` and `FsPathInfo.type` use the same three names the wire now
+   * carries, so this is a passthrough rather than a mapping. An agent older than
+   * the `type` field reports none, and `file` is what this adapter has always
+   * answered for it — inventing a directory out of silence would be worse.
+   */
+  const statInfo = (result: RemoteFileStat): FsInfo => {
+    const type = result.type ?? 'file'
+    return {
+      version: FsVersion(result.version),
+      type,
+      // `size` is documented as the byte size of a *regular* file, so a
+      // directory's `st_size` is deliberately not passed on.
+      ...result.bytes === undefined ? {} : { size: result.bytes },
     }
   }
 
@@ -288,7 +316,7 @@ export function installRemoteFileSystem(
     const decoded = decodeTarget(target)
     if (decoded === undefined) return await original.stat(target, signal)
     const result = await reading(() => agentFor(hosts, decoded.hostId, 'file.stat').fileStat(decoded.remotePath, signal), decoded.remotePath)
-    return { version: FsVersion(result.version), type: 'file', ...result.bytes === undefined ? {} : { size: result.bytes } }
+    return statInfo(result)
   }
 
   const lstat = async (path: string, opts?: { cwd?: string }, signal?: AbortSignal): Promise<FsPathInfo | undefined> => {
@@ -296,11 +324,9 @@ export function installRemoteFileSystem(
     if (target === undefined) return await original.lstat(path, opts, signal)
     const decoded = decodeTarget(target) as DecodedTarget
     const result = await reading(() => agentFor(hosts, decoded.hostId, 'file.stat').fileStat(decoded.remotePath, signal), decoded.remotePath)
-    return {
-      version: FsVersion(result.version),
-      type: 'file',
-      ...result.bytes === undefined ? {} : { size: result.bytes },
-    }
+    // The agent's stat follows the final component, so it can never report
+    // `symlink`; the three values it can report are a subset of `FsPathInfo`'s.
+    return statInfo(result)
   }
 
   const readText = async (target: FsTarget, signal?: AbortSignal): Promise<string> => {
@@ -312,7 +338,10 @@ export function installRemoteFileSystem(
     const chunks: string[] = []
     let offset = 1
     for (;;) {
-      const page = await client.fileRead(decoded.remotePath, offset, 2_000, signal)
+      // Through `reading` so a directory or a missing path reaches the caller in
+      // the Filesystem vocabulary it already branches on, exactly as the stat
+      // above does.
+      const page = await reading(() => client.fileRead(decoded.remotePath, offset, 2_000, signal), decoded.remotePath)
       if (page.lines === 0) break
       chunks.push(page.text)
       if (page.eof) break
@@ -342,7 +371,7 @@ export function installRemoteFileSystem(
     const decoded = decodeTarget(target)
     if (decoded === undefined) return await original.readByteRange(target, range, signal)
     const length = Math.min(range.length, AGENT_PAGE_BYTES)
-    return await readWindow(hosts, decoded, range.offset, length, signal)
+    return await reading(() => readWindow(hosts, decoded, range.offset, length, signal), decoded.remotePath)
   }
 
   const listDir = async (target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> => {
@@ -432,6 +461,20 @@ function isRemoteNotFound(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false
   const code = (error as { code?: unknown }).code
   return code === 'workspace-file/not-found' || code === 'FS_NOT_FOUND'
+}
+
+/**
+ * Whether an agent failure means the remote path is not a regular file.
+ *
+ * The agent raises this for a read of a directory or a special file. It is a
+ * distinct answer from absence, so it is bridged to the distinct code rather
+ * than folded into `FS_NOT_FOUND`.
+ * @param error - the value the agent call rejected with.
+ * @returns whether the remote path is not a regular file.
+ */
+function isRemoteNotRegularFile(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  return (error as { code?: unknown }).code === 'workspace-file/not-regular-file'
 }
 
 /** Resolve an agent client or fail with a visible "Reinstall" instruction. */
