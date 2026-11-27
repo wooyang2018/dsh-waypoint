@@ -20,9 +20,10 @@ import { installRemoteSandboxPolicy } from './remote/sandbox-policy.ts'
 import { installRemoteFileSystem } from './remote/fs.ts'
 import { installRemoteSubprocess } from './remote/subprocess.ts'
 import { installRemoteWorkspaceChanges, prefetchChangesSummary, RemoteChangesCache } from './remote/workspace-changes.ts'
-import { checkPatchContract, describePatchContract, REQUIRED_COMMAND_METHODS, REQUIRED_SKILL_CATALOG_METHODS } from './remote/patch-contract.ts'
+import { checkPatchContract, describePatchContract, REQUIRED_COMMAND_METHODS, REQUIRED_SKILL_CATALOG_METHODS, REQUIRED_WORKING_DIRECTORY_METHODS } from './remote/patch-contract.ts'
 import { installRemoteTerminalController } from './remote/terminal-controller.ts'
 import { installRemoteCatalog } from './remote/catalog.ts'
+import { installRemoteWorkingDirectory } from './remote/working-directory.ts'
 import { RemoteTerminals } from './remote/terminal.ts'
 import { RemoteHostsService } from './service.ts'
 import { installRemoteToolGuards, registerRemoteTools } from './tools.ts'
@@ -127,6 +128,35 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
       () => installRemoteFileSystem(child, mirrors, service),
       'dsh-waypoint: remote filesystem reads',
     )
+  })
+  // A mirrored Session's committed directory is the *remote* absolute path: the
+  // mirror replays the remote's own `working-directory/change` events. The stock
+  // `ensure` then validates that path with this machine's `ctx.fs`, and it is on
+  // the path of every tool that resolves a cwd, of the `@` menu and of the `/`
+  // skill list. The adapter answers from the owning host instead, and is skipped
+  // entirely in a composition that mounts no `workingDirectory`.
+  ctx.inject(['workingDirectory'], child => {
+    child.effect(() => {
+      const directory = child.get('workingDirectory') as unknown as object | undefined
+      const report = directory === undefined
+        ? { active: false, missing: [{ method: 'workingDirectory', reason: 'absent' as const }] }
+        : checkPatchContract(directory, REQUIRED_WORKING_DIRECTORY_METHODS)
+      if (!report.active) {
+        ctx.logger.warn(
+          'dsh-waypoint: remote working-directory routing is %s; a mirrored Session validates its remote cwd against this disk',
+          describePatchContract(report),
+        )
+      }
+      service.setWorkingDirectoryRouting({
+        status: report.active ? 'active' : 'bypassed',
+        ...report.missing.length === 0 ? {} : { missing: report.missing.map(item => item.method) },
+      })
+      const restore = installRemoteWorkingDirectory(child, mirrors, service)
+      return () => {
+        restore()
+        service.setWorkingDirectoryRouting({ status: 'bypassed' })
+      }
+    }, 'dsh-waypoint: remote working directory')
   })
   ctx.inject(['workspaceChanges'], child => {
     child.effect(

@@ -134,11 +134,21 @@ export interface HostsState {
    * empty tree with no explanation. Set by the install step, which checks the
    * live `workspaceFiles` service against {@link REQUIRED_WORKSPACE_FILE_METHODS}.
    */
-  readonly fileRouting: FileRoutingState
+  readonly fileRouting: AdapterRoutingState
+  /**
+   * Whether the host-side working-directory adapter is installed and usable.
+   *
+   * `bypassed` means a mirrored Session's recorded remote cwd is validated
+   * against *this* machine's disk, so tools, the `@` menu and the `/` skill list
+   * fail on a directory that exists only on the remote. Set by the install step,
+   * which checks the live `workingDirectory` service against
+   * {@link REQUIRED_WORKING_DIRECTORY_METHODS}.
+   */
+  readonly workingDirectoryRouting: AdapterRoutingState
 }
 
-/** Outcome of installing the host-side file routing adapter. */
-export interface FileRoutingState {
+/** Outcome of installing one host-side adapter that replaces service methods. */
+export interface AdapterRoutingState {
   readonly status: 'active' | 'bypassed'
   /** Expected methods the live service did not expose, when bypassed. */
   readonly missing?: readonly string[]
@@ -199,7 +209,9 @@ export class RemoteHostsService {
   #discovery: { readonly at: number; readonly value: SshDiscoveryResult } | undefined
   #discoveryInFlight: Promise<SshDiscoveryResult> | undefined
   /** Set once the file adapter's install step has inspected the live service. */
-  #fileRouting: FileRoutingState = { status: 'bypassed' }
+  #fileRouting: AdapterRoutingState = { status: 'bypassed' }
+  /** Set once the working-directory adapter's install step has inspected the live service. */
+  #workingDirectoryRouting: AdapterRoutingState = { status: 'bypassed' }
   readonly #records = new Map<string, HostRecord>()
   readonly #runtime = new Map<string, HostRuntime>()
   readonly #tunnels = new Map<string, Tunnel>()
@@ -272,7 +284,12 @@ export class RemoteHostsService {
 
   /** Browser/tool snapshot. */
   state(): HostsState {
-    return { protocolVersion: PROTOCOL_VERSION, hosts: this.list(), fileRouting: this.#fileRouting }
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      hosts: this.list(),
+      fileRouting: this.#fileRouting,
+      workingDirectoryRouting: this.#workingDirectoryRouting,
+    }
   }
 
   /**
@@ -283,8 +300,19 @@ export class RemoteHostsService {
    * adapter (or installed it against an unexpected DSH shape) reports honestly
    * instead of implying remote files work.
    */
-  setFileRouting(next: FileRoutingState): void {
+  setFileRouting(next: AdapterRoutingState): void {
     this.#fileRouting = next
+  }
+
+  /**
+   * Record whether the host-side working-directory adapter is usable.
+   *
+   * Same contract as {@link setFileRouting}: `bypassed` until a check says
+   * otherwise, because an uninstalled adapter validates a remote cwd against
+   * this machine's disk.
+   */
+  setWorkingDirectoryRouting(next: AdapterRoutingState): void {
+    this.#workingDirectoryRouting = next
   }
 
   /** All hosts in creation order. */

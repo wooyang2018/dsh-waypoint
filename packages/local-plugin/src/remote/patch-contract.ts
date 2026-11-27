@@ -113,6 +113,18 @@ export const REQUIRED_COMMAND_METHODS = ['list', 'execute'] as const
  */
 export const REQUIRED_SKILL_CATALOG_METHODS = ['list'] as const
 
+/**
+ * The `workingDirectory` methods the working-directory adapter replaces.
+ *
+ * A mirrored Session's committed directory is the *remote* absolute path, and
+ * the stock `ensure` validates it with this machine's `ctx.fs`. All three names
+ * are required because the adapter owns them as one surface: `ensure` is the
+ * whole point, `get` is the projection read the adapter must keep unchanged, and
+ * `set` is the `/cd` it refuses. A DSH release that renames any of them must
+ * report "routing is off" rather than leave the cwd quietly local.
+ */
+export const REQUIRED_WORKING_DIRECTORY_METHODS = ['ensure', 'get', 'set'] as const
+
 /** One expected method the service did not offer. */
 export interface MissingPatchMethod {
   readonly method: string
