@@ -8,3 +8,13 @@ export { FakeRemoteHost, startFakeHost } from './fake-host.ts'
 export type { FakeHostAddress, FakeHostOptions, FakeRequest } from './fake-host.ts'
 export { createFixtures, summarize } from './fixtures.ts'
 export type { FakeSession, FakeWorkspace, Fixtures } from './fixtures.ts'
+export { FakeQueueError, FakeSessionController } from './session-controller.ts'
+export type {
+  FakeQueueAction,
+  FakeQueueContentPart,
+  FakeQueueInbox,
+  FakeQueueMessage,
+  FakeQueueReceipt,
+  FakeQueueRemoval,
+  FakeQueueRequest,
+} from './session-controller.ts'
