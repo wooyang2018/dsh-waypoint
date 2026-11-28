@@ -206,8 +206,25 @@ interface PendingUser {
    * file reference is replaced on the way out, and the remote echoes the
    * replacement. `#sendPrompt` settles this to the text it actually sent before
    * the request leaves, so the echo still pairs with this entry.
+   *
+   * It is empty for a prompt that carries only attachments, which is why
+   * {@link PendingUser.signature} exists.
    */
   text: string
+  /**
+   * Stable signature of the parts this prompt sent, so a prompt with no text
+   * still has an identity the echo can be matched against.
+   *
+   * A prompt carrying only an image has `text === ''`, so the text comparison
+   * cannot bind it and the replayed `user/message` used to be appended as a
+   * second node — one image, two bubbles. The empty-text guard cannot simply be
+   * dropped: an empty entry would then claim the first empty-text remote
+   * message whatever it carried, which is worse than the duplicate.
+   *
+   * Derived from {@link attachmentSignature}, which both sides compute from the
+   * same parts, so the two agree by construction.
+   */
+  signature: string
   localSeq: number
 }
 
@@ -1850,7 +1867,7 @@ export class RemoteMirrorService {
   async #sendPrompt(runtime: MirrorRuntime, message: unknown, mode: PromptDeliveryMode): Promise<void> {
     if (this.#detached(runtime)) throw new Error('remote mirror is no longer active')
     if (promptParts(message).length === 0) throw new Error('prompt has no content')
-    const pending: PendingUser = { message, text: promptText(message), localSeq: -1 }
+    const pending: PendingUser = { message, text: promptText(message), signature: '', localSeq: -1 }
     runtime.pendingUsers.push(pending)
     if (!runtime.running) {
       runtime.awaitingTurn = runtime.latestTurn + 1
@@ -1877,7 +1894,12 @@ export class RemoteMirrorService {
       // would leave this entry unmatched — the replayed `user/message` would then
       // be appended as history instead of reusing the bubble the user is looking
       // at. Assignment before the send is what keeps that pairing intact.
+      //
+      // The signature extends the same discipline to the parts that carry no
+      // text: it is computed from what is actually forwarded, so an
+      // attachment-only prompt is still identifiable when it comes back.
       pending.text = text
+      pending.signature = attachmentSignature(content)
       let candidate = selection
       // Skip a selection the remote catalog does not offer, so the common case
       // costs no failed round trip at all. The rejection fallback below stays as
@@ -5122,14 +5144,16 @@ function appendRemoteEvent(
   // optimistic message instead so the client settles its pending submission,
   // and keep the remote event's position in the turn.
   //
-  // Match by text, never by position: a cancelled or rejected prompt leaves an
-  // entry behind, and shifting the queue would make that entry claim a message
-  // another client sent — silently replacing real remote content.
+  // Match by text and attachment identity, never by position: a cancelled or
+  // rejected prompt leaves an entry behind, and shifting the queue would make
+  // that entry claim a message another client sent — silently replacing real
+  // remote content.
   if (event.type === 'user/message' && runtime.pendingUsers.length > 0) {
     const source = (event.data as { source?: { kind?: unknown } }).source
     if (source?.kind === 'user') {
       const text = promptTextFromRemote(event.data)
-      const index = runtime.pendingUsers.findIndex(pending => pending.text !== '' && pending.text === text)
+      const signature = promptSignatureFromRemote(event.data)
+      const index = pendingUserIndex(runtime.pendingUsers, text, signature)
       if (index >= 0) {
         const [pending] = runtime.pendingUsers.splice(index, 1)
         if (pending !== undefined && pending.localSeq >= 0) return pending.localSeq
@@ -5276,10 +5300,10 @@ function isUserPromptMessage(message: unknown): boolean {
 /**
  * Flatten a prompt's text parts into one comparable string.
  *
- * Only text is compared: an image part has no stable identity a remote
- * `user/message` would echo back, and a prompt carrying one still has to pair
- * with something. Comparing text alone is enough to reject the wrong entry,
- * which is the failure to prevent.
+ * Only text is compared here. A part that carries an attachment has no id the
+ * remote echoes back — the id it echoes names bytes in *its* store — so
+ * {@link attachmentSignature} describes such a part by its kind, media type and
+ * display name instead, and {@link pendingUserIndex} combines the two.
  */
 function promptTextFromRemote(data: unknown): string {
   const content = typeof data === 'object' && data !== null
@@ -5303,6 +5327,87 @@ function promptText(message: unknown): string {
     .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
     .map(part => part.text.trim())
     .join('\n')
+}
+
+/**
+ * Stable signature of one prompt's non-text parts, in order.
+ *
+ * Each part is described as `type:mediaType:name` with empty fields when the
+ * part has none, so the description carries what the remote echoes back — the
+ * kind, the media type of an image, and the display name — and nothing that
+ * would differ between the two sides, such as a local attachment id or the
+ * bytes themselves. Parts are joined in order, because a prompt may carry
+ * several and "an image and a file" must not read the same as "a file and an
+ * image".
+ *
+ * Computed by the same function on both sides: the forward side passes what
+ * `#promptContent` returned, the echo side passes the replayed `user/message`
+ * content, so the two agree by construction. Both spellings of a part are read
+ * because they differ: a forwarded image carries `mediaType` and `name` on the
+ * part, while a persisted one keeps them inside its `attachment` reference.
+ *
+ * @param content - ordered content parts, forwarded or echoed.
+ * @returns the signature; empty when the prompt carries no attachment part.
+ */
+function attachmentSignature(content: readonly unknown[]): string {
+  const described: string[] = []
+  for (const part of content) {
+    if (typeof part !== 'object' || part === null) continue
+    const record = part as { type?: unknown; mediaType?: unknown; name?: unknown; attachment?: unknown }
+    if (record.type !== 'image' && record.type !== 'file') continue
+    const attachment = typeof record.attachment === 'object' && record.attachment !== null
+      ? record.attachment as { mediaType?: unknown; name?: unknown }
+      : undefined
+    const mediaType = typeof record.mediaType === 'string'
+      ? record.mediaType
+      : typeof attachment?.mediaType === 'string' ? attachment.mediaType : ''
+    const name = typeof record.name === 'string'
+      ? record.name
+      : typeof attachment?.name === 'string' ? attachment.name : ''
+    described.push(`${record.type}:${mediaType}:${name}`)
+  }
+  return described.join('\n')
+}
+
+/** Signature of the attachment parts a replayed `user/message` echoes. */
+function promptSignatureFromRemote(data: unknown): string {
+  const content = typeof data === 'object' && data !== null
+    ? (data as { content?: unknown }).content
+    : undefined
+  return Array.isArray(content) ? attachmentSignature(content) : ''
+}
+
+/**
+ * Where in the pending queue a replayed `user/message` belongs.
+ *
+ * Text and attachment signature together, in that order of emphasis:
+ *
+ * - A prompt that carries text is identified by that text, exactly as before.
+ *   The signature is tried first and is the better answer when it matches, but
+ *   the remote is allowed to re-encode an image (normalization picks the media
+ *   type) or sanitize a display name, and one drifted part must not turn an
+ *   ordinary `text + image` prompt into the duplicate bubble this matching
+ *   exists to remove. Falling back to text keeps that case where it has always
+ *   been.
+ * - A prompt with no text — one image, one file — has no such fallback and
+ *   needs the signature, or the replayed message cannot bind to anything. That
+ *   is the defect: with the text comparison alone, `text === ''` never matched,
+ *   so the echo was appended as a second node.
+ * - An entry with neither text nor a matching signature is left alone: the
+ *   remote message is appended as history. That is the safe direction, and it
+ *   is what keeps an empty queue from claiming the first attachment the remote
+ *   sends whatever it carries.
+ *
+ * @param pending - the queue, oldest first.
+ * @param text - flattened text of the replayed message.
+ * @param signature - attachment signature of the replayed message.
+ * @returns the index to consume, or -1 when nothing matches.
+ */
+function pendingUserIndex(pending: readonly PendingUser[], text: string, signature: string): number {
+  const exact = pending.findIndex(entry => entry.text === text && entry.signature === signature)
+  if (exact >= 0) return exact
+  if (text === '') return -1
+  return pending.findIndex(entry => entry.text === text)
 }
 
 /** One prompt part this mirror knows how to forward, in message order. */
