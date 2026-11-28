@@ -4,6 +4,23 @@
 
 ### Fixed
 
+- **A mirrored Session's `@` menu now lists the remote project, and a remote path survives the
+  prompt.** The browser's `@` source is answered by this Host's `fileReferences` provider,
+  `dsh-file-reference-local`, which walks the local tree with `node:fs` — there is no `ctx.fs` seam to
+  intercept — so even with the remote working directory resolved correctly, typing `@` in a mirrored
+  Session offered this machine's files (or none at all) under a path that only means something on the
+  other host. The query now travels to the host that owns the Session over `POST /file-references`,
+  behind a `file.references` capability, and the remote runs the provider its own Web UI runs: ordering,
+  ignore rules and the result cap all stay remote, and a directory candidate keeps the menu open.
+
+  A failed read logs the host and falls back to the local list instead of answering empty, because an
+  empty menu asserts the remote project has no files — a claim about workspace content that a failed
+  read does not support. A path chosen from the remote menu is POSIX-spelled, so the local `@` rewrite
+  now applies only to paths this machine's filesystem could hold (`C:\…` and `\\…` anywhere, `/…` only
+  off Windows); the accepted cost is that a Windows client can no longer `@` a local POSIX path, which
+  a staged attachment still covers. A blank mirror — a remote Session that does not exist yet — keeps
+  the local list rather than materializing one just to read a menu.
+
 - **A mirrored Session's model seat no longer gets stuck on a model the remote cannot run.** The
   remote catalog advertised `agentDefaultModel` verbatim, and that value is composed independently of
   the `llm-pi-ai.providers` map: a provider overlay that mints a different UUID per machine leaves the
