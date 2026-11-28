@@ -291,6 +291,7 @@ implements only the methods the UI actually calls (`RemoteMirrorAgent` in `servi
 | `whenIdle()` | Waits for `running` to become false |
 | `send/followup` | Sends immediately when idle; while running it queues into the local inbox and flushes on `turn/end` |
 | `steer` | Sends immediately with `mode: 'steer'` |
+| `sessionController.updateQueue` | Edits, removes or steers an item still waiting in this façade's inbox (`applyMirrorQueueMutation`); the `turn/end` flush re-reads that inbox, so the remote receives whatever the user left queued |
 | `model.current/select()` | Reads/writes the local `model/selection` event; the event bridge forwards it remotely |
 
 `ctx.agents.enter(agent)` registers it in the local Agent registry (`#mountRuntime`), so the session

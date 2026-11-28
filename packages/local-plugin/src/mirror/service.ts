@@ -245,6 +245,51 @@ export interface RemoteChangeTarget {
   readonly turn: number
 }
 
+/**
+ * One mutation of an item still waiting in a mirror's queue.
+ *
+ * The shape is the request `sessionController.updateQueue` already receives, and
+ * the browser's queue dock sends exactly this for every one of its three
+ * actions. Declared here — structurally, rather than imported from the Session
+ * controller package — for the same reason every adapter in `remote/` declares
+ * its target: this is an instance patch, so the plugin must compile without the
+ * owning package's nominal types, and `patch-contract.ts` is what keeps the
+ * method name honest.
+ */
+export interface MirrorQueueMutationRequest {
+  /** Local Session the item belongs to. */
+  readonly sessionId: string
+  /** Identity of the queued message, as the inbox and the projection both name it. */
+  readonly itemId: string
+  readonly action: MirrorQueueAction
+}
+
+/** One queue action, narrowed to the three variants the protocol defines. */
+export type MirrorQueueAction =
+  /** Replace the queued text; attachments are not editable (native rule). */
+  | { readonly kind: 'edit'; readonly content: readonly MirrorQueueTextBlock[] }
+  | { readonly kind: 'remove' }
+  /** Hand the item to the turn that is already running. */
+  | { readonly kind: 'steer' }
+
+/**
+ * One replacement content block of an edit.
+ *
+ * `type` stays a plain string instead of the literal `'text'`: the Gateway hands
+ * this bundle untyped JSON, and a caller that ignores the contract must reach the
+ * refusal in {@link RemoteMirrorService.applyMirrorQueueMutation} rather than be
+ * silently dropped by this type.
+ */
+export interface MirrorQueueTextBlock {
+  readonly type: string
+  readonly text?: string
+}
+
+/** Receipt one committed queue mutation returns. */
+export interface MirrorQueueMutationValue {
+  readonly accepted: true
+}
+
 interface MirrorRuntime {
   readonly record: MirrorRecord
   readonly agent: MirrorAgent
@@ -468,6 +513,54 @@ interface MirrorInbox {
 
 function messageIdentity(message: unknown): unknown {
   return typeof message === 'object' && message !== null ? (message as { id?: unknown }).id : undefined
+}
+
+/**
+ * Find one queued item the way the native command does: next-turn first, then
+ * next-step.
+ *
+ * The target is returned with the message because `steer` is only legal on a
+ * next-turn item, and the caller must name the list it is about to touch rather
+ * than search a second time.
+ *
+ * @param inbox the mirror's queue.
+ * @param itemId identity the caller named.
+ * @returns the list it is in and the message itself, or undefined.
+ */
+function locateQueuedItem(
+  inbox: MirrorInbox,
+  itemId: unknown,
+): { readonly target: 'next-turn' | 'next-step'; readonly message: unknown } | undefined {
+  for (const target of ['next-turn', 'next-step'] as const) {
+    const list = target === 'next-turn' ? inbox.nextTurn : inbox.nextStep
+    const message = list.find(candidate => messageIdentity(candidate) === itemId)
+    if (message !== undefined) return { target, message }
+  }
+  return undefined
+}
+
+/**
+ * Build one queue refusal in the shape the Gateway's `RemoteError` has.
+ *
+ * Discrimination is structural — the marker plus a string `code` — never
+ * `instanceof`; that is `dsh-typert-protocol`'s own contract (`remoteErrorOf`),
+ * written so a bundle that does not share the Gateway's copy of the class can
+ * still answer a typed failure. It cannot be imported here: the package is not a
+ * dependency of this plugin, and pulling one in for four refusals would be a
+ * runtime dependency the released bundle does not need.
+ *
+ * @param code stable failure code the client already branches on.
+ * @param message human diagnostic carried across the wire.
+ * @param details structured payload typed by the code.
+ * @returns the error to throw.
+ */
+function queueMutationError(code: string, message: string, details: Record<string, unknown>): Error {
+  return Object.assign(new Error(message), {
+    name: 'RemoteError',
+    code,
+    details,
+    isDSHRemoteError: true as const,
+  })
 }
 
 function createMirrorInbox(session: Session): MirrorInbox {
@@ -1852,6 +1945,110 @@ export class RemoteMirrorService {
 
   #detached(runtime: MirrorRuntime): boolean {    return this.#disposed || this.#runtimes.get(runtime.record.localSessionId) !== runtime
       || this.#anchorRemoved(runtime.record.hostId, runtime.record.anchor)
+  }
+
+  /**
+   * Resolve the runtime that owns one local Session, for the queue seam.
+   *
+   * The gateway's `sessionController.updateQueue` addresses a Session by id, and
+   * a mirrored Session's pending items live in that runtime's own inbox rather
+   * than in anything the Host service can see. `undefined` means "not a mirror":
+   * the caller must then run the stock method, which is the only implementation
+   * that knows a local Session's queue.
+   *
+   * A **stopped** runtime is still returned. Stopping ends the remote stream, not
+   * the local queue: an item left there can still be edited or removed, and a
+   * later prompt revives the runtime (`#sendPrompt` clears `stopped`), so its
+   * inbox remains the one owner of that item.
+   *
+   * @param localSessionId the local Session the call names.
+   * @returns the runtime, or undefined when the Session is not mirrored (or no
+   *   longer mounted).
+   */
+  runtimeForLocalSession(localSessionId: string): MirrorRuntime | undefined {
+    return this.#runtimes.get(localSessionId)
+  }
+
+  /**
+   * Apply one queue mutation to a mirrored Session's inbox.
+   *
+   * This is the mirror's counterpart of `sessionController.updateQueue`'s native
+   * body: same refusals, same order, same in-place edit. Nothing crosses the
+   * tunnel — an item that has not been flushed is not remote state yet, which is
+   * the whole reason the mutation is answered here (§4 of the queue spec rejects
+   * forwarding it, because the remote has no such item to find).
+   *
+   * The body is **synchronous**: it only touches the inbox arrays. That is
+   * load-bearing, not incidental. `#appendEvent`'s `turn/end` flush reads
+   * `hasPending` / `nextTurn[0]` / `remove` with no `await` between them, and
+   * both run on the same turn queue, so a mutation either lands before the flush
+   * reads (and the flush sends the new content, or nothing) or after it (and
+   * answers `session/queue-item-not-found`). There is no interleaving in which a
+   * deleted message is still sent.
+   *
+   * @param runtime mirror owning the queued item.
+   * @param request the Session, item and requested mutation.
+   * @returns the acceptance receipt the Remote returns on success.
+   * @throws a `RemoteError`-shaped failure for every case `§7` names: a non-text
+   *   or empty edit, an item that is no longer pending, and a steer the running
+   *   turn cannot accept.
+   */
+  applyMirrorQueueMutation(
+    runtime: MirrorRuntime,
+    request: MirrorQueueMutationRequest,
+  ): MirrorQueueMutationValue {
+    const { action } = request
+    // Both native refusals run before the inbox is touched, so a refused edit
+    // leaves the queue exactly as the user found it.
+    if (action.kind === 'edit') {
+      if (action.content.some(block => block.type !== 'text')) {
+        throw queueMutationError(
+          'session/attachment-invalid',
+          'queue edits accept text content only',
+          { reason: 'QUEUE_EDIT_NON_TEXT' },
+        )
+      }
+      // The native rule is "some part supplies non-whitespace text"; with the
+      // text-only check above, that reduces to this.
+      if (!action.content.some(block => (block.text ?? '').trim() !== '')) {
+        throw queueMutationError(
+          'gateway/bad-request',
+          'queue edit content must include non-whitespace text',
+          {},
+        )
+      }
+    }
+    const inbox = runtime.agent.inbox
+    const located = locateQueuedItem(inbox, request.itemId)
+    if (located === undefined) {
+      throw queueMutationError('session/queue-item-not-found', 'queued item is no longer pending', {
+        itemId: request.itemId,
+      })
+    }
+    if (action.kind === 'steer') {
+      // The native guard: only a next-turn item, and only while the Agent is
+      // running. A mirror's `status` follows the remote turn, so the same guard
+      // means the same thing here.
+      if (located.target !== 'next-turn' || !runtime.running) {
+        throw queueMutationError('session/steer-unavailable', 'current turn no longer accepts steering', {
+          itemId: request.itemId,
+        })
+      }
+      inbox.remove(request.itemId)
+      // The façade's own steer path, so there is one delivery route rather than
+      // two: `RemoteMirrorAgent.steer` reaches `#sendPrompt(…, 'steer')` here too.
+      this.prompt(runtime, located.message, 'steer')
+      return { accepted: true }
+    }
+    if (action.kind === 'edit') {
+      inbox.replace(request.itemId, {
+        ...typeof located.message === 'object' && located.message !== null ? located.message : {},
+        content: [...action.content],
+      })
+      return { accepted: true }
+    }
+    inbox.remove(request.itemId)
+    return { accepted: true }
   }
 
   /** Route one prompt from the local Agent façade to the remote session. */

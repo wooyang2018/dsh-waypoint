@@ -24,3 +24,8 @@ Features:
 
 Use it for protocol contract tests, local plugin integration tests without SSH, and UI fixtures. See
 [`test/contract.test.ts`](test/contract.test.ts).
+
+`FakeSessionController` is the other half: an in-memory Host `sessionController` with real inboxes,
+which answers `updateQueue` with the same actions, refusals and codes the shipped service does. Use it
+to test anything that patches that Remote — a double that accepted every call would hide the refusals a
+client actually branches on.

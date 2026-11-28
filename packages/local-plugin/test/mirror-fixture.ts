@@ -169,6 +169,14 @@ export function harness() {
   const prompts: Array<{
     sessionId: string
     text: string
+    /**
+     * Delivery mode the mirror asked for.
+     *
+     * Recorded because "sent" is not enough to tell the two paths apart: a queued
+     * item flushed at `turn/end` and an item promoted to `steer` both arrive as one
+     * prompt with the same text, and only this field says which one happened.
+     */
+    mode?: 'queue' | 'steer'
     selection?: { provider: string; model: string }
     /**
      * Ordered content the mirror forwarded.
@@ -484,7 +492,7 @@ export function harness() {
       _host: string,
       sessionId: string,
       text: string,
-      _mode?: unknown,
+      mode?: unknown,
       selection?: { provider: string; model: string },
       content?: readonly { readonly type: string; readonly [key: string]: unknown }[],
     ) {
@@ -497,6 +505,7 @@ export function harness() {
       prompts.push({
         sessionId,
         text,
+        ...mode === 'queue' || mode === 'steer' ? { mode } : {},
         ...selection === undefined ? {} : { selection },
         ...content === undefined ? {} : { content },
       })
