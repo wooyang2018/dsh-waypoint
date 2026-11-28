@@ -21,6 +21,10 @@ import {
   sessionPath,
   sessionPromptPath,
   sessionUnarchivePath,
+  sessionGoalsPath,
+  sessionJobsPath,
+  sessionJobFollowPath,
+  sessionTeamPath,
   workspaceSessionsPath,
   directoryListPath,
   fileWatchPath,
@@ -76,6 +80,8 @@ import type {
   RemoteFileSearchResult,
 } from './files.ts'
 import type { RemoteFileReferenceRequest, RemoteFileReferenceResult } from './file-references.ts'
+import type { RemoteGoalRequest, RemoteGoalResult, RemoteTeamModeRequest, RemoteTeamModeResult } from './session-state.ts'
+import type { RemoteJobFollowFrame, RemoteJobListFrame } from './jobs.ts'
 import type {
   RemoteTerminalCreateRequest,
   RemoteTerminalFrame,
@@ -119,6 +125,10 @@ import {
   isRemoteFileWatchFrame,
   isRemoteFileSearchResult,
   isRemoteFileReferenceResult,
+  isRemoteGoalResult,
+  isRemoteTeamModeResult,
+  isRemoteJobListFrame,
+  isRemoteJobFollowFrame,
   isRemoteTerminalFrame,
   isRemoteTerminalInfo,
   isRemoteTerminalListResult,
@@ -288,6 +298,120 @@ export class RemoteAgentClient {
       method: 'POST',
       body: {},
     })
+  }
+
+  /**
+   * Run one goal operation on the Session's owning host.
+   *
+   * The owning process appends the `goal/change` event itself, so the mirrored
+   * copy of the log receives it as an ordinary replayed event and no second
+   * writer exists on this side.
+   * @param sessionId - remote Session that owns the goal.
+   * @param request - the operation plus the fields it needs.
+   * @returns the owning host's resulting goal (or the `clear` tombstone).
+   */
+  goalOperation(sessionId: string, request: RemoteGoalRequest): Promise<RemoteGoalResult> {
+    return this.#request(sessionGoalsPath(sessionId), isRemoteGoalResult, {
+      method: 'POST',
+      body: request as unknown as Record<string, unknown>,
+    })
+  }
+
+  /**
+   * Set one remote Session tree's Team mode on its owning host.
+   *
+   * A local `team/mode` append would toggle a mirrored banner and leave the
+   * remote's own Team machinery untouched, which is the worst of both.
+   * @param sessionId - remote Session whose tree receives the selection.
+   * @param enabled - selected Team mode.
+   */
+  setTeamMode(sessionId: string, enabled: boolean): Promise<RemoteTeamModeResult> {
+    return this.#request(sessionTeamPath(sessionId), isRemoteTeamModeResult, {
+      method: 'POST',
+      body: { enabled } satisfies RemoteTeamModeRequest,
+    })
+  }
+
+  /**
+   * Follow one remote Session's job roster.
+   *
+   * The stream never ends on its own: the remote panel's roster is live, and the
+   * carrier closes it when the caller is done. A caller that drops the stream
+   * must abort it.
+   * @param sessionId - remote Session whose visible job set to mirror.
+   * @param signal - caller cancellation, forwarded to the carrier.
+   */
+  async *followJobs(sessionId: string, signal: AbortSignal): AsyncGenerator<RemoteJobListFrame> {
+    for await (const frame of this.#openFrames(
+      sessionJobsPath(sessionId),
+      signal,
+      isRemoteJobListFrame,
+      `job roster of ${sessionId}`,
+    )) {
+      yield frame
+    }
+  }
+
+  /**
+   * Follow one remote job's retained output, then its settlement.
+   *
+   * `jobId` is foreign to this process: it names a job in the remote registry,
+   * and only that registry can report its output or its end.
+   * @param sessionId - remote Session the job belongs to.
+   * @param jobId - remote registry id (`bash-1a2b…`).
+   * @param from - absolute byte offset to resume from, or `undefined` for the retained head.
+   * @param signal - caller cancellation.
+   */
+  async *followJobOutput(
+    sessionId: string,
+    jobId: string,
+    from: number | undefined,
+    signal: AbortSignal,
+  ): AsyncGenerator<RemoteJobFollowFrame> {
+    for await (const frame of this.#openFrames(
+      sessionJobFollowPath(sessionId, jobId, from),
+      signal,
+      isRemoteJobFollowFrame,
+      `output of job ${jobId}`,
+    )) {
+      yield frame
+    }
+  }
+
+  /**
+   * Read one SSE stream of validated JSON frames.
+   *
+   * The single place the two frame streams decode and validate, so a malformed
+   * remote frame fails the same way whichever stream carried it.
+   * @param path - agent route, including its query.
+   * @param signal - caller cancellation.
+   * @param guard - frame validator.
+   * @param subject - what the stream carries, for the failure message.
+   */
+  async *#openFrames<T>(
+    path: string,
+    signal: AbortSignal,
+    guard: (value: unknown) => value is T,
+    subject: string,
+  ): AsyncGenerator<T> {
+    const response = await this.#openStream(path, signal)
+    const body = response.body
+    if (body === null) {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: `remote agent returned an empty ${subject} stream` })
+    }
+    for await (const message of parseSseStream(body)) {
+      if (message.data === '') continue
+      let frame: unknown
+      try {
+        frame = JSON.parse(message.data)
+      } catch (error) {
+        throw new RemoteProtocolError({ code: 'request/invalid', message: `remote agent sent malformed ${subject} JSON`, cause: error })
+      }
+      if (!guard(frame)) {
+        throw new RemoteProtocolError({ code: 'request/invalid', message: `remote agent sent an unknown ${subject} frame` })
+      }
+      yield frame
+    }
   }
 
   /** Follow the remote approval question stream. */
