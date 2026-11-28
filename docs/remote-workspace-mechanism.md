@@ -1423,6 +1423,7 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | `/cd` is refused inside a mirrored Session | The remote owns that directory; forwarding needs a `session.cd` route and an owner for the event (6.1) |
 | A remote directory cannot be stat-ed through an agent older than the `type` field | The field is optional on the wire and read as `file`, which reproduces the previous behaviour (6.1) |
 | A remote cwd outside every mirrored workspace is not reachable from the local file menu | The `fs` adapter attributes a remote path to a host through its workspace roots, so it refuses to guess one; the agent's own tools still run in that directory |
+| An `@` mention from an *ungrouped* mirrored Session's menu is treated as a local path on a POSIX client | The mention is attributed by the Session's **real** workspace, and an ungrouped record deliberately names no checkout; the local test then speaks and either refuses the prompt or uploads this machine's file. Grouping the directory into a workspace removes the gap |
 | Remote diffs / some advanced file actions still use the native tool results | Only `workspaceFiles` and the terminal are intercepted |
 | SSH reachability required; no relay/NAT traversal | Only ssh `-L`/`-R` today |
 | Windows remotes unsupported | The bootstrap is POSIX bash, and Node.js is handled as Linux/macOS |
