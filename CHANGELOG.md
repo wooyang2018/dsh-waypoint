@@ -4,6 +4,22 @@
 
 ### Fixed
 
+- **Restoring an archived mirror puts its Agent back, so the conversation can be reopened.** Archiving a
+  mirrored Session detached the façade Agent this plugin registers, and a mirrored Session carries no
+  persisted log — `#ensureMirrorOnce` seeds it in memory from the remote snapshot. A restored Session
+  therefore had nothing for the Host to resume: the row came back in the sidebar, and the first open
+  answered `resume failed for session "…": SessionPersistenceNotFoundError … (gateway/internal)`, which
+  reads like lost data and is not. Unarchiving now remounts the mirror before the action resolves, and the
+  open heartbeat retries the mount when a client switches to a mirror that has none.
+
+- **One unreadable remote Session no longer stops a host's whole mirror reconciliation.** The sync pass
+  awaited each Session inside one unguarded loop, so a single failure — an archived remote, an agent
+  error, a poison event — rejected the pass and every Session listed after it in that host's catalog
+  silently stopped reconciling. Mirrors the user was about to open never got their façade back, nothing
+  said why, and the symptom was a Session that stayed broken no matter how long the user waited. Each
+  Session is now mirrored inside its own failure boundary, a warning names the ones that were skipped, and
+  a stale façade still occupying its own Agent id is detached and retried instead of failing the mount.
+
 - **A mirrored Session no longer accepts writes it cannot forward.** Several Remote namespaces are
   addressed by `Agent`, and for a mirror that Agent is the local façade — registered in the `agents`
   registry, so every `assertLive` guard passes and the service reads or writes *this* machine's state.

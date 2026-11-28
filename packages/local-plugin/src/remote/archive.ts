@@ -13,6 +13,12 @@
  * installed as a pair, and the mirror service only forwards to a host whose
  * agent advertises both capabilities.
  *
+ * WHY UNARCHIVE ALSO REMOUNTS THE MIRROR: the local Session carries no persisted
+ * log — `#ensureMirrorOnce` seeds it in memory from the remote snapshot — so the
+ * façade Agent this plugin registers is the only thing DSH can resolve for it.
+ * Archiving detaches that façade (`#stopRuntime`), and nothing else puts it back
+ * before the user's next click.
+ *
  * WHY THIS LAYER IS ENOUGH: the sidebar's archive button resolves
  * `uiWorkspace.archiveSession` → the Host registry's own method, and this
  * module replaces that method on the live service instance — the same
@@ -114,6 +120,21 @@ export function installRemoteSessionArchive(ctx: Context, mirrors: RemoteMirrorS
       )
     }
     await originalUnarchive(sessionId)
+    // Restoring the archive flag is not enough to make the Session usable again:
+    // archiving detached this mirror's façade (`archiveRemoteFor` →
+    // `#stopRuntime`) and a mirrored Session has no persisted log to resume from,
+    // so DSH's own `agents.resume()` fails with `SessionPersistenceNotFoundError`
+    // and the first open answers `resume failed … (gateway/internal)` until some
+    // later sync pass happens to rebuild the mirror. Put the Agent back before
+    // this action resolves; the sync pass and the open heartbeat remain the
+    // backstop when the host is unreachable right now.
+    try {
+      await mirrors.remountMirror(id)
+    } catch (error) {
+      // remountMirror already reports its own failures; the local restore stands
+      // either way, so an unarchive never fails because a remount did.
+      ctx.logger.warn('dsh-waypoint: could not remount %s after unarchive: %s', id, String(error))
+    }
   }
 
   const installed: Record<string, unknown> = {

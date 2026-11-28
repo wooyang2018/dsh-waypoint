@@ -110,6 +110,8 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
   snapshots.set('remote-session', initialSnapshot)
   let snapshotGate: Promise<void> | undefined
   let snapshotEntered: (() => void) | undefined
+  /** Remote Sessions whose snapshot must reject, keyed by remote Session id. */
+  const snapshotFailures = new Map<string, Error>()
   let eventGate: Promise<void> | undefined
   const approvals = new Map<string, ReturnType<typeof deferred<RemoteApprovalRequest>>>()
   const nextApproval = (hostId: string) => {
@@ -158,6 +160,8 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
     sessions: async () => ({ sessions: catalog }),
     snapshot: async (hostId: string, id: string) => {
       effects.snapshots++
+      const failure = snapshotFailures.get(id)
+      if (failure !== undefined) throw failure
       snapshotEntered?.()
       if (snapshotGate !== undefined) await snapshotGate
       return { ...snapshots.get(id)!, hostId }
@@ -231,6 +235,17 @@ export async function removalFixture(nativeRegistry?: (ctx: Context) => Promise<
     setFailUnarchive(error: Error | undefined) { failUnarchive = error },
     /** Make the next remote archive reject with this error. */
     setFailArchive(error: Error | undefined) { failArchive = error },
+    /**
+     * Make one remote Session's snapshot reject.
+     *
+     * The pass-level containment in `#syncHost` is only observable when exactly
+     * one Session in a host's catalog is unreadable, so the injector is keyed by
+     * remote Session id rather than being a single global switch.
+     */
+    failSnapshot(remoteSessionId: string, error: Error | undefined) {
+      if (error === undefined) snapshotFailures.delete(remoteSessionId)
+      else snapshotFailures.set(remoteSessionId, error)
+    },
     async requestApproval(hostId: string, request: RemoteApprovalRequest) {
       nextApproval(hostId).resolve(request)
       await new Promise(done => setImmediate(done))

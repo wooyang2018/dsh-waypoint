@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import type { RemoteSessionSummary, SessionSnapshot } from '@dsh-waypoint/protocol'
 import { removalFixture } from './workspace-removal-fixture.ts'
 
 /**
@@ -217,6 +218,98 @@ describe('mirrored Session archive round trip', () => {
       assert.deepEqual(f.remoteArchived, [], 'no retroactive remote archiving')
       assert.equal(f.agents.size, 0, 'the archived mirror must not remount')
       assert.equal(f.service.localSessionId(f.host.id, 'remote-session'), localId)
+    } finally { await f.close() }
+  })
+
+  it('remounts the mirror when the Session is restored', async () => {
+    const f = await removalFixture()
+    f.hostB.phase = 'disconnected'
+    try {
+      await f.service.start()
+      const localId = f.service.localSessionId(f.host.id, 'remote-session')!
+      await f.registry.archiveSession(localId as never, { stopActivity: true })
+      assert.equal(f.agents.size, 0, 'archiving must detach the mirror façade')
+
+      // No `sync()` in between: the restore itself has to put the Agent back.
+      // A mirrored Session carries no persisted log, so DSH's own resume cannot
+      // rebuild it — the row would come back visible and permanently dead.
+      await f.registry.unarchiveSession(localId as never)
+
+      assert.equal(f.agents.has(localId), true, 'the restore must reattach the façade')
+      assert.notEqual(f.service.runtimeForLocalSession(localId), undefined)
+      assert.equal(f.archivedSessionIds.includes(localId), false)
+    } finally { await f.close() }
+  })
+
+  it('keeps mirroring the rest of a catalog when one Session cannot be read', async () => {
+    const f = await removalFixture()
+    f.hostB.phase = 'disconnected'
+    try {
+      const summary = (sessionId: string): RemoteSessionSummary => ({
+        sessionId,
+        workspaceId: f.workspace.workspaceId,
+        cwd: f.workspace.path,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        live: false,
+        eventCount: 1,
+      })
+      const snapshotFor = (sessionId: string): SessionSnapshot => ({
+        hostId: f.host.id,
+        sessionId,
+        workspaceId: f.workspace.workspaceId,
+        cwd: f.workspace.path,
+        cursor: 1,
+        live: false,
+        truncated: false,
+        events: [{ seq: 0, type: 'turn/start', data: { turn: 1 } }],
+      })
+      f.setCatalog([summary('remote-broken'), summary('remote-healthy')])
+      f.snapshots.set('remote-broken', snapshotFor('remote-broken'))
+      f.snapshots.set('remote-healthy', snapshotFor('remote-healthy'))
+      f.failSnapshot('remote-broken', new Error('remote Session is archived'))
+
+      await f.service.start()
+
+      // One unreadable Session must not cost the catalog its other mirrors. The
+      // pass used to reject inside the loop, so every Session listed after it
+      // stopped reconciling — including the mirrors a user was about to open.
+      assert.notEqual(
+        f.service.localSessionId(f.host.id, 'remote-healthy'),
+        undefined,
+        'the rest of the catalog must still be mirrored',
+      )
+      assert.equal(f.service.localSessionId(f.host.id, 'remote-broken'), undefined)
+      assert.equal(
+        f.warnings.some(args => JSON.stringify(args).includes('remote-broken')),
+        true,
+        'the skipped Session must be named in a warning',
+      )
+    } finally { await f.close() }
+  })
+
+  it('leaves an archived mirror unmounted when the heartbeat reports it visible', async () => {
+    const f = await removalFixture()
+    f.hostB.phase = 'disconnected'
+    try {
+      await f.service.start()
+      const localId = f.service.localSessionId(f.host.id, 'remote-session')!
+      await f.registry.archiveSession(localId as never, { stopActivity: true })
+      assert.equal(f.agents.size, 0)
+
+      // A client can still report a Session it opened before archiving it. An
+      // archived row must stay dark: mounting it would hand the UI an Agent whose
+      // every model step the ArchivedSessionGate rejects.
+      f.service.reportVisibleSession(localId)
+      await new Promise<void>(done => setImmediate(done))
+      assert.equal(f.agents.size, 0)
+
+      // Restoring it attaches the façade exactly once; the heartbeat that follows
+      // must not try to enter the same Agent id again.
+      await f.registry.unarchiveSession(localId as never)
+      assert.equal(f.agents.has(localId), true)
+      f.service.reportVisibleSession(localId)
+      await new Promise<void>(done => setImmediate(done))
+      assert.equal(f.agents.size, 1)
     } finally { await f.close() }
   })
 })

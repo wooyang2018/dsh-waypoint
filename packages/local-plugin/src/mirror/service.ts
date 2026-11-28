@@ -409,6 +409,20 @@ const MAX_FORWARDED_FILE_MB = 9
 const MAX_FORWARDED_FILE_BYTES = MAX_FORWARDED_FILE_MB * 1024 * 1024
 
 /**
+ * Whether an Agent registration failed because that id is already taken.
+ *
+ * `AgentRegistry.enter` throws a plain `Error` carrying `agent "<id>" is already
+ * registered`; DSH exposes no dedicated error class for it, so the message is the
+ * only signal. The mirror needs the answer for one narrow case: its own stale
+ * façade still occupying the id can be detached and the mount retried, while any
+ * other collision must stay loud. A future message change degrades to "not a
+ * duplicate", which keeps the old behaviour.
+ */
+function isAlreadyRegisteredError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('is already registered')
+}
+
+/**
  * A hole in the mirrored log, recorded as a local plugin record.
  *
  * `gap` — the remote log moved past a range the mirror never saw (a truncated
@@ -1676,19 +1690,57 @@ export class RemoteMirrorService {
   /** The Session whose sandbox policy was resolved most recently. */
   #lastResolvedSession: string | undefined
 
+  /**
+   * The Session the client last reported visible, so a switch can be told apart
+   * from the twice-a-second repeat of the same report.
+   */
+  #lastVisibleReported: string | undefined
+
   /** Record the local Session a client currently shows, refreshing its freshness window. */
   reportVisibleSession(sessionId: string | undefined): void {
     const now = Date.now()
     for (const [id, at] of this.#visibleSessions) {
       if (now - at > VISIBLE_SESSION_TTL_MS) this.#visibleSessions.delete(id)
     }
-    if (sessionId === undefined) return
+    if (sessionId === undefined) {
+      // Closing a Session clears the switch marker, so reopening it counts as a
+      // switch again: that is the retry path for a mirror whose mount failed
+      // while its host was unreachable.
+      this.#lastVisibleReported = undefined
+      return
+    }
     this.#visibleSessions.set(sessionId, now)
     const runtime = [...this.#runtimes.values()].find(item => item.record.localSessionId === sessionId)
     if (runtime !== undefined) {
       this.#flushPendingApprovals(runtime.record)
       this.#flushPendingQuestions(runtime.record)
     }
+    this.#remountOnVisible(sessionId)
+  }
+
+  /**
+   * Mount a mirror the client just switched to, if it has no façade.
+   *
+   * The open heartbeat is the one repair path outside `#syncHost`, and it exists
+   * because a sync pass is all-or-nothing per host: a Session that makes
+   * reconciliation throw (see `#mirrorOne`) would otherwise leave every later
+   * mirror in that catalog unmounted for as long as it stays broken. A mounted
+   * mirror is also the only way DSH's Web surface can resolve an Agent for it —
+   * the local Session has no persisted log for `agents.resume()` to open.
+   *
+   * Only a switch triggers this. The client reports the same visible Session on
+   * every heartbeat, and an attempt reads the host catalog, so repeating it would
+   * poll the remote twice a second for nothing.
+   * @param sessionId - the local Session the client reported.
+   */
+  #remountOnVisible(sessionId: string): void {
+    if (this.#lastVisibleReported === sessionId) return
+    this.#lastVisibleReported = sessionId
+    if (this.#runtimes.has(sessionId) || this.#mirrorRecordForSession(sessionId) === undefined) return
+    void this.remountMirror(sessionId).catch(() => {
+      // remountMirror logs and never rejects; this keeps a heartbeat from ever
+      // becoming an unhandled rejection if that contract changes.
+    })
   }
 
   /** Whether a connected client reported this Session visible within the freshness window. */
@@ -1903,6 +1955,22 @@ export class RemoteMirrorService {
     if (mapped !== undefined && this.#anchorRemoved(hostId, mapped.anchor)) return undefined
     const existing = this.localSessionId(hostId, remoteSessionId)
     if (existing !== undefined && this.#sessions.get(existing as SessionId) !== undefined) return existing
+    return await this.#ensureMirrorFor(host, remoteSessionId)
+  }
+
+  /**
+   * Mirror one remote Session resolved through the host's own catalog.
+   *
+   * Split out of {@link ensureRemoteSession} because that method's "the local
+   * Session still exists" shortcut cannot serve a remount: a mirror whose façade
+   * was detached is still in the store, so the shortcut would answer with an id
+   * that no Agent answers for. This half only asks the catalog and mounts.
+   * @param host - connected host the Session belongs to.
+   * @param remoteSessionId - remote Session to mirror.
+   * @returns the local Session id, or undefined when it cannot be mirrored.
+   */
+  async #ensureMirrorFor(host: HostView, remoteSessionId: string): Promise<string | undefined> {
+    const hostId = host.id
     const workspaces = await this.#hosts.workspaces(hostId)
     for (const workspace of workspaces) {
       if (isTestHidden(workspace.path, workspace.workspaceId, this.#testVisibility)) continue
@@ -1934,6 +2002,48 @@ export class RemoteMirrorService {
       workspace: localWorkspace.workspace,
       anchor: localWorkspace.anchor,
     }))?.localSessionId
+  }
+
+  /**
+   * Re-attach the local Agent of a mirror whose façade was detached.
+   *
+   * Archiving a mirror detaches that façade (`#stopRuntime`, from
+   * {@link archiveRemoteFor}), and a mirrored Session has no persisted log to
+   * fall back on: `sessions.create` never writes one, so DSH's own
+   * `agents.resume()` fails with `SessionPersistenceNotFoundError` and the Web
+   * surface shows `resume failed for session "…" (gateway/internal)`. Restoring
+   * the archive flag therefore has to restore the Agent too, or the row comes
+   * back visible and permanently dead.
+   *
+   * Never throws on purpose: every caller is a user-visible step (the unarchive
+   * action, the open heartbeat) that must not fail because a host is briefly
+   * unreachable. The next visibility report or sync pass retries.
+   * @param localSessionId - the local mirror Session to mount.
+   * @returns true when a live runtime answers for that Session afterwards.
+   */
+  async remountMirror(localSessionId: string): Promise<boolean> {
+    if (this.#disposed) return false
+    const record = this.#mirrorRecordForSession(localSessionId)
+    // A draft has no remote Session to snapshot, and an archived row must stay
+    // dark: mounting it would hand the client an Agent whose every step the
+    // ArchivedSessionGate rejects, which is the state this method exists to end.
+    if (record === undefined || record.remoteSessionId === '') return false
+    if (this.#runtimes.has(localSessionId)) return true
+    if (this.#archivedLocalIds().has(localSessionId)) return false
+    const host = this.#hosts.list().find(item => item.id === record.hostId)
+    if (host === undefined || host.phase !== 'connected') return false
+    try {
+      await this.#ensureMirrorFor(host, record.remoteSessionId)
+    } catch (error) {
+      this.#ctx.logger.warn(
+        'dsh-waypoint: could not remount mirrored Session %s for local %s: %s',
+        record.remoteSessionId,
+        localSessionId,
+        String(error),
+      )
+      return false
+    }
+    return this.#runtimes.has(localSessionId)
   }
 
   /**
@@ -3158,16 +3268,8 @@ export class RemoteMirrorService {
     this.#ensureQuestionStream(host)
     await this.#reconcileTestHidden(host)
     // Read once per pass: the getter returns the durable array, so consulting
-    // it per Session would be O(sessions x archived). Guarded rather than
-    // assumed: a registry whose startup has not published the archive set yet
-    // (or a test double that omits it) must not turn every sync into a no-op.
-    let archivedIds: readonly SessionId[] = []
-    try {
-      archivedIds = this.#workspaceRegistry.archivedSessionIds ?? []
-    } catch (error) {
-      this.#ctx.logger.debug('dsh-waypoint: archive set unavailable: %s', String(error))
-    }
-    const archived = new Set<string>(archivedIds.map(String))
+    // it per Session would be O(sessions x archived).
+    const archived = this.#archivedLocalIds()
     const workspaces = await this.#hosts.workspaces(host.id)
     const byPath = new Map<string, { workspace: Workspace; anchor: string }>()
     const hiddenPaths = new Set<string>()
@@ -3186,6 +3288,7 @@ export class RemoteMirrorService {
     const all = await this.#hosts.sessions(host.id, undefined, true)
     const subagents = new Set<string>()
     const children: RemoteSessionSummary[] = []
+    const failed: string[] = []
     for (const summary of all.sessions) {
       if (this.isSessionWorkspaceRemoved(host.id, summary.workspaceId, summary.cwd)) continue
       if (this.#archivedMirror(host.id, summary.sessionId, archived)) continue
@@ -3197,12 +3300,12 @@ export class RemoteMirrorService {
       if (summary.cwd !== null && (hiddenPaths.has(summary.cwd) || isTestHidden(summary.cwd, '', this.#testVisibility))) continue
       const target = summary.cwd === null ? undefined : byPath.get(summary.cwd)
       if (target !== undefined) {
-        await this.#ensureMirror(host, summary, target)
+        await this.#mirrorOne(host, summary, target, failed)
         continue
       }
       const ungrouped = await this.#ensureUngroupedWorkspace(host, summary.cwd ?? 'ungrouped')
       if (ungrouped !== undefined) {
-        await this.#ensureMirror(host, summary, { workspace: ungrouped.workspace, anchor: ungrouped.anchor })
+        await this.#mirrorOne(host, summary, { workspace: ungrouped.workspace, anchor: ungrouped.anchor }, failed)
       }
     }
     // A mirrored parent transcript carries the remote `subagent/catalog` events,
@@ -3221,12 +3324,59 @@ export class RemoteMirrorService {
           deferred.push(summary)
           continue
         }
-        await this.#ensureMirror(host, summary, { anchor: parent.anchor }, parent.localSessionId)
+        await this.#mirrorOne(host, summary, { anchor: parent.anchor }, failed, parent.localSessionId)
       }
       if (deferred.length === pending.length) break
       pending = deferred
     }
     await this.#pruneMirroredSubagents(host.id, subagents, archived)
+    if (failed.length > 0) {
+      // One line per pass rather than one per retry: the same Session fails again
+      // every pass until its remote is fixed, and the first few ids are enough to
+      // find it.
+      this.#ctx.logger.warn(
+        'dsh-waypoint: %d remote Session(s) could not be mirrored on %s: %s',
+        failed.length,
+        host.id,
+        failed.slice(0, 5).join(', '),
+      )
+    }
+  }
+
+  /**
+   * Mirror one remote Session, keeping its failure to itself.
+   *
+   * `#ensureMirror` reads that Session's remote snapshot and mounts a façade, so
+   * anything wrong with the *one* Session — an archived remote, an agent error, a
+   * poison event — rejects it. Letting that escape used to reject the whole pass,
+   * and since `sync()` only catches per host, every Session listed after it in
+   * the same catalog silently stopped reconciling: the mirrors the user was about
+   * to open never got their Agent back. Containing the rejection keeps the rest
+   * of the catalog moving and names what was skipped.
+   * @param host - host whose catalog listed the Session.
+   * @param summary - the remote Session to mirror.
+   * @param target - workspace and anchor the mirror belongs to.
+   * @param failed - collector for the pass-level summary line.
+   * @param parentLocalId - local parent when this is a subagent mirror.
+   */
+  async #mirrorOne(
+    host: HostView,
+    summary: RemoteSessionSummary,
+    target: MirrorTarget,
+    failed: string[],
+    parentLocalId?: string,
+  ): Promise<void> {
+    try {
+      await this.#ensureMirror(host, summary, target, parentLocalId)
+    } catch (error) {
+      failed.push(summary.sessionId)
+      this.#ctx.logger.warn(
+        'dsh-waypoint: could not mirror %s on %s: %s',
+        summary.sessionId,
+        host.id,
+        String(error),
+      )
+    }
   }
 
   /**
@@ -3238,8 +3388,11 @@ export class RemoteMirrorService {
    * lists the Session, so reconciliation rebuilt the projection every launch.
    *
    * The projection is therefore left alone while it is archived. Nothing is
-   * deleted: the record and its log stay, so unarchiving still restores the
-   * conversation, and no historical record needs migrating.
+   * deleted: the record and the in-memory projection stay, so unarchiving still
+   * restores the conversation, and no historical record needs migrating. What it
+   * does NOT keep is the façade Agent — archiving detached it — so restoring has
+   * to remount it (see {@link remountMirror}): a mirrored Session has no
+   * persisted log for DSH's own resume to rebuild it from.
    * @param hostId - host owning the remote Session.
    * @param remoteSessionId - remote Session the catalog reported.
    * @param archived - the archive set read once for this sync pass.
@@ -3249,6 +3402,24 @@ export class RemoteMirrorService {
     if (archived.size === 0) return false
     const record = this.#state.sessions[key(hostId, remoteSessionId)]
     return record !== undefined && archived.has(record.localSessionId)
+  }
+
+  /**
+   * The registry's durable archive set, as local Session ids.
+   *
+   * Guarded rather than assumed: a registry whose startup has not published the
+   * archive set yet — or a test double that omits it — must not turn an archive
+   * check into a crash, and must never be read as "nothing is archived".
+   * @returns the archived local Session ids for this instant.
+   */
+  #archivedLocalIds(): Set<string> {
+    let ids: readonly SessionId[] = []
+    try {
+      ids = this.#workspaceRegistry.archivedSessionIds ?? []
+    } catch (error) {
+      this.#ctx.logger.debug('dsh-waypoint: archive set unavailable: %s', String(error))
+    }
+    return new Set(ids.map(String))
   }
 
   /** Remove local mirrors of remote subagent Sessions the remote no longer reports. */
@@ -4484,8 +4655,23 @@ export class RemoteMirrorService {
     try {
       detach = this.#agents.enter(agent as never)
     } catch (error) {
-      await agent.scope.dispose()
-      throw error
+      // A façade that never let go of this id would otherwise fail to mount on
+      // every pass — and, before `#mirrorOne` contained it, take the whole host's
+      // reconciliation with it. Only our own registration can be detached here;
+      // any other occupant stays loud.
+      const stale = this.#registrations.get(record.localSessionId)
+      if (!isAlreadyRegisteredError(error) || stale === undefined) {
+        await agent.scope.dispose()
+        throw error
+      }
+      await stale()
+      this.#registrations.delete(record.localSessionId)
+      try {
+        detach = this.#agents.enter(agent as never)
+      } catch (retryError) {
+        await agent.scope.dispose()
+        throw retryError
+      }
     }
     this.#runtimes.set(record.localSessionId, runtime)
     this.#registrations.set(record.localSessionId, async () => { detach(); await agent.scope.dispose() })

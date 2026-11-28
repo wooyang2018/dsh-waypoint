@@ -735,8 +735,9 @@ that resolution. Ordering differs per direction on purpose:
 
 - **Archive**: local write first, then the remote. DSH itself archives before stopping, and the
   sidebar must be consistent even if the remote call fails.
-- **Unarchive**: remote first, then the local. If the remote cannot be restored the local Session stays
-  archived and the action reports an error — never a restored-but-dead conversation.
+- **Unarchive**: remote first, then the local, and the mirror's façade last. If the remote cannot be
+  restored the local Session stays archived and the action reports an error — never a
+  restored-but-dead conversation.
 
 That ordering makes the two directions fail in opposite ways, deliberately. Archiving is
 **fail-open**: a failed remote archive still leaves the row hidden, and the sync pass keeps it from
@@ -746,6 +747,19 @@ silent, a failed remote archive is queued as a `remoteArchiveFailed` notice and 
 it as a toast naming the consequence (the remote Session is still running and still listed). Notices are
 memory-only, delivered once, and capped, so a burst of failures cannot become a wall of toasts — and
 nothing retries the archive afterwards, which is exactly why the user has to be told.
+
+**Restoring has to restore the Agent too.** A mirrored Session carries no persisted log: `#ensureMirrorOnce`
+seeds it in memory from the remote snapshot, and only `dsh-agent-loop` ever opens a persistence handle, so
+the `sessions.create` that builds a mirror writes nothing DSH could resume later (`#sessions.flush` only
+dispatches to listeners, and the JSONL backend holds a handle only for Sessions it opened itself). The
+façade Agent this plugin registers is therefore the *only* thing that answers `agents.get` for a mirror —
+and archiving detaches it (`#stopRuntime`, before the remote call). Clearing the archive flag alone put the
+row back in the sidebar with no Agent behind it: the first open went to `agents.resume()`, `findLog()`
+found nothing, and the Web surface reported
+`resume failed for session "…": SessionPersistenceNotFoundError … (gateway/internal)`, which reads like
+lost history and is not. Unarchiving now calls `remountMirror` before it resolves, and
+`reportVisibleSession` retries the mount whenever a client switches to a mirror that has none — the one
+repair path that does not run inside `#syncHost`, so a pass that dies elsewhere cannot starve it.
 
 **Distinguishing the plugin's own archive work.** The plugin archives and unarchives local Sessions for
 its own cleanup — a removed workspace, a pruned subagent mirror, a test-hidden mirror, an abandoned
@@ -764,9 +778,17 @@ restored mirrors archived, so they never remount — a bug that only appears onc
 **Why an archived mirror does not come back.** The remote catalog still lists an archived Session, so
 reconciliation used to rebuild its projection on every launch; that is the whole of the reported bug.
 `#syncHost` now reads `workspaceRegistry.archivedSessionIds` once per pass and skips any Session whose
-mirror record points at an archived local Session (`#archivedMirror`). Nothing is deleted: the record
-and its log stay, so unarchiving restores the conversation, and old records archived before this
-behaviour existed need no migration — they are simply left alone.
+mirror record points at an archived local Session (`#archivedMirror`). Nothing is deleted: the record and
+the in-memory projection stay, so unarchiving restores the conversation, and old records archived before
+this behaviour existed need no migration — they are simply left alone. What a restored record does need is
+its Agent (above), because there is no log to rebuild it from.
+
+**One failing Session no longer stops the pass.** `#syncHost` reconciles a host's whole catalog in one
+loop, so a Session whose snapshot rejects — an archived remote, an agent error, a poison event — used to
+reject the pass and leave every Session listed after it unmounted for as long as it stayed broken. The
+symptom was a mirror that never recovered however long the user waited, while a later-pass Session got
+mirrored normally. Each Session is now mirrored inside `#mirrorOne`'s own failure boundary: the pass keeps
+going, and one warning per pass names what was skipped.
 
 ### 5.8 Compaction: how the card is rebuilt
 
