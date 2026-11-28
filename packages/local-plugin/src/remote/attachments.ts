@@ -189,7 +189,14 @@ export async function syncRemoteAttachment(
   const store = getLocalStore(ctx)
   const root = attachmentRoot(store)
   if (kind === 'image' && await exists(imageObjectPath(root, digest))) return { kind: 'present' }
-  if (!hosts.supportsAgent(hostId, 'attachment.read')) return { kind: 'unsupported' }
+  if (!hosts.supportsAgent(hostId, 'attachment.read')) {
+    ctx.logger.debug(
+      'dsh-waypoint: %s advertises no attachment.read; leaving %s to the transcript',
+      hostId,
+      ref.attachmentId,
+    )
+    return { kind: 'unsupported' }
+  }
   let result: { readonly data: string }
   try {
     result = await hosts.readAttachment(hostId, { kind, ref: { ...ref } })

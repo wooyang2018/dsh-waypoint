@@ -224,6 +224,10 @@ describe('synchronizing a remote attachment into the local store', () => {
       )
       assert.equal(outcome.kind, 'unsupported')
       assert.equal(test.attachmentReads.length, 0, 'no request when the capability is absent')
+      assert.ok(
+        test.debugLines.some(line => line.includes('attachment.read')),
+        'the missing route is logged at debug, which is what acceptance 5 pins',
+      )
     } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
   })
 
@@ -357,6 +361,35 @@ describe('synchronizing the attachments any arrival path carries', () => {
       assert.ok(
         test.local.snapshotEvents().some(entry => entry.type === 'tool/result'),
         'the live event is projected',
+      )
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+
+  it('keeps the event when a carried attachment arrives with the wrong byte count', async () => {
+    // §7: a length mismatch is a real failure, but it must not cost the event
+    // its projection — the per-reference catch turns it into one warning and the
+    // object simply never lands.
+    const image = storedImage(21, 22, 23)
+    const test = await mountedOver([
+      remoteEvent(0, 'user/message', {
+        turn: 1,
+        source: { kind: 'user' },
+        content: [{ type: 'image', attachment: { ...image.ref, bytes: image.data.byteLength + 1 } }],
+      }),
+    ], candidate => candidate.setRemoteAttachment(image.attachmentId, image.data))
+    try {
+      assert.ok(
+        test.local.snapshotEvents().some(entry => entry.type === 'user/message'),
+        'the event is still projected',
+      )
+      assert.ok(
+        test.warnings.some(line => line.includes(image.attachmentId)),
+        'the mismatch is reported as a warning',
+      )
+      await assert.rejects(
+        readPublished(test.ctx, image.attachmentId),
+        /ENOENT/u,
+        'nothing is published under a reference whose bytes did not match',
       )
     } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
   })
