@@ -183,6 +183,20 @@ describe('remote command catalog', () => {
     }
   })
 
+  it('coalesces concurrent menu reads into one tunnel round trip', async () => {
+    // `ui-commands` re-reads on every keystroke, so a burst has to share one
+    // answer; otherwise the first three characters of a draft cost three
+    // round trips.
+    const h = harness()
+    try {
+      const [first, second] = await Promise.all([h.commands.list(h.agent), h.commands.list(h.agent)])
+      assert.equal(h.host.commandRequests.length, 1, 'one read serves the burst')
+      assert.deepEqual(first, second)
+    } finally {
+      h.restore()
+    }
+  })
+
   it('delegates for an ordinary local Session', async () => {
     const h = harness()
     try {
@@ -430,6 +444,20 @@ describe('remote skill catalog', () => {
       assert.deepEqual(listed.skills.map(skill => skill.name), ['dsh-doc'])
       assert.deepEqual(h.host.skillRequests, [{ sessionId: 'remote-1' }])
       assert.equal(h.localSkillCalls.length, 0)
+    } finally {
+      h.restore()
+    }
+  })
+
+  it('coalesces concurrent skill reads into one tunnel round trip', async () => {
+    const h = harness()
+    try {
+      const [first, second] = await Promise.all([
+        h.sessionSkillCatalog.list({ sessionId: 'local-mirror' }),
+        h.sessionSkillCatalog.list({ sessionId: 'local-mirror' }),
+      ])
+      assert.equal(h.host.skillRequests.length, 1, 'one read serves the burst')
+      assert.deepEqual(first, second)
     } finally {
       h.restore()
     }

@@ -39,6 +39,7 @@ import { isRemoteCommandAttachmentList } from '@dsh-waypoint/protocol'
 import type { ResolvedConfig } from '../config.ts'
 import { LocalError } from '../errors.ts'
 import type { RemoteHostsService } from '../service.ts'
+import { singleFlight } from '../mirror/inflight.ts'
 import type { RemoteMirrorService } from '../mirror/service.ts'
 import { replaceMethods } from './install.ts'
 
@@ -126,6 +127,19 @@ export function installRemoteCatalog(
   const skillCache = new Map<string, CacheEntry<RemoteSkillCatalogResult>>()
   /** Last descriptor set seen per cache key, for change detection only. */
   const lastSignature = new Map<string, string>()
+  /**
+   * Reads already in the tunnel, keyed like the cache.
+   *
+   * The TTL cache only answers a *settled* read, so a cold menu (first open, or
+   * after the entry expires) would still spend one round trip per keystroke:
+   * `ui-commands` re-reads on each input, and every read starts before the
+   * previous one has landed. Coalescing them means a burst shares one answer,
+   * which is the point `docs/specs/2026-11-26-remote-catalog-bridge.md` §8 makes.
+   * The first caller's `signal` owns a shared skill read, so a cancellation
+   * rejects every joiner; each then takes the local fallback a timeout takes.
+   */
+  const commandFlights = new Map<string, Promise<RemoteCommandCatalogResult>>()
+  const skillFlights = new Map<string, Promise<RemoteSkillCatalogResult>>()
 
   /**
    * Resolve the address to forward for, or undefined to delegate.
@@ -177,20 +191,26 @@ export function installRemoteCatalog(
         const cached = catalogCache.get(key)
         if (cached !== undefined && cached.expires > Date.now()) return cached.value
         try {
-          const result = await agentFor(address.hostId, 'session.catalog').commandCatalog(requestFor(address))
-          catalogCache.set(key, { value: result, expires: Date.now() + CATALOG_TTL_MS })
-          // The client caches a Session's catalog and invalidates it on
-          // `commands/change`, `agent-preset/selected`, and `connection/reset` —
-          // none of which a remote plugin install produces. Announcing a change
-          // ourselves is what makes a menu opened after that install show the new
-          // entries without a page reload. Only a genuine difference is
-          // announced: emitting on every refresh would re-render the menu while
-          // the user is reading it.
-          const signature = descriptorSignature(result.commands)
-          if (lastSignature.get(key) !== undefined && lastSignature.get(key) !== signature) {
-            emitCommandsChange(ctx)
-          }
-          lastSignature.set(key, signature)
+          const result = await singleFlight(commandFlights, key, async () => {
+            // A joiner may arrive after some other flight settled this entry.
+            const fresh = catalogCache.get(key)
+            if (fresh !== undefined && fresh.expires > Date.now()) return fresh.value
+            const fetched = await agentFor(address.hostId, 'session.catalog').commandCatalog(requestFor(address))
+            catalogCache.set(key, { value: fetched, expires: Date.now() + CATALOG_TTL_MS })
+            // The client caches a Session's catalog and invalidates it on
+            // `commands/change`, `agent-preset/selected`, and `connection/reset` —
+            // none of which a remote plugin install produces. Announcing a change
+            // ourselves is what makes a menu opened after that install show the new
+            // entries without a page reload. Only a genuine difference is
+            // announced: emitting on every refresh would re-render the menu while
+            // the user is reading it.
+            const signature = descriptorSignature(fetched.commands)
+            if (lastSignature.get(key) !== undefined && lastSignature.get(key) !== signature) {
+              emitCommandsChange(ctx)
+            }
+            lastSignature.set(key, signature)
+            return fetched
+          })
           return result.commands
         } catch (error) {
           // Reaching here means the host advertised `session.catalog` and the
@@ -299,8 +319,13 @@ export function installRemoteCatalog(
         const cached = skillCache.get(key)
         if (cached !== undefined && cached.expires > Date.now()) return cached.value
         try {
-          const result = await agentFor(address.hostId, 'session.catalog').skillCatalog(requestFor(address), signal)
-          skillCache.set(key, { value: result, expires: Date.now() + CATALOG_TTL_MS })
+          const result = await singleFlight(skillFlights, key, async () => {
+            const fresh = skillCache.get(key)
+            if (fresh !== undefined && fresh.expires > Date.now()) return fresh.value
+            const fetched = await agentFor(address.hostId, 'session.catalog').skillCatalog(requestFor(address), signal)
+            skillCache.set(key, { value: fetched, expires: Date.now() + CATALOG_TTL_MS })
+            return fetched
+          })
           return result
         } catch (error) {
           // Same reasoning as the command catalog above: a host that lacks
