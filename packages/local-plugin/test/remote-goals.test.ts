@@ -104,14 +104,23 @@ describe('mirrored Session goals', () => {
     }
   })
 
-  it('keeps the local behaviour for an agent that predates the route', async () => {
+  it('refuses for an agent that predates the route, writing nowhere', async () => {
+    // The local write an older agent used to fall back to is the banner-that-never-
+    // left this feature exists to remove, so it is not a fallback: the operation did
+    // not happen, and it says so with the same code a disconnected host uses.
     const f = await mirroredNamespaceFixture()
     f.setForwardingEnabled(false)
     try {
-      const created = await f.services.goals.create({ id: f.localSessionId }, { objective: 'do X' })
+      await assert.rejects(
+        () => f.services.goals.create({ id: f.localSessionId }, { objective: 'do X' }),
+        (error: unknown) => {
+          assert.equal((error as { code?: string }).code, 'mirror/unsupported')
+          assert.match((error as Error).message, /predates this route/)
+          return true
+        },
+      )
       assert.deepEqual(f.calls.goals, [], 'an old agent is not asked')
-      assert.deepEqual(f.services.goals.calls.map(call => call.op), ['create'], 'the stock implementation answers')
-      assert.equal((created as { id: string }).id, 'local-goal')
+      assert.deepEqual(f.services.goals.calls, [], 'and nothing is written locally either')
     } finally {
       await f.teardown()
     }
@@ -198,13 +207,20 @@ describe('mirrored Session Team mode', () => {
     }
   })
 
-  it('keeps the local behaviour for an agent that predates the route', async () => {
+  it('refuses for an agent that predates the route, leaving the toggle alone', async () => {
     const f = await mirroredNamespaceFixture()
     f.setForwardingEnabled(false)
     try {
-      await f.services.teams.setEnabled({ id: f.localSessionId }, true)
+      await assert.rejects(
+        () => f.services.teams.setEnabled({ id: f.localSessionId }, true),
+        (error: unknown) => {
+          assert.equal((error as { code?: string }).code, 'mirror/unsupported')
+          assert.match((error as Error).message, /predates this route/)
+          return true
+        },
+      )
       assert.deepEqual(f.calls.team, [])
-      assert.deepEqual(f.services.teams.calls, [{ enabled: true }])
+      assert.deepEqual(f.services.teams.calls, [], 'a local toggle would diverge from the remote')
     } finally {
       await f.teardown()
     }

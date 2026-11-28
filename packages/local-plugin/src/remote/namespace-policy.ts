@@ -47,28 +47,22 @@ import type { UiTextKey } from '../messages.ts'
 export type MirroredPolicy = 'delegate' | 'forward' | 'refuse' | 'local-view'
 
 /**
- * The classification, one entry per Remote namespace this plugin has thought
- * about.
+ * The namespaces whose *whole* surface this plugin delegates or keeps local.
  *
- * Namespace defaults only. An operation with a different policy from its
- * namespace appears in {@link MIRRORED_METHOD_POLICY}.
+ * A namespace appears here when one policy covers every operation it exposes:
+ * either the local answer is already correct (replayed projections, or another
+ * adapter owns the routing) or the value is a preference of this machine's UI.
+ *
+ * Namespaces this plugin *forwards or refuses* are deliberately absent. Their
+ * policy is decided per operation in {@link MIRRORED_METHOD_POLICY}, because a
+ * blanket `forward` is a standing invitation: `job` forwards its roster and
+ * refuses `kill`, and a release that adds `job/restart` must not inherit the
+ * forward just because its namespace does.
  */
 export const MIRRORED_NAMESPACE_POLICY = {
-  /** Goal mutations are appended by the process that runs the conversation. */
-  goals: 'forward',
-  /** The background-job roster is the remote registry's projection. */
-  job: 'forward',
-  /** `team/mode` is a Session-log fact owned by the tree root's process. */
-  agentTeams: 'forward',
-  /** Child-Session control acts on live remote process state. */
-  subagents: 'refuse',
-  /** Feedback is a write into the Session log the remote owns. */
-  messageFeedback: 'refuse',
-  /** Live tool values exist only in the process that ran the tool. */
-  toolResults: 'refuse',
   /** Session control is the mirror's own transport; only `fork` differs. */
   session: 'delegate',
-  /** Pinning is this machine's sidebar preference; see the override below. */
+  /** Pinning is this machine's sidebar preference; see the overrides below. */
   workspace: 'delegate',
   /**
    * Schedule is host-global and deliberately not adapted.
@@ -141,14 +135,46 @@ export const MIRRORED_NAMESPACE_POLICY = {
 } as const satisfies Record<string, MirroredPolicy>
 
 /**
- * Operations whose policy differs from their namespace's default.
+ * The adapted operations, one entry each.
  *
- * Keyed by wire endpoint so the spelling matches the Typert registry's own
- * (`<namespace>/<method>`), which is what the coverage check enumerates.
+ * This is the authority for every namespace whose surface is not uniform, and it
+ * is written out rather than derived so that adding an operation is a decision
+ * somebody made. The key is the Typert wire endpoint (`<namespace>/<method>`),
+ * which is the spelling the coverage check enumerates.
+ *
+ * An endpoint that is missing here has no policy, so a Host that grows `job` with
+ * a mutation reports it instead of inheriting the roster's forward — the failure
+ * mode a namespace-level default cannot express.
  */
 export const MIRRORED_METHOD_POLICY = {
-  /** Stopping a job needs the remote registry, not a local cancel. */
+  /** Goal mutations are appended by the process that runs the conversation. */
+  'goals/create': 'forward',
+  'goals/remoteExportCreate': 'forward',
+  'goals/edit': 'forward',
+  'goals/pause': 'forward',
+  'goals/resume': 'forward',
+  'goals/complete': 'forward',
+  'goals/clear': 'forward',
+  'goals/block': 'forward',
+  /** `get` folds the replayed `goal/change`, so it is already the remote's answer. */
+  'goals/get': 'delegate',
+  /** `team/mode` is a Session-log fact owned by the tree root's process. */
+  'agentTeams/setEnabled': 'forward',
+  /** The background-job roster is the remote registry's projection… */
+  'job/list': 'forward',
+  'job/follow': 'forward',
+  /** …and stopping a job needs that registry, not a local cancel. */
   'job/kill': 'refuse',
+  /** Child-Session control acts on live remote process state. */
+  'subagents/prompt': 'refuse',
+  'subagents/interruptByUser': 'refuse',
+  /** Feedback is a write into the Session log the remote owns… */
+  'messageFeedback/put': 'refuse',
+  'messageFeedback/delete': 'refuse',
+  /** …while reading the local log answers honestly ("none recorded here"). */
+  'messageFeedback/list': 'delegate',
+  /** Live tool values exist only in the process that ran the tool. */
+  'toolResults/watch': 'refuse',
   /** A fork of a replay has no remote counterpart. */
   'session/fork': 'refuse',
   /** Sidebar ordering on this machine; the remote UI keeps its own. */
@@ -156,19 +182,40 @@ export const MIRRORED_METHOD_POLICY = {
   'workspace/unpinSession': 'local-view',
 } as const satisfies Record<string, MirroredPolicy>
 
-/** Every namespace the table classifies. */
+/**
+ * Every namespace the classification accounts for.
+ *
+ * A namespace is declared when a whole-namespace policy covers it, or when at
+ * least one of its operations appears in {@link MIRRORED_METHOD_POLICY}. The
+ * union is what "the table knows this namespace" means; the *operations* are a
+ * separate question, answered by {@link uncoveredEndpoints}.
+ */
 export function declaredNamespaces(): string[] {
-  return Object.keys(MIRRORED_NAMESPACE_POLICY)
+  const endpointNamespaces = Object.keys(MIRRORED_METHOD_POLICY)
+    .map(endpoint => endpoint.split('/')[0])
+    .filter((namespace): namespace is string => namespace !== undefined)
+  return [...new Set([...Object.keys(MIRRORED_NAMESPACE_POLICY), ...endpointNamespaces])].sort()
+}
+
+/** Namespaces this plugin adapts rather than delegating whole. */
+export function adaptedNamespaces(): string[] {
+  return [...new Set(Object.keys(MIRRORED_METHOD_POLICY).map(endpoint => endpoint.split('/')[0]))]
+    .filter((namespace): namespace is string => namespace !== undefined)
+    .sort()
 }
 
 /**
  * Resolve the policy for one namespace or endpoint.
  *
- * An endpoint override wins over its namespace default, so a caller that only
- * knows a namespace and a method never has to repeat the classification.
+ * An endpoint entry wins. Without one, a whole-namespace policy answers — and a
+ * namespace this plugin *adapts* answers nothing, because its surface is not
+ * uniform: `job` forwards the roster and refuses `kill`, so a new `job` method
+ * must be classified before it can do anything. That `undefined` is the alarm,
+ * not a gap: {@link uncoveredEndpoints} reports it and the install step warns.
+ *
  * @param namespace - wire namespace.
  * @param method - wire method, when the caller is asking about one operation.
- * @returns the policy, or `undefined` for a namespace nothing here classifies.
+ * @returns the policy, or `undefined` for an operation nothing classifies.
  */
 export function policyFor(namespace: string, method?: string): MirroredPolicy | undefined {
   if (method !== undefined) {
@@ -177,6 +224,30 @@ export function policyFor(namespace: string, method?: string): MirroredPolicy | 
     if (override !== undefined) return override
   }
   return (MIRRORED_NAMESPACE_POLICY as Record<string, MirroredPolicy>)[namespace]
+}
+
+/**
+ * Operations on an adapted namespace that the table has never classified.
+ *
+ * A namespace-level default cannot answer this: `job: 'forward'` would silently
+ * adopt every future `job` mutation, including ones that act on another
+ * machine's processes. Adapted namespaces are therefore enumerated per operation,
+ * and anything new is reported here instead — sorted so the log line and the test
+ * message are stable.
+ *
+ * @param inventory - namespaces and methods observed on the running Host.
+ * @returns `<namespace>/<method>` strings, sorted.
+ */
+export function uncoveredEndpoints(inventory: readonly RemoteNamespace[]): string[] {
+  const adapted = new Set(adaptedNamespaces())
+  const missing: string[] = []
+  for (const entry of inventory) {
+    if (!adapted.has(entry.namespace)) continue
+    for (const method of entry.methods) {
+      if (policyFor(entry.namespace, method) === undefined) missing.push(`${entry.namespace}/${method}`)
+    }
+  }
+  return [...new Set(missing)].sort()
 }
 
 /**
@@ -284,6 +355,44 @@ export function mirrorRefusal(endpoint: RefusedEndpoint, details: MirrorRefusalD
         method: details.method,
         ...details.localSessionId === undefined ? {} : { localSessionId: details.localSessionId },
         ...details.hostId === undefined ? {} : { hostId: details.hostId },
+      },
+    },
+  )
+}
+
+/**
+ * The failure a forwarded operation raises when the owning agent predates it.
+ *
+ * A mirrored Session has no correct local answer for a forwarded operation: a
+ * local goal write publishes a banner the remote never sees, and a local job list
+ * is a confident "nothing is running" about a machine nobody asked. So an agent
+ * that lacks the route is *not* a reason to fall back to the local behaviour —
+ * that fallback is the silent divergence this policy exists to remove, reached
+ * through a different door.
+ *
+ * The right answer is the same one a disconnected host gets: say the operation
+ * did not happen, and say where it has to happen instead. An agent one release
+ * behind is a deployment fact, not a request error, so the `ui` key is the
+ * existing "reinstall the agent" one — the same treatment the terminal, archive
+ * and catalog adapters already give a capability the agent does not advertise.
+ *
+ * @param operation - what the caller asked for, named for the message.
+ * @param hostId - the host whose agent cannot serve it.
+ * @param localSessionId - the mirrored Session, when the caller knows it.
+ * @returns the error to throw; nothing is written on either side.
+ */
+export function outdatedAgent(operation: string, hostId: string, localSessionId?: string): LocalError {
+  return new LocalError(
+    'mirror/unsupported',
+    `${operation}: the remote agent on ${hostId} predates this route, so the operation was not `
+      + 'performed anywhere; reinstall the agent on that host',
+    {
+      retryable: false,
+      ui: { key: 'error.agentOutdated' },
+      details: {
+        operation,
+        hostId,
+        ...localSessionId === undefined ? {} : { localSessionId },
       },
     },
   )
@@ -402,8 +511,9 @@ export function remoteNamespaceInventory(
  * @returns the unclassified namespace names.
  */
 export function unclassifiedNamespaces(inventory: readonly RemoteNamespace[]): string[] {
+  const declared = new Set(declaredNamespaces())
   return inventory
     .map(entry => entry.namespace)
-    .filter(namespace => policyFor(namespace) === undefined)
+    .filter(namespace => !declared.has(namespace))
     .sort()
 }

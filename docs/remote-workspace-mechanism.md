@@ -352,11 +352,12 @@ Two properties of this table are load-bearing and both are tested:
   where to do it instead. A refusal a user cannot act on would be no better than the silent write it
   replaces. (DSH's gateway carries only an error's `message` across the Remote boundary, so the visible
   rejection today is that message; the `ui` key is what a client-side formatter localizes.)
-- **An older agent degrades, a disconnect fails.** When the agent predates a forwarding route the
-  adapter calls the stock implementation and logs at debug — that is the previous release's behaviour,
-  which is wrong but visible the moment the agent is upgraded. When the host is simply not connected the
-  operation **rejects**: falling back to a local write would reintroduce the divergence this whole
-  classification exists to remove.
+- **An older agent and a disconnected host fail the same way.** Both mean the remote's state cannot be
+  reached, so both **reject**: a write says the operation did not happen anywhere (`mirror/unsupported`
+  with the existing "reinstall the agent" key), and a read reports the failure instead of answering an
+  empty list. An earlier draft let an older agent fall back to the stock local implementation, which is
+  the very divergence this classification exists to remove — a local goal banner and a confidently empty
+  roster are exactly what a user would act on.
 
 The runtime half of the classification is a warn line: `reportUnclassifiedNamespaces` reads this Host's
 live `typert` registry, keeps the descriptors whose receiver is an Agent, and names any namespace the
@@ -924,10 +925,13 @@ what makes a selected reference resolvable there.
 
 Two rules make that safe. A failed remote read **delegates** to the stock method and logs the host,
 because an empty menu would assert "this project has no files" — false, and likely acted on. And the
-local `@` rewrite in `#resolveTextReferences` now applies only to a path this machine's filesystem could
-hold, so a remote POSIX path survives as text on a Windows client instead of being read from the wrong
-disk or refused as unreadable (§5.4's "Why a picked file is not always an attachment" is the reason that
-rewrite exists at all).
+local `@` rewrite in `#resolveTextReferences` decides by **ownership first, spelling second**: a
+reference inside the Session's own remote workspace came from the remote menu and travels as text on
+every client, while only what the workspace does not claim is offered to this disk (`C:\…` and `\\…`
+anywhere, `/…` off Windows). Spelling alone cannot decide it — on a POSIX client the remote path and a
+local one are the same shape, which is why a spelling-only rule refused the remote candidate as
+"unreadable" exactly where the menu had just started working (§5.4's "Why a picked file is not always
+an attachment" is the reason that rewrite exists at all).
 
 ### 6.2 The native file panel, and why one interception layer is enough
 
@@ -1423,7 +1427,6 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | `/cd` is refused inside a mirrored Session | The remote owns that directory; forwarding needs a `session.cd` route and an owner for the event (6.1) |
 | A remote directory cannot be stat-ed through an agent older than the `type` field | The field is optional on the wire and read as `file`, which reproduces the previous behaviour (6.1) |
 | A remote cwd outside every mirrored workspace is not reachable from the local file menu | The `fs` adapter attributes a remote path to a host through its workspace roots, so it refuses to guess one; the agent's own tools still run in that directory |
-| An `@` mention from an *ungrouped* mirrored Session's menu is treated as a local path on a POSIX client | The mention is attributed by the Session's **real** workspace, and an ungrouped record deliberately names no checkout; the local test then speaks and either refuses the prompt or uploads this machine's file. Grouping the directory into a workspace removes the gap |
 | Remote diffs / some advanced file actions still use the native tool results | Only `workspaceFiles` and the terminal are intercepted |
 | SSH reachability required; no relay/NAT traversal | Only ssh `-L`/`-R` today |
 | Windows remotes unsupported | The bootstrap is POSIX bash, and Node.js is handled as Linux/macOS |
@@ -1436,9 +1439,10 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | A forwarded command's result may arrive after its request reports a timeout | The handler may legitimately run for minutes; the settlement still arrives through the mirrored log (6.6) |
 | A compacted mirror shows the command row but no compaction card | Only when the window lost the checkpoint's span, or the remote agent predates it: `isMirrorNoise` now replays the checkpoint and the summary, and a card that cannot be placed degrades to the command row (§5.8) |
 | A mirrored Session's `@` menu falls back to this machine's files when the remote read fails | An empty menu would assert the remote project has no files, so the failure is logged and the local answer kept (6.1) |
-| A Windows client cannot `@`-reference a local POSIX path | The rewrite applies only to paths this filesystem could hold, which is what keeps a remote POSIX path intact; a staged attachment covers the local case (6.1) |
+| A local path that happens to live inside the mirrored remote workspace is forwarded as a remote reference | Ownership decides before spelling: the remote menu searches that tree, so a path there is the remote's. A staged attachment still covers the local file (6.1) |
+| A remote `/cd` outside every mirrored workspace is treated as a local path on a POSIX client | No workspace root claims it, so nothing distinguishes it from a local path; the same boundary the file menu has (6.1) |
 | A remote host with no `fileReferences` provider is indistinguishable from an empty project | The capability is a property of the agent build, not a runtime probe; the delegated fallback and its warning are what stay visible (6.1) |
-| A mirrored Session's goal, Team-mode, and job-roster routing needs a current remote agent | Each route is negotiated by capability (`session.goals`, `session.team`, `session.jobs`); an older agent keeps the previous local behaviour and a debug line (5.3) |
+| A mirrored Session's goal, Team-mode, and job-roster routing needs a current remote agent | Each route is negotiated by capability (`session.goals`, `session.team`, `session.jobs`); an older agent is refused like a disconnected host rather than falling back to a local write or an empty roster (5.3) |
 | A mirrored Session refuses `jobs.kill`, subagent prompt/interrupt, message feedback, and `session.fork` | Each writes state the remote process owns: task control and child-Session control need routes this version does not have, feedback and a fork would land in a log nobody reconciles (5.3) |
 | Live tool values are unavailable in a mirrored Session's inspector | They exist only in the memory of the process that ran the tool; the stream ends rather than waiting on something it cannot fill (5.3) |
 | `schedule` is not mirrored | `remote.schedule.*` is one host-global registry, not Session state; mirroring the catalog and its `schedule/changed` stream is a feature of its own (5.3, 6.5) |
