@@ -175,9 +175,17 @@ export const FALLBACK_CATALOG_DEFAULT = { provider: 'deepseek-official', model: 
  * unroutable default reads as "no model is selected", and the client has to
  * repair it on every refresh.
  *
+ * Three tiers, most specific first:
+ *
+ * 1. the named route still serves the named model — take it verbatim;
+ * 2. the route is gone but the model is not — keep the model and move it to a
+ *    route that serves it, because the *model* is what the user chose and a
+ *    per-machine UUID is not something a profile can keep in step;
+ * 3. nothing survives — take the first listed row, or the shared fallback.
+ *
  * @param groups - the groups this host can actually route to.
  * @param current - the deployment default, when the profile named one.
- * @returns a selection one of `groups` owns.
+ * @returns a selection one of `groups` owns, when there is one.
  */
 export function catalogDefaultSelection(
   groups: readonly RemoteModelGroup[],
@@ -188,6 +196,9 @@ export function catalogDefaultSelection(
     if (group !== undefined && group.models.some(model => model.id === current.model)) {
       return { provider: current.provider, model: current.model }
     }
+    // Tier 2: the model outlived the route that named it.
+    const elsewhere = groups.find(item => item.models.some(model => model.id === current.model))
+    if (elsewhere !== undefined) return { provider: elsewhere.id, model: current.model }
   }
   const first = groups[0]
   const model = first?.models[0]

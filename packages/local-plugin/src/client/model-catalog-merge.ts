@@ -62,6 +62,14 @@ export interface DirectoryState {
   readonly failures: readonly { readonly id: string; readonly name: string; readonly message: string }[]
   readonly error: string | null
   readonly status: string
+  /**
+   * Whether `groups` owns `current`; the Host's projection field.
+   *
+   * Replaced here rather than carried along, so a rewritten `current` never
+   * leaves the pair disagreeing. Optional because a caller may hand in a
+   * snapshot that predates the field.
+   */
+  readonly routable?: boolean | null
 }
 
 /** The slice of a per-Session directory this module wraps. */
@@ -258,6 +266,48 @@ function firstListed(groups: readonly ProviderGroup[]): DirectoryState['current'
 }
 
 /**
+ * The first row that serves `model`, under whatever route carries it.
+ *
+ * This is the model-preserving tier of the default: an agent that predates the
+ * default-routability check reports its deployment default verbatim, and a
+ * profile moved between machines keeps the model but not the provider UUID. The
+ * model is what the user chose, so a listed route serving it beats the first row
+ * of the list.
+ *
+ * @param groups - the groups about to be offered.
+ * @param model - the model id to keep.
+ * @returns that model under the first route serving it, or null.
+ */
+function firstOffering(groups: readonly ProviderGroup[], model: string): DirectoryState['current'] {
+  for (const group of groups) {
+    if (group.models.some(item => item.id === model)) return { provider: group.id, model }
+  }
+  return null
+}
+
+/**
+ * Whether the offered groups own a selection.
+ *
+ * The Host's projection sets `routable` in the same write as `current`, because
+ * the two are one fact: "this is what runs" and "the list contains it". A merge
+ * that replaces `current` and leaves the stale flag behind writes a snapshot that
+ * contradicts itself, which is only invisible while no renderer reads the flag —
+ * a version boundary, not a contract.
+ *
+ * @param current - the selection the snapshot carries.
+ * @param groups - the groups it offers.
+ * @returns whether one of them serves `current`; null when nothing is selected.
+ */
+function routableOf(
+  current: DirectoryState['current'],
+  groups: readonly ProviderGroup[],
+): boolean | null {
+  if (current === null) return null
+  return groups.some(group =>
+    group.id === current.provider && group.models.some(model => model.id === current.model))
+}
+
+/**
  * Whether two group lists would render the same sections.
  *
  * Compared by value, not identity: `withRemoteGroups` always builds a fresh
@@ -362,9 +412,12 @@ export function installModelCatalogMerge(ctx: Context, api: HostsApi): void {
           ?? pickStillOffered(next.current, groups)
           ?? (catalog === null ? null : remoteDefault(groups, catalog))
           // Nothing the catalog named is listable — its default can point at a
-          // route the remote no longer defines. Keeping `next.current` would
-          // leave the seat on a provider no group owns, which the Host's
-          // directory re-asserts on every refresh. An empty list stays empty.
+          // route the remote no longer defines. Before settling for the first
+          // row, keep the *model* the caller asked for when some listed route
+          // serves it: a profile written on another machine keeps its model but
+          // not the per-machine provider UUID. An empty list stays empty.
+          ?? (catalog === null ? null : firstOffering(groups, catalog.default.model))
+          ?? (next.current === null ? null : firstOffering(groups, next.current.model))
           ?? firstListed(groups)
         const withChoice = intended === null || intended === next.current
           ? next
@@ -374,8 +427,19 @@ export function installModelCatalogMerge(ctx: Context, api: HostsApi): void {
         // local model is picked, dropping the remote groups; a cached "already
         // applied" flag would then skip the re-application and the remote section
         // would stay missing for the rest of the Session.
-        if (sameGroups(withChoice.groups, current.groups) && withChoice.current === current.current) return
-        directory.store.set(withChoice)
+        // `routable` travels with `current` — the Host writes them as one fact,
+        // so rewriting one without the other leaves a self-contradictory
+        // snapshot. Compare all three before deciding nothing changed.
+        const settled: DirectoryState = {
+          ...withChoice,
+          routable: routableOf(withChoice.current, withChoice.groups),
+        }
+        if (
+          sameGroups(settled.groups, current.groups)
+          && settled.current === current.current
+          && settled.routable === current.routable
+        ) return
+        directory.store.set(settled)
       })()
     }
 
@@ -426,7 +490,14 @@ export function installModelCatalogMerge(ctx: Context, api: HostsApi): void {
           }
           remoteCurrent.set(id, decided)
           const snapshot = directory.store.getSnapshot()
-          directory.store.set({ ...snapshot, current: decided })
+          // A pick always names a listed row, so the flag is `true` by
+          // construction — recomputed against the snapshot anyway, so the pair
+          // cannot drift if a refresh raced this commit.
+          directory.store.set({
+            ...snapshot,
+            current: decided,
+            routable: routableOf(decided, snapshot.groups),
+          })
           // Report success so the selector commits its own pending state; the
           // remote records the choice when the next prompt is sent.
           return { ok: true }

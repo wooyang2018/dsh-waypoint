@@ -198,6 +198,9 @@ describe('installed merge commit path', () => {
         failures: [],
         error: null,
         status: 'ready',
+        // The Host projection publishes this beside `current`; the merge must
+        // replace them together.
+        routable: null as boolean | null,
       },
       getSnapshot() { return this.state },
       set(next: typeof store.state) { this.state = next; listener?.() },
@@ -393,6 +396,28 @@ describe('installed merge commit path', () => {
       model: 'deepseek-flash',
     }, 'the seat must name a model one of the offered groups owns')
     assert.deepEqual(h.store.getSnapshot().groups.map(group => group.id), ['remote:deepseek-official'])
+    assert.equal(h.store.getSnapshot().routable, true,
+      'the flag must follow `current`; a stale one contradicts the snapshot')
+  })
+
+  it('keeps the default model when only its provider id is gone', async () => {
+    // native2's shape: the profile names a provider this machine does not
+    // define, but the model it wants is served by another listed route. The
+    // model is what the caller chose, so it must outrank the first row.
+    const h = harness({
+      catalog: {
+        ...catalog(),
+        default: { provider: 'tt-switch-gone', model: 'deepseek-v4-pro' },
+      },
+    })
+    installModelCatalogMerge(h.ctx as never, h.api as never)
+    h.resolver.directoryFor()
+    await new Promise(resolve => { setTimeout(resolve, 50) })
+
+    assert.deepEqual(h.store.getSnapshot().current, {
+      provider: 'remote:deepseek-official',
+      model: 'deepseek-v4-pro',
+    }, 'a lost provider id must not discard the model the caller asked for')
   })
 
   it('falls back to the first listed model when the default model is not under its provider', async () => {
