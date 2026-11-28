@@ -767,6 +767,25 @@ nothing could ask a remote path whether it *was* one. `RemoteFileStat.type` is o
 agent stays readable, and the adapter reads an absent value as `file` — the answer it has always given —
 rather than inventing a directory out of silence.
 
+**The `@` menu is the same cwd question, answered by a provider rather than a service.** The browser's
+`@` source calls `ctx.remote.fileReferences.list`, which resolves to the Host's `sessionFileReferences`
+service and from there to the composed `fileReferences` provider — `dsh-file-reference-local`, a walk of
+*this* machine's tree with `node:fs`. A correct cwd is not enough here: `WorkspaceFileSearch` never goes
+through `ctx.fs`, so there is no layer to intercept, and the walk would read the wrong disk even once
+§6.1's working-directory fix is in place. `installRemoteFileReferences`
+(`src/remote/file-references.ts`) replaces `list` on that service, the same instance patch every other
+adapter in `src/remote/` uses, and forwards the query to the host that owns the Session; the remote runs
+the provider its own Web UI runs (`POST /file-references`, see [protocol](protocol.md)). Nothing is
+re-ranked, filtered or truncated locally, and the returned paths stay in the remote's spelling, which is
+what makes a selected reference resolvable there.
+
+Two rules make that safe. A failed remote read **delegates** to the stock method and logs the host,
+because an empty menu would assert "this project has no files" — false, and likely acted on. And the
+local `@` rewrite in `#resolveTextReferences` now applies only to a path this machine's filesystem could
+hold, so a remote POSIX path survives as text on a Windows client instead of being read from the wrong
+disk or refused as unreadable (§5.4's "Why a picked file is not always an attachment" is the reason that
+rewrite exists at all).
+
 ### 6.2 The native file panel, and why one interception layer is enough
 
 The Host ships its own right-sidebar file panel (`@deepseek-ai/dsh-client-ui-sidebar-files`, the
@@ -1272,6 +1291,9 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | A mirror's `/` menu is empty when the remote agent predates `session.catalog` | The catalog is negotiated by capability, so an older agent keeps the local answer instead of an empty menu (6.6) |
 | A forwarded command's result may arrive after its request reports a timeout | The handler may legitimately run for minutes; the settlement still arrives through the mirrored log (6.6) |
 | A compacted mirror shows the command row but no compaction card | Only when the window lost the checkpoint's span, or the remote agent predates it: `isMirrorNoise` now replays the checkpoint and the summary, and a card that cannot be placed degrades to the command row (§5.8) |
+| A mirrored Session's `@` menu falls back to this machine's files when the remote read fails | An empty menu would assert the remote project has no files, so the failure is logged and the local answer kept (6.1) |
+| A Windows client cannot `@`-reference a local POSIX path | The rewrite applies only to paths this filesystem could hold, which is what keeps a remote POSIX path intact; a staged attachment covers the local case (6.1) |
+| A remote host with no `fileReferences` provider is indistinguishable from an empty project | The capability is a property of the agent build, not a runtime probe; the delegated fallback and its warning are what stay visible (6.1) |
 
 ## 10. Where to start when you want to change something
 
@@ -1286,6 +1308,7 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | File/terminal routing | `src/remote/files.ts`, `src/remote/terminal-controller.ts` |
 | A mirrored Session's working directory | `src/remote/working-directory.ts` (6.1) |
 | The `/` menu and command execution in a mirror | `src/remote/catalog.ts`, `packages/remote-agent/src/catalog.ts`, `catalogAddressFor` in `src/mirror/service.ts` (6.6) |
+| The `@` menu in a mirror | `src/remote/file-references.ts`, `packages/remote-agent/src/file-references.ts`, and `localPathReferences` in `src/mirror/service.ts` (6.1) |
 | Whether a mirrored command row shows a compaction card | `isCompactionCheckpoint` / `localSpan` in `src/mirror/service.ts`; the order matters — the `surfaceOp` remap comes first (5.8) |
 | Remote dev-server ports | `src/client/link-forwarding.ts` (the click), `src/client/loopback-url.ts` (which addresses count), `publishPort` in `src/service.ts`, `host/ports/publish` in `src/host-api/` |
 | Settings page behaviour | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
