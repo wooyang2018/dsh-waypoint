@@ -1,6 +1,6 @@
 # 重命名镜像会话，必须重命名它的远端会话
 
-状态：设计已定稿。实现按 §12 的切片推进。
+状态：已实现（§12 记录了切片；发布说明见 CHANGELOG 的 `Unreleased` 一节）。
 
 ## 1. 背景与目标
 
@@ -201,6 +201,28 @@ sessionController.rename = async (request) => {
 - **标题校验可能被复制。** 优先实现是询问 `sessionTitle`；若没有仅校验路径，则接受复制一条规则，
   配 `TODO` 指明替代方案，并用测试钉住错误码。备选方案——为了校验而写本地——会重新引入该 bug。
 - **旧 agent 上回落本地，而不是拒绝。** §6.5。
+- **§7 的「过长标题 → `session/title-invalid`」与本仓库锁定的 DSH 不符。** `normalizeSessionTitle`
+  在 `maxTitleBytes` 处**截断**，只有当截断后不剩任何可见字符时才拒绝。实现对齐 DSH：空标题在本地
+  就拦下（不必占用隧道），过长标题原样送达、在存储处被截断。因此 §6.3 的「复制两条约束」只落实了
+  一条——`maxTitleBytes` **没有**复制，它是插件无法从服务读到的配置，本地复制一份只会得到一个与所在
+  主机不一致的猜测。
+- **§6.2 的 `original.validateTitle(...)` 并不存在。** 校验落到一个本地辅助函数
+  （`assertForwardableTitle`），它构造的是结构化的远端失败（`isDSHRemoteError` + `code`，与
+  `questionError` 同一写法），所以浏览器两种情况下看到的是同一个 code 和同一句话。
+- **agent 转发给 `sessionController.rename`，而不是直接调 `ctx.sessionTitle.rename`。**
+  后者要求那个确切的、活的 `Session`；镜像在远端可能是冷会话，直接调用会对一个确实存在的会话
+  报「not live in this store」。控制器会先恢复再调 `sessionTitle.rename`，测试断言的正是
+  「文本到达了 `sessionTitle.rename` 且针对正确的会话」。
+- **响应体是远端接受后的标题**（`{ title }`），而不是 `{accepted:true}` 或本地校验后的字符串，
+  这样标签上的乐观文本确实是远端存下的那一份。远端的 `seq` 不携带（两份日志序号不同），
+  按 §6.2 报的是本地日志的头。
+- **草稿标题的交接是尽力而为**（失败记警告后继续）。规格没有规定失败策略；为了一个被拒绝的
+  重命名而丢掉创建会话的第一条提示词，代价更大。
+- **文档位置**：规格写的是 §5.7，但那份文档的归档顺序讨论在 §5.8（且已经有两个 `### 5.8` 标题），
+  所以新小节加为 **§5.9**，而不去重排无关章节。
+- **`scripts/check/protocol-surface.mjs` 增加了一个名字。** 检查器不剥离内联 `type` 修饰符，
+  `RenameSessionResult` 真正出现在 `RemoteAgentClient.renameSession` 的签名里、也被
+  `RemoteHostsService` 依赖，若不登记会被误计为 internal。那张分类表存在的目的正是这类判断。
 
 ## 12. 实现切片
 

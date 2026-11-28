@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **Renaming a mirrored Session now renames its remote Session.** The rename only ever wrote
+  `session/title` into the local projection, so the remote Web UI kept the old name and the new one
+  vanished as soon as the mirror was rebuilt — re-adding the workspace, pruning, or moving machines
+  restored the remote's title. The rename is forwarded first and the projection follows the replayed
+  event; a refusal leaves the old title and reports `session/title-invalid`. A draft mirror keeps its
+  local rename and hands that title over when its first prompt creates the remote Session.
+
 - **Queue edits and deletes on a mirrored Session are answered by the mirror.** A follow-up typed while
   a turn runs waits in the mirror's own inbox until `turn/end`, and the composer's edit, delete and
   steer reach it through `sessionController.updateQueue`; that call went to the Host's command, which

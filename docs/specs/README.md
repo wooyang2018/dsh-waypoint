@@ -8,7 +8,6 @@
 
 | 文档 | 修复什么 | 涉及包 |
 |---|---|---|
-| [会话重命名](2026-11-27-mirror-session-rename.md) | 重命名镜像会话只改了本地投影 | protocol、remote-agent、local-plugin |
 | [镜像会话的命名空间策略](2026-11-27-mirrored-namespace-policy.md) | goal、jobs、teams、subagents、feedback 静默写入本地状态，远端毫不知情 | protocol、remote-agent、local-plugin |
 
 ## 已实现（Implemented）
@@ -20,3 +19,4 @@
 | [`@` 文件引用](2026-11-27-remote-file-references.md) | 未发布 —— `@` 菜单由持有工程的主机作答，远端路径原样送达提示词 |
 | [附件双向一致性](2026-11-27-mirror-attachment-parity.md) | 未发布 —— 工具结果里的图片也会同步，纯附件提示词只产生一个气泡 |
 | [队列消息的编辑与删除](2026-11-27-mirror-queue-mutation.md) | 未发布 —— 编辑、删除、转 steer 都由镜像自己的队列作答，并沿用原生拒绝 |
+| [会话重命名](2026-11-27-mirror-session-rename.md) | 未发布 —— 重命名先到远端，本地投影跟随回放；草稿标题在首次提示词落地时交付 |
