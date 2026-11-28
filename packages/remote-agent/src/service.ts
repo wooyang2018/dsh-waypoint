@@ -317,6 +317,15 @@ export class RemoteAgentService {
         'file.bytes',
         'file.watch',
         'file.search',
+        // Advertised from this build's route table rather than from a probe of
+        // the composition: whether a profile mounts `dsh-file-reference` is a
+        // property of the profile, and asking per query would cost a round trip
+        // on every keystroke. A host without a provider therefore looks exactly
+        // like a host whose project is empty — the accepted cost of not probing
+        // (see the design document's tradeoffs). A client that sees a failure
+        // falls back to its own list and logs the host, so the wrong answer stays
+        // visible rather than silent.
+        'file.references',
         'directory.list',
         'git.exec',
         'workspace.changes',
