@@ -273,6 +273,12 @@ local history starts on a complete turn boundary and the earlier content stays i
 truncated branch of `#ensureMirrorOnce`). If the tail contains no `turn/start` it seeds as-is with no
 extra trimming.
 
+Seeding also warms the attachment store, because the seed is the *only* path that will ever see those
+events: `lastSeq` moves past them, so nothing fetches their bytes later. `#seedAttachments` walks the
+same filtered window through `#syncEventAttachments` — the function the live path uses — before the
+local Session exists, which is why it takes a host id instead of a runtime. Without it, a mirror opened
+after a restart shows every image in its history as a permanently blank card.
+
 ### 5.3 The custom Agent: `RemoteMirrorAgent`
 
 A local session needs an Agent to work in the conversation UI. The plugin registers a **façade** that
@@ -314,6 +320,20 @@ Step 5 is what prevents a duplicated bubble: the replayed remote `user/message` 
 and reuses the position of that local message instead of appending another (`appendRemoteEvent`).
 Images, model selection, and sandbox mode each have their own local-event → remote-call bypass as well
 (`#onLocalSessionEvent`).
+
+That pairing key is **text plus an attachment signature**. A prompt carrying only an image or only a
+file forwards `text: ''`, so comparing text alone left its entry unmatched and the replayed echo was
+appended — one image, two bubbles. `attachmentSignature` describes each non-text part as
+`type:mediaType:name`, in order, and both sides compute it with the same function: the forward side
+over what `#promptContent` returned, the echo side over the replayed `content`. Only the kind, the
+media type and the display name travel; a local attachment id and the bytes never do. The old
+`text !== ''` guard could not simply be dropped — an empty entry would then claim the first empty-text
+remote message whatever it carried, which is worse than the duplicate it fixed.
+
+Text still decides when it is present: the exact match (`text` and signature) is tried first, then text
+alone for a non-empty prompt. The remote may legitimately re-encode an image during prompt admission
+(normalization chooses the media type) or sanitize a display name, and one drifted part must not turn
+an ordinary `text + image` prompt into the duplicate bubble this matching exists to remove.
 
 #### Attachments, and why a receipt cannot be forwarded
 
@@ -431,13 +451,23 @@ catalog through `installModelCatalogMerge`, and the forward path reads `RemoteMi
 directly. Neither consults the Agent façade, so the model menu and the forwarded selection are
 unaffected; `forwardedSelection` exposes the same answer for tests and diagnostics.
 
-#### The other direction: pulling an attachment a remote user sent
+#### The other direction: pulling an attachment a remote event references
 
-The reverse case is a user typing into the remote Session directly. Its `user/message` carries durable
-attachment references, and those ids are digests of bytes that live only on the remote host, so a
-replayed reference alone cannot render anything. `remote/attachments.ts` fills the gap:
-`#syncEventAttachments` runs on **both** replay paths — the live stream and the seed — and calls
-`POST /attachments/read` for each reference the local store does not already hold.
+A remote attachment arrives as a durable reference — `{ attachmentId: 'sha256:<64 hex>', mediaType,
+bytes, width, height }` for an image, `{ attachmentId, name, bytes }` for a file — whose bytes live
+only on the remote host, so a replayed reference alone cannot render anything. This is not only the
+case of a user typing into the remote Session: `read_image` returns its picture inside a `tool/result`,
+and an `assistant/message` may carry one later. `remote/attachments.ts` fills the gap for all of them:
+`#syncEventAttachments` runs on **all three** arrival paths — the live stream, the snapshot replay and
+the seed — and calls `POST /attachments/read` for each reference the local store does not already hold.
+
+What it looks at is `ATTACHMENT_BEARING_EVENTS` (`user/message`, `assistant/message`, `tool/result`)
+plus a per-type accessor for the field that type keeps its blocks in, because the gate has to ask "can
+this event carry a reference?" rather than "is it the one type that does today". The two spellings are
+not interchangeable: a `user/message` *is* the message and keeps `content` on the payload, while an
+`assistant/message` and a `tool/result` keep theirs under `message.content`. The old single-type gate is
+why every remote `read_image` card stayed permanently blank — the same empty picture this module was
+first written to fix, reached through a second door.
 
 It is a prefetch, before the projection, and that ordering is load-bearing for the same reason it is for
 the changed-files card: `HistoricalImageCache` deletes a failed entry and never retries, so a byte fetch
@@ -449,6 +479,12 @@ The two kinds are stored differently on purpose:
 |---|---|---|
 | file | `attachments.saveFile` | stored verbatim, so its id is the sha256 of the bytes — re-saving reproduces the very same reference, with no mapping table |
 | image | verbatim publish at `objects/<sha256[0:2]>/<sha256>` | the id is the digest of an object that was *already* normalized remotely, so `saveImage` would re-encode it into a different digest and the reference would stop resolving |
+
+Before asking the host, an image whose object is already at that path short-circuits — which is what
+makes replaying a log on every launch cost nothing. That check is images only: a file resolves through a
+per-name hard link beside its object, and only the store knows the name it sanitized, so answering
+"already present" from the object alone could hand back a reference the transcript still cannot open.
+Re-saving a file is idempotent anyway, because the store is content-addressed.
 
 Both writes verify the digest before publishing, so a truncated transfer fails on arrival instead of
 becoming an object that every later read rejects as corrupt. A host without `attachment.read` yields
