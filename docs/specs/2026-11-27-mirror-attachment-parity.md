@@ -1,6 +1,6 @@
 # 附件必须在镜像边界的每个方向上流通，纯附件提示词必须能配对
 
-状态：设计已定稿。实现按 §12 的切片推进。
+状态：已实现（§12 记录了切片；发布说明见 CHANGELOG 的 `Unreleased` 一节）。
 
 ## 1. 背景与目标
 
@@ -117,9 +117,19 @@ const index = runtime.pendingUsers.findIndex(pending => pending.text !== '' && p
 const ATTACHMENT_BEARING_EVENTS = new Set(['user/message', 'assistant/message', 'tool/result'])
 ```
 
-并从各类型实际使用的字段里取出这些部分：`user/message` 与 `assistant/message` 在
-`data.message.content`，`tool/result` 直接在 `data.content`。现有辅助函数已经在遍历内容数组并判断
-`type === 'image' | 'file'`；需要补的是按类型取正确的入口，而不是写第二套实现。
+并从各类型实际使用的字段里取出这些部分。**本文初稿把字段写错了**，实现时按本仓库锁定的 DSH 版本
+（`@deepseek-ai/dsh-session` 0.2.2-rc.5 的 `SessionEventMap`）改正为：
+
+| 事件类型 | 内容位置 |
+|---|---|
+| `user/message` | `data.content`（载荷本身就是 `UserMessage`） |
+| `assistant/message` | `data.message.content`（载荷是 `{ message }`） |
+| `tool/result` | `data.message.content`（同样包在 `{ message }` 里） |
+
+现有辅助函数已经在遍历内容数组并判断 `type === 'image' | 'file'`；实现补的是按类型取正确的入口
+（一张以类型为键的取值表），而不是写第二套实现。照初稿的字段写会静默弄坏**已经能用**的
+用户图片同步，所以这张表也是「按类型取入口」这一层的实测依据。整体上仍满足 §6.1 的意图：
+`Set` 与取值表是同一个联合的两个投影，新增事件类型时两处必须同时改。
 
 这个 `Set` 是 R1 那个问题（「这个事件能不能携带引用？」）的诚实表达，也是将来新增事件类型的落点——
 §12 有一条测试会在该列表与载荷形状不一致时失败。
@@ -264,6 +274,19 @@ function attachmentSignature(content: readonly unknown[]): string
   针对的是 12 MiB 的**请求体**，不适用于响应。病态对象是远端库的问题。
 - **`assistant/message` 也被纳入承载集合**，尽管今天没有任何东西产出助手图片引用。
   代价是每个事件一次 `Array.isArray` 检查；替代方案是第三次静默遗漏。
+- **配对键落成两层，而 §6.2 只写了一层。** 先按「文本 + 签名」精确匹配；未命中且文本非空时，
+  退回只按文本匹配。原因：远端在接收时会重新归一化转发的图片，落盘引用里的 `mediaType`
+  （按 alpha 通道选 JPEG/WebP）或显示名可能与转发时不同，严格签名会把每一个「文本 + 图片」提示词
+  都变成重复气泡，也就是违反 R4。纯附件提示词没有这层退回，仍然必须匹配签名，所以 §6.2 担心的
+  「空队列认领第一条空消息」依旧被关住，并有专门的用例钉着。
+- **只有图片做「已在本地」短路。** 文件对象按内容寻址，但它的可解析引用还多一层按名字的硬链接，
+  名字是存储侧净化后的结果，只有存储自己知道——「对象在」不能证明「引用能解析」。所以重放一个
+  文件引用仍要一次往返，`saveFile` 本身幂等，不会产生重复状态。R2 列出的每个场景都基于图片，均通过。
+- **`#followStream` 也必须预取，这一处 §12 没有点名。** 实时流自己推进 `lastSeq`，被它跳过的事件
+  不会被后续快照重放补上：远端 UI 里的一次 `read_image` 会永久留白。删掉这处预取，实时用例从
+  1 次读取掉到 0 次，正是它证明 R1 不能不修这里。
+- **顺带修掉一个 §12 之外的定时器泄漏。** `#schedule` 覆盖 `runtime.timer` 前没有清理旧定时器，
+  一次「提示词 + 轮询」会留下 `dispose` 也清不掉的 60 秒尾巴；新的配对用例把它暴露成了进程存活问题。
 
 ## 12. 实现切片
 

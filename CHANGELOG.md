@@ -4,6 +4,20 @@
 
 ### Fixed
 
+- **A mirrored Session now shows the images its remote tool results carry, and an attachment-only
+  prompt no longer becomes two bubbles.** Reverse attachment synchronization was gated on
+  `event.type === 'user/message'`, so the `ImageAttachmentRef` a remote `read_image` leaves in a
+  `tool/result` never had its bytes fetched: the tool card drew the reference, found nothing in the
+  local store, and stayed permanently blank — the same empty picture `remote/attachments.ts` exists to
+  fix, reached through a second door. The gate now asks whether an event type can carry a reference
+  (`user/message`, `assistant/message`, `tool/result`) and reads the field that type keeps its blocks
+  in; the live stream fetches before projecting for the first time; and an image already on disk
+  short-circuits before any request, so replaying a log transfers nothing. Prompt pairing compared
+  only text, so a prompt carrying just an image or just a file forwarded `text: ''`, never matched its
+  echo, and one attachment became two bubbles. The key is now text plus an `attachmentSignature`
+  (`type:mediaType:name` of each non-text part, in order) computed by the same function on both sides,
+  with text alone still deciding when it is present.
+
 - **A mirrored Session's `@` menu now lists the remote project, and a remote path survives the
   prompt.** The browser's `@` source is answered by this Host's `fileReferences` provider,
   `dsh-file-reference-local`, which walks the local tree with `node:fs` — there is no `ctx.fs` seam to
