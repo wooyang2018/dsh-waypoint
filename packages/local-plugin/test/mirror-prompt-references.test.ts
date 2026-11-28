@@ -4,11 +4,15 @@
  * A path chosen from the remote `@` menu is spelled POSIX and absolute, and the
  * remote resolves it — that is the whole point of forwarding the menu. A path
  * picked on this machine is an absolute path this disk can hold, and its bytes
- * must cross instead, because the remote cannot open it. The two spellings are
- * indistinguishable in the composer, so the rule has to be the machine's own
- * filesystem: only a path this machine could hold is rewritten.
+ * must cross instead, because the remote cannot open it.
  *
- * The failure this pins is quiet in both directions. Rewriting a remote path
+ * THE SPELLING CANNOT DECIDE THIS. On a POSIX client both are `/…`; on Windows a
+ * remote path is `/…` and a local one is `C:\…`, but only because Windows cannot
+ * spell the first. So the rule is ownership first, spelling second: a reference
+ * inside the Session's own remote workspace belongs to the remote and travels as
+ * text, and only what the workspace does not claim is offered to this disk.
+ *
+ * Both failure directions are quiet in their own way. Rewriting a remote path
  * either fails the prompt ("local path is not readable") or, worse, uploads an
  * unrelated local file under a remote name. Failing to rewrite a genuine local
  * path sends the remote a path from another machine, which arrives as text and
@@ -60,31 +64,30 @@ function kinds(content: readonly { readonly type: string }[] | undefined): strin
   return (content ?? []).map(part => part.type)
 }
 
-/** A remote absolute path: POSIX-spelled, and absent from this machine. */
-const REMOTE_REFERENCE = '@/data/home/u/proj/README.md'
+/**
+ * A remote path inside the fixture's mirrored workspace (`/srv/project`).
+ *
+ * This is what the remote `@` menu offers: the provider searches the Session's
+ * remote directory, so a candidate is under the workspace root by construction.
+ */
+const REMOTE_REFERENCE = '@/srv/project/README.md'
 
-describe('a POSIX reference is shared by both `@` spellings', () => {
-  it('is left as text on a client whose own disk cannot hold it', async () => {
-    // On Windows the remote menu's POSIX path and a local one are told apart by
-    // the machine, not by the text: the reference reaches the remote untouched so
-    // it can resolve it. On a POSIX client the same spelling really is a local
-    // absolute path, and an unreadable one must fail loudly rather than travel as
-    // text the remote would search for on its own disk.
+/** A remote path the Session's workspace does not claim, for the documented edge. */
+const OUTSIDE_REFERENCE = '@/data/home/u/other/notes.md'
+
+describe('a remote reference is owned by the Session workspace', () => {
+  it('is left as text on every client platform', async () => {
+    // The defect this pins: on a POSIX client `/srv/project/README.md` is also a
+    // local absolute path, so a spelling-based rule refused the prompt ("local
+    // path is not readable") — the `@` menu finally listed the remote project and
+    // the message could not be sent. Ownership decides; spelling comes second.
     const test = await mounted()
     try {
       test.agent.send(userMessage(`${REMOTE_REFERENCE} summarise it`))
       await settle()
-      if (process.platform === 'win32') {
-        assert.equal(test.prompts.length, 1, 'the prompt must reach the remote')
-        assert.equal(test.prompts[0]?.text, `${REMOTE_REFERENCE} summarise it`, 'the remote path survives verbatim')
-        assert.deepEqual(kinds(test.prompts[0]?.content), ['text'], 'no file was read from this disk')
-      } else {
-        assert.equal(test.prompts.length, 0, 'a local path that cannot be read is refused, not sent')
-        assert.ok(
-          test.warnings.some(line => line.includes('not readable')),
-          'the refusal names the path',
-        )
-      }
+      assert.equal(test.prompts.length, 1, 'the prompt must reach the remote')
+      assert.equal(test.prompts[0]?.text, `${REMOTE_REFERENCE} summarise it`, 'the remote path survives verbatim')
+      assert.deepEqual(kinds(test.prompts[0]?.content), ['text'], 'no file was read from this disk')
     } finally {
       await test.service.dispose(); await test.ctx.fiber.dispose()
     }
@@ -94,17 +97,35 @@ describe('a POSIX reference is shared by both `@` spellings', () => {
     // The composer quotes a path with spaces whether it is local or remote, so
     // quoting must not be read as a claim about which machine owns the path.
     const test = await mounted()
-    const quoted = '@"/data/home/u/my proj/a b.md" open it'
+    const quoted = '@"/srv/project/my proj/a b.md" open it'
     try {
       test.agent.send(userMessage(quoted))
       await settle()
+      assert.equal(test.prompts.length, 1, 'the quoted remote path reaches the remote')
+      assert.equal(test.prompts[0]?.text, quoted, 'quoting is preserved and nothing is rewritten')
+      assert.deepEqual(kinds(test.prompts[0]?.content), ['text'])
+    } finally {
+      await test.service.dispose(); await test.ctx.fiber.dispose()
+    }
+  })
+
+  it('leaves a remote path outside the workspace to the local rules', async () => {
+    // The documented edge: a remote `/cd` outside every mirrored workspace is
+    // not claimed by any workspace root, so on a POSIX client this is
+    // indistinguishable from a local path and is treated as one. Windows keeps
+    // it as text because there it cannot be local at all.
+    const test = await mounted()
+    try {
+      test.agent.send(userMessage(`${OUTSIDE_REFERENCE} read it`))
+      await settle()
       if (process.platform === 'win32') {
-        assert.equal(test.prompts[0]?.text, quoted)
+        assert.equal(test.prompts[0]?.text, `${OUTSIDE_REFERENCE} read it`)
         assert.deepEqual(kinds(test.prompts[0]?.content), ['text'])
       } else {
+        assert.equal(test.prompts.length, 0, 'unreadable local path is refused, not sent')
         assert.ok(
-          test.prompts.length === 0 && test.warnings.some(line => line.includes('not readable')),
-          'a POSIX client still treats it as a local path',
+          test.warnings.some(line => line.includes('not readable')),
+          'the refusal names the path',
         )
       }
     } finally {
@@ -114,15 +135,15 @@ describe('a POSIX reference is shared by both `@` spellings', () => {
 })
 
 describe('a local absolute reference is still rewritten', () => {
-  // Windows-only: the point is that a drive-letter reference keeps working while
-  // a POSIX one does not, and only a Windows client can spell both. A POSIX
-  // client has one spelling for both, which the case above covers.
-  it('forwards the bytes of a drive-letter path while leaving the remote one alone', { skip: process.platform !== 'win32' }, async () => {
+  it('forwards the bytes of a path this disk holds, beside a remote one', async () => {
     const test = await mounted()
     const dir = await scratch()
     const file = join(dir, 'notes.md')
     await writeFile(file, '# hello\n', 'utf8')
     try {
+      // Both spellings in one prompt: the local one must become bytes, the remote
+      // one must survive. A POSIX client can express both because the remote
+      // reference is claimed by the workspace, not by the shape of the text.
       test.agent.send(userMessage(`@${file} and ${REMOTE_REFERENCE} compare`))
       await settle()
       assert.equal(test.prompts.length, 1)
@@ -135,6 +156,21 @@ describe('a local absolute reference is still rewritten', () => {
         `[notes.md] and ${REMOTE_REFERENCE} compare`,
         'the local path is replaced, the remote one is not',
       )
+    } finally {
+      await test.service.dispose(); await test.ctx.fiber.dispose()
+    }
+  })
+
+  it('refuses a local path the disk cannot hold, naming it', { skip: process.platform === 'win32' && 'a POSIX absolute path is not a local spelling on Windows' }, async () => {
+    // The capability half of the old rule is unchanged: an `@` path outside the
+    // workspace that this disk cannot read is a local request that failed, and it
+    // must fail loudly rather than travel as text the remote would search for.
+    const test = await mounted()
+    try {
+      test.agent.send(userMessage('@/definitely/not/here.txt look'))
+      await settle()
+      assert.equal(test.prompts.length, 0)
+      assert.ok(test.warnings.some(line => line.includes('not readable')))
     } finally {
       await test.service.dispose(); await test.ctx.fiber.dispose()
     }

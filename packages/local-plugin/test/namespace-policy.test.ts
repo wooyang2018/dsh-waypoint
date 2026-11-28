@@ -9,10 +9,12 @@ import {
   MIRRORED_REFUSALS,
   REPLAYED_PROJECTIONS,
   declaredNamespaces,
+  adaptedNamespaces,
   mirrorRefusal,
   policyFor,
   remoteNamespaceInventory,
   unclassifiedNamespaces,
+  uncoveredEndpoints,
 } from '../src/remote/namespace-policy.ts'
 import { reportUnclassifiedNamespaces } from '../src/remote/namespaces.ts'
 import { LocalError } from '../src/errors.ts'
@@ -156,15 +158,64 @@ describe('mirrored namespace policy', () => {
     }
   })
 
-  it('overrides only namespaces it declares', () => {
+  it('declares every namespace its endpoint table names', () => {
     for (const endpoint of Object.keys(MIRRORED_METHOD_POLICY)) {
       const namespace = endpoint.split('/')[0]
       assert.ok(namespace !== undefined)
       assert.ok(
         declaredNamespaces().includes(namespace),
-        `${endpoint} overrides an undeclared namespace`,
+        `${endpoint} names an undeclared namespace`,
+      )
+      assert.ok(
+        adaptedNamespaces().includes(namespace),
+        `${endpoint} names a namespace the adapter list misses`,
       )
     }
+  })
+
+  it('never lets a new operation inherit a remote-acting policy', () => {
+    // The defect a namespace-level default cannot avoid: `job: 'forward'` would
+    // adopt every future `job` mutation, and `job/kill` is refused precisely
+    // because acting on another machine's process needs a route this design does
+    // not add. An unclassified method on an adapted namespace may therefore
+    // resolve to nothing, or to `delegate` (which touches only this machine) —
+    // never to `forward` or `refuse`, which are the two the adapters install.
+    for (const namespace of adaptedNamespaces()) {
+      const inherited = policyFor(namespace, 'anOperationNobodyClassified')
+      assert.ok(
+        inherited === undefined || inherited === 'delegate',
+        `${namespace}/anOperationNobodyClassified inherits ${String(inherited)}; a new operation must be classified before it can act on the remote`,
+      )
+    }
+    // `job` is the namespace this rule exists for: its roster is forwarded, so a
+    // blanket default would be the dangerous kind. It has none.
+    assert.equal(policyFor('job'), undefined)
+    assert.equal(policyFor('goals'), undefined)
+    assert.equal(policyFor('agentTeams'), undefined)
+  })
+
+  it('reports an operation added to an adapted namespace', () => {
+    // Same criterion one level down: the live registry names `job/restart`, which
+    // the table has never seen, so it is reported rather than silently forwarded.
+    const inventory = remoteNamespaceInventory([
+      { namespace: 'job', method: 'list' },
+      { namespace: 'job', method: 'follow' },
+      { namespace: 'job', method: 'kill' },
+      { namespace: 'job', method: 'restart' },
+      { namespace: 'goals', method: 'create' },
+      { namespace: 'todos', method: 'list' },
+    ])
+    assert.deepEqual(uncoveredEndpoints(inventory), ['job/restart'])
+  })
+
+  it('reports nothing when every adapted operation is classified', () => {
+    const inventory = remoteNamespaceInventory(
+      Object.keys(MIRRORED_METHOD_POLICY).map(endpoint => {
+        const [namespace, method] = endpoint.split('/')
+        return { namespace: namespace as string, method: method as string }
+      }),
+    )
+    assert.deepEqual(uncoveredEndpoints(inventory), [])
   })
 
   it('names an unclassified Agent-addressed namespace observed in the live registry', () => {

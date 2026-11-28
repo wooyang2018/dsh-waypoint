@@ -47,6 +47,7 @@ import type {
 import { resolveDshHome, type ResolvedConfig } from '../config.ts'
 import { LocalError } from '../errors.ts'
 import { syncRemoteAttachment } from '../remote/attachments.ts'
+import { outdatedAgent } from '../remote/namespace-policy.ts'
 import { singleFlight } from './inflight.ts'
 import { isTestHidden, loadTestVisibility, type TestVisibility } from './test-visibility.ts'
 import { abandonedTurnEnd } from './recovery.ts'
@@ -565,6 +566,27 @@ function queueMutationError(code: string, message: string, details: Record<strin
     details,
     isDSHRemoteError: true as const,
   })
+}
+
+/**
+ * Move one mirror's queued messages onto another Agent's queue.
+ *
+ * A draft mirror and its materialized counterpart are different Agent objects with
+ * separate `MirrorInbox` instances over the same Session, so a message queued
+ * before the first prompt lives in the one the flush will never read. Moving the
+ * items across — in order, oldest first, through the inbox API so the splice is
+ * announced — is what keeps "edit a queued message" true across materialization.
+ *
+ * @param from - the draft Agent's inbox, drained.
+ * @param to - the runtime Agent's inbox, which the flush reads.
+ */
+function migrateMirrorInbox(from: MirrorInbox, to: MirrorInbox): void {
+  const nextTurn = [...from.nextTurn]
+  const nextStep = [...from.nextStep]
+  if (nextTurn.length === 0 && nextStep.length === 0) return
+  from.clear()
+  if (nextTurn.length > 0) to.splice('next-turn', to.nextTurn.length, 0, nextTurn)
+  if (nextStep.length > 0) to.splice('next-step', to.nextStep.length, 0, nextStep)
 }
 
 function createMirrorInbox(session: Session): MirrorInbox {
@@ -2359,18 +2381,30 @@ export class RemoteMirrorService {
   ): Promise<{ text: string; files: PromptFilePart[] }> {
     const files: PromptFilePart[] = []
     if (!text.includes('@')) return { text, files }
+    // Ownership decides before spelling does. A reference inside this Session's
+    // own remote workspace came from the remote `@` menu — that menu searches the
+    // remote tree — and the remote resolves it, so it must travel as text.
+    //
+    // The spelling cannot decide this: on a POSIX client `/data/home/u/proj/x` is
+    // *also* a local absolute path, so asking "could this disk hold that path"
+    // answers yes and the prompt is then refused as unreadable (or, where the file
+    // happens to exist here, uploads an unrelated file under a remote name). The
+    // machine-based test exists for the other direction — a path this disk really
+    // can hold — and only for paths this Session's workspace does not own.
+    const workspace = this.remoteFileContext(runtime.record.anchor)
+    const references = localPathReferences(text).filter((reference) =>
+      workspace === undefined || !withinRemoteRoot(workspace.remoteRoot, reference.path))
+    if (references.length === 0) return { text, files }
     if (!this.#hosts.supportsAgent(runtime.record.hostId, 'session.file-attachment')) {
       // Without the capability the bytes cannot cross, so a reference would be
       // sent as text the remote cannot read. Say so instead, naming the path.
-      const reference = localPathReferences(text)[0]
-      if (reference === undefined) return { text, files }
       throw new LocalError('agent/unavailable', 'the remote agent cannot forward file attachments', {
         retryable: false,
         ui: { key: 'error.mirrorAttachmentUnsupported' },
       })
     }
     let rewritten = text
-    for (const reference of localPathReferences(text)) {
+    for (const reference of references) {
       const resolved = await this.#readLocalFile(reference.path)
       if (resolved === undefined) {
         // The text mentioned an `@absolute-path` that is not a readable local
@@ -2744,6 +2778,12 @@ export class RemoteMirrorService {
     const runtime = this.#runtimes.get(record.localSessionId)
     if (runtime === undefined) throw new Error('remote mirror Agent is unavailable')
     this.#pendingBlanks.delete(pending.localSessionId)
+    // A draft's queue belongs to the Agent the Host has registered for it — the
+    // lazy façade — while the `turn/end` flush reads the *runtime's* Agent, which
+    // only exists from here on. Anything queued (or edited) before the first
+    // prompt therefore has to move with the Session, or the flush would look at an
+    // empty queue and the message the user left would never be sent.
+    migrateMirrorInbox(pending.agent.inbox, runtime.agent.inbox)
     // The draft may have been renamed before the remote Session existed, which
     // the interposer correctly wrote locally. The remote Session exists now and
     // the first prompt is about to be forwarded, so this is the one moment the
@@ -3321,29 +3361,28 @@ export class RemoteMirrorService {
    * projection — so `goals.get` keeps working unchanged.
    *
    * Three answers, deliberately distinct:
-   * - `undefined` — this is not a mirrored Session, or its agent predates the
-   *   route. The caller keeps today's local behaviour (the design's R6), which is
-   *   wrong but visible, and an upgrade fixes it.
+   * - `undefined` — this is not a mirrored Session, so there is nothing remote to
+   *   reach and the caller's own implementation is the correct one.
    * - a result — the remote committed the change; the value is the remote's own
    *   view.
-   * - a throw — the host is not connected, or the remote refused. Nothing was
-   *   written locally, and the operation reports failure. There is deliberately no
-   *   fallback to a local write, because that is exactly the silent divergence
-   *   this exists to remove.
+   * - a throw — the host is not connected, its agent predates the route, or the
+   *   remote refused. Nothing was written locally, and the operation reports
+   *   failure. An older agent is *not* a delegation case: the local write it used
+   *   to fall back to is the banner-that-never-left the design exists to remove,
+   *   so it gets the same answer a disconnected host does.
    * @param localSessionId - the mirrored Session the operation was addressed to.
    * @param request - operation and its fields.
-   * @returns the remote's answer, or undefined when the caller should delegate.
+   * @returns the remote's answer, or undefined for a Session that is not mirrored.
    */
   async forwardGoal(localSessionId: string, request: RemoteGoalRequest): Promise<RemoteGoalResult | undefined> {
     const mirror = this.mirrorFor(localSessionId)
     if (mirror === undefined) return undefined
     const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
     if (!this.#hosts.supportsAgent(hostId, 'session.goals')) {
-      this.#ctx.logger.debug(
-        'dsh-waypoint: agent for %s cannot forward goal operations; keeping the local goal',
-        hostId,
-      )
-      return undefined
+      // An older agent is not an invitation to write the goal here: the local
+      // banner would be exactly the divergence this method exists to end. The
+      // operation did not happen, and that is what it reports.
+      throw outdatedAgent('goal operation', hostId, localSessionId)
     }
     // A draft has no remote Session until something is sent. Creating it here is
     // the same act as the draft's first prompt — the user's `/goal` is equally a
@@ -3374,18 +3413,16 @@ export class RemoteMirrorService {
    * previous state, which is the worst possible pair.
    * @param localSessionId - the mirrored Session the toggle was used on.
    * @param enabled - requested mode.
-   * @returns the applied mode, or undefined when the caller should delegate.
+   * @returns the applied mode, or undefined for a Session that is not mirrored.
    */
   async forwardTeamMode(localSessionId: string, enabled: boolean): Promise<boolean | undefined> {
     const mirror = this.mirrorFor(localSessionId)
     if (mirror === undefined) return undefined
     const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
     if (!this.#hosts.supportsAgent(hostId, 'session.team')) {
-      this.#ctx.logger.debug(
-        'dsh-waypoint: agent for %s cannot forward Team mode; keeping the local selection',
-        hostId,
-      )
-      return undefined
+      // Same rule as goals: toggling the banner locally would leave the remote's
+      // own Team machinery on its previous setting, which is the worst pair.
+      throw outdatedAgent('Team mode', hostId, localSessionId)
     }
     const remoteSessionId = mirror.remoteSessionId === ''
       ? await this.remoteSessionForCommand(localSessionId)
@@ -3402,7 +3439,7 @@ export class RemoteMirrorService {
    * watching a long build is exactly the one who looks.
    * @param localSessionId - the mirrored Session whose jobs to list.
    * @param signal - consumer cancellation, forwarded to the remote stream.
-   * @returns the remote frames, or undefined when the caller should delegate.
+   * @returns the remote frames, or undefined for a Session that is not mirrored.
    */
   forwardJobs(localSessionId: string, signal: AbortSignal): AsyncIterable<RemoteJobListFrame> | undefined {
     const mirror = this.mirrorFor(localSessionId)
@@ -3411,11 +3448,12 @@ export class RemoteMirrorService {
     if (mirror === undefined || mirror.remoteSessionId === '') return undefined
     const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
     if (!this.#hosts.supportsAgent(hostId, 'session.jobs')) {
-      this.#ctx.logger.debug(
-        'dsh-waypoint: agent for %s cannot forward the job roster; the local list stays empty',
-        hostId,
-      )
-      return undefined
+      // A local roster would be empty, and an empty roster asserts "nothing is
+      // running on this machine" — a false statement about the remote that the
+      // person watching a long build is most likely to act on. The failure is
+      // delivered through the stream because that is how this method reports:
+      // returning it as a rejected *iteration* keeps the wire shape unchanged.
+      return this.#failingStream(outdatedAgent('job roster', hostId, localSessionId))
     }
     const remoteSessionId = mirror.remoteSessionId
     return this.#followRemoteJobs(hostId, remoteSessionId, signal)
@@ -3430,7 +3468,7 @@ export class RemoteMirrorService {
    * @param jobId - remote registry id, as the forwarded roster reported it.
    * @param from - absolute byte offset to resume from.
    * @param signal - consumer cancellation.
-   * @returns the remote frames, or undefined when the caller should delegate.
+   * @returns the remote frames, or undefined for a Session that is not mirrored.
    */
   forwardJobOutput(
     localSessionId: string,
@@ -3441,9 +3479,24 @@ export class RemoteMirrorService {
     const mirror = this.mirrorFor(localSessionId)
     if (mirror === undefined || mirror.remoteSessionId === '') return undefined
     const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
-    if (!this.#hosts.supportsAgent(hostId, 'session.jobs')) return undefined
+    if (!this.#hosts.supportsAgent(hostId, 'session.jobs')) {
+      return this.#failingStream(outdatedAgent('job output', hostId, localSessionId))
+    }
     const remoteSessionId = mirror.remoteSessionId
     return this.#followRemoteJobOutput(hostId, remoteSessionId, jobId, from, signal)
+  }
+
+  /**
+   * A stream whose only outcome is a failure.
+   *
+   * The two job reads are Remote *stream* methods, so they cannot report by
+   * throwing: the caller receives an iterable and learns what happened when it
+   * starts consuming. Throwing on the first `next()` is therefore the same
+   * failure a broken SSE stream produces, and it keeps the wire shape intact.
+   * @param error - the failure to raise when the consumer asks for a frame.
+   */
+  async *#failingStream<T>(error: Error): AsyncGenerator<T> {
+    throw error
   }
 
   /** One host's roster stream, as the async iterable a Remote stream method returns. */
@@ -5848,19 +5901,20 @@ function promptText(message: unknown): string {
 /**
  * Stable signature of one prompt's non-text parts, in order.
  *
- * Each part is described as `type:mediaType:name` with empty fields when the
- * part has none, so the description carries what the remote echoes back — the
- * kind, the media type of an image, and the display name — and nothing that
- * would differ between the two sides, such as a local attachment id or the
- * bytes themselves. Parts are joined in order, because a prompt may carry
- * several and "an image and a file" must not read the same as "a file and an
- * image".
+ * Only the *kind* of each part, never what the remote may rewrite. Two fields
+ * were tempting and are wrong: admission re-encodes an image (alpha routing picks
+ * JPEG or WebP, so `mediaType` changes) and sanitizes a display name, and both
+ * then differ between what was forwarded and what the remote echoes back. An
+ * identity that includes them stops matching exactly when it is needed most — an
+ * attachment-only prompt has no text to fall back on, so a drifted signature
+ * meant the echo was appended as a second node, which is the duplicate bubble
+ * this matching exists to remove.
  *
- * Computed by the same function on both sides: the forward side passes what
- * `#promptContent` returned, the echo side passes the replayed `user/message`
- * content, so the two agree by construction. Both spellings of a part are read
- * because they differ: a forwarded image carries `mediaType` and `name` on the
- * part, while a persisted one keeps them inside its `attachment` reference.
+ * Kinds in order are enough to tell the shapes apart (`image` from `file`, and
+ * "an image and a file" from "a file and an image") and stable under everything
+ * the remote may do to the bytes. Two prompts that differ only in which picture
+ * they carry are separated by the queue order instead, which is what the oldest
+ * matching entry means.
  *
  * @param content - ordered content parts, forwarded or echoed.
  * @returns the signature; empty when the prompt carries no attachment part.
@@ -5869,18 +5923,9 @@ function attachmentSignature(content: readonly unknown[]): string {
   const described: string[] = []
   for (const part of content) {
     if (typeof part !== 'object' || part === null) continue
-    const record = part as { type?: unknown; mediaType?: unknown; name?: unknown; attachment?: unknown }
+    const record = part as { type?: unknown }
     if (record.type !== 'image' && record.type !== 'file') continue
-    const attachment = typeof record.attachment === 'object' && record.attachment !== null
-      ? record.attachment as { mediaType?: unknown; name?: unknown }
-      : undefined
-    const mediaType = typeof record.mediaType === 'string'
-      ? record.mediaType
-      : typeof attachment?.mediaType === 'string' ? attachment.mediaType : ''
-    const name = typeof record.name === 'string'
-      ? record.name
-      : typeof attachment?.name === 'string' ? attachment.name : ''
-    described.push(`${record.type}:${mediaType}:${name}`)
+    described.push(record.type)
   }
   return described.join('\n')
 }
@@ -5899,16 +5944,16 @@ function promptSignatureFromRemote(data: unknown): string {
  * Text and attachment signature together, in that order of emphasis:
  *
  * - A prompt that carries text is identified by that text, exactly as before.
- *   The signature is tried first and is the better answer when it matches, but
- *   the remote is allowed to re-encode an image (normalization picks the media
- *   type) or sanitize a display name, and one drifted part must not turn an
- *   ordinary `text + image` prompt into the duplicate bubble this matching
- *   exists to remove. Falling back to text keeps that case where it has always
- *   been.
- * - A prompt with no text — one image, one file — has no such fallback and
- *   needs the signature, or the replayed message cannot bind to anything. That
- *   is the defect: with the text comparison alone, `text === ''` never matched,
- *   so the echo was appended as a second node.
+ *   The signature is tried first and is the better answer when it matches;
+ *   falling back to text covers the case where the remote changed the *set* of
+ *   parts (it may drop one it cannot admit), which no signature can anticipate.
+ * - A prompt with no text — one image, one file — needs the signature, or the
+ *   replayed message cannot bind to anything. That is the defect: with the text
+ *   comparison alone, `text === ''` never matched, so the echo was appended as a
+ *   second node. The signature is kinds-in-order only (see
+ *   {@link attachmentSignature}), so an image the remote re-encoded or renamed
+ *   still matches here; a signature that carried those fields would fail exactly
+ *   in this case, which is why it does not.
  * - An entry with neither text nor a matching signature is left alone: the
  *   remote message is appended as history. That is the safe direction, and it
  *   is what keeps an empty queue from claiming the first attachment the remote
@@ -5952,19 +5997,38 @@ interface LocalPathReference {
 }
 
 /**
+ * Whether an absolute path lies at or below one remote workspace root.
+ *
+ * This is the ownership question, and it is asked before the spelling question
+ * because the spelling cannot answer it: a remote candidate and a local absolute
+ * path look the same on a POSIX client. A path inside the Session's own remote
+ * workspace belongs to that workspace, so the remote resolves it and this side
+ * must not touch it.
+ *
+ * @param root - the Session's remote workspace root, POSIX-spelled.
+ * @param path - candidate path from the prompt text.
+ * @returns whether `path` is the root itself or inside it.
+ */
+function withinRemoteRoot(root: string, path: string): boolean {
+  const normalized = root.endsWith('/') ? root.slice(0, -1) : root
+  if (normalized === '') return false
+  return path === normalized || path.startsWith(`${normalized}/`)
+}
+
+/**
  * Whether a path is absolute in a spelling this machine's filesystem could hold.
  *
  * The composer uses one `@` grammar for two different things: a file the user
  * picked on *this* machine, and a file the remote `@` menu offered from the
- * Session's remote directory. The second is POSIX-spelled absolute, and sending
- * it as bytes would read the wrong disk — or, where the spelling happens to
- * exist locally, upload an unrelated file under a remote name.
+ * Session's remote directory. Ownership is decided first
+ * ({@link withinRemoteRoot}); this predicate then covers what remains, and its
+ * job is the opposite direction — a path this disk genuinely can hold.
  *
  * The discriminator is therefore this machine, not the text: a drive-letter or
  * UNC path is a Windows path whatever platform reads it, while `/…` is absolute
  * only where the local filesystem is POSIX. A Windows client consequently never
- * rewrites a `/…` reference, which is what keeps a remote path intact for the
- * remote to resolve.
+ * rewrites a `/…` reference, and a POSIX client rewrites only the ones its own
+ * workspace does not claim.
  *
  * @param path - the candidate path, with quotes already removed.
  * @returns whether this machine could hold that path.

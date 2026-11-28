@@ -123,6 +123,31 @@ describe('pairing a replayed prompt with its optimistic bubble', () => {
     } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
   })
 
+  it('reuses the bubble after the remote re-encodes the image', async () => {
+    // Admission normalizes an image — alpha routing picks JPEG or WebP — and may
+    // rename it, so the echoed reference differs from what was forwarded field for
+    // field. Identity is the kinds in order, never `mediaType`/`name`, so this
+    // prompt still pairs; it has no text to fall back on, and a signature that
+    // carried those fields would duplicate the bubble it was meant to reuse.
+    const log: RawEvent[] = [start(0, 1), end(1, 1)]
+    const test = await mounted(log)
+    try {
+      test.setLocalAttachment(imageRef, { data: Buffer.from([1, 2, 3]), mediaType: 'image/png' })
+      test.agent.send({ role: 'user', content: [{ type: 'image', attachment: imageRef }] })
+      await settle()
+      assert.equal(test.prompts.length, 1)
+
+      const reencoded = {
+        type: 'image',
+        attachment: { ...imageRef, mediaType: 'image/jpeg', name: 'admitted.jpg' },
+      }
+      log.push(start(2, 2), echo(3, [reencoded]), end(4, 2))
+      await replay(test, log)
+
+      assert.equal(userMessages(test.local).length, 1, 'a re-encoded image is still one bubble')
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+
   it('reuses the bubble for a prompt that carries only a file', async () => {
     const log: RawEvent[] = [start(0, 1), end(1, 1)]
     const test = await mounted(log)

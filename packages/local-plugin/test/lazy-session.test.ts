@@ -73,6 +73,43 @@ describe('lazy remote Session creation', () => {
     }
   })
 
+  it('carries a message queued before the first prompt onto the Agent the flush reads', async () => {
+    // A draft and its materialized counterpart are different Agent objects with
+    // separate inboxes over the same Session. The `turn/end` flush reads the
+    // runtime's, so anything queued on the draft has to move with the Session or
+    // the message the user left would never be sent.
+    const test = harness()
+    try {
+      await test.service.start()
+      const localWorkspaceId = test.service.localWorkspaceIds()[0]
+      assert.ok(localWorkspaceId)
+      const blank = await test.service.startBlankSession('host-test', { localWorkspaceId })
+      const lazy = test.liveAgents.get(blank.localSessionId) as unknown as {
+        send(message: unknown, target?: unknown, wakeup?: boolean): void
+        inbox: {
+          splice(target: 'next-turn' | 'next-step', start: number, deleteCount: number, inserted: unknown[]): unknown[]
+        }
+      }
+      const queued = { id: 'queued-1', role: 'user', content: [{ type: 'text', text: 'the follow-up' }] }
+      lazy.inbox.splice('next-turn', 0, 0, [queued])
+      lazy.send({ id: 'message-1', role: 'user', content: [{ type: 'text', text: 'first' }] }, undefined, true)
+      for (let attempt = 0; attempt < 100 && test.prompts.length === 0; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      assert.equal(test.prompts.length, 1, 'the first prompt materialized the Session')
+      const materialized = test.liveAgents.get(blank.localSessionId) as unknown as {
+        inbox: { nextTurn: readonly unknown[] }
+      }
+      assert.deepEqual(
+        materialized.inbox.nextTurn.map(message => (message as { id?: string }).id),
+        ['queued-1'],
+        'the queued message moved to the queue the flush reads',
+      )
+    } finally {
+      await test.service.dispose()
+      await test.ctx.fiber.dispose()
+    }
+  })
   it('retries a failed promotion against the same remote Session', async () => {
     const test = harness()
     try {
@@ -433,6 +470,43 @@ describe('blank remote Session deduplication', () => {
     }
   })
 
+  it('carries a message queued before the first prompt onto the Agent the flush reads', async () => {
+    // A draft and its materialized counterpart are different Agent objects with
+    // separate inboxes over the same Session. The `turn/end` flush reads the
+    // runtime's, so anything queued on the draft has to move with the Session or
+    // the message the user left would never be sent.
+    const test = harness()
+    try {
+      await test.service.start()
+      const localWorkspaceId = test.service.localWorkspaceIds()[0]
+      assert.ok(localWorkspaceId)
+      const blank = await test.service.startBlankSession('host-test', { localWorkspaceId })
+      const lazy = test.liveAgents.get(blank.localSessionId) as unknown as {
+        send(message: unknown, target?: unknown, wakeup?: boolean): void
+        inbox: {
+          splice(target: 'next-turn' | 'next-step', start: number, deleteCount: number, inserted: unknown[]): unknown[]
+        }
+      }
+      const queued = { id: 'queued-1', role: 'user', content: [{ type: 'text', text: 'the follow-up' }] }
+      lazy.inbox.splice('next-turn', 0, 0, [queued])
+      lazy.send({ id: 'message-1', role: 'user', content: [{ type: 'text', text: 'first' }] }, undefined, true)
+      for (let attempt = 0; attempt < 100 && test.prompts.length === 0; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      assert.equal(test.prompts.length, 1, 'the first prompt materialized the Session')
+      const materialized = test.liveAgents.get(blank.localSessionId) as unknown as {
+        inbox: { nextTurn: readonly unknown[] }
+      }
+      assert.deepEqual(
+        materialized.inbox.nextTurn.map(message => (message as { id?: string }).id),
+        ['queued-1'],
+        'the queued message moved to the queue the flush reads',
+      )
+    } finally {
+      await test.service.dispose()
+      await test.ctx.fiber.dispose()
+    }
+  })
   it('retries a failed promotion against the same remote Session', async () => {
     const test = harness()
     try {
@@ -822,6 +896,43 @@ describe('native draft promotion', () => {
     }
   })
 
+  it('carries a message queued before the first prompt onto the Agent the flush reads', async () => {
+    // A draft and its materialized counterpart are different Agent objects with
+    // separate inboxes over the same Session. The `turn/end` flush reads the
+    // runtime's, so anything queued on the draft has to move with the Session or
+    // the message the user left would never be sent.
+    const test = harness()
+    try {
+      await test.service.start()
+      const localWorkspaceId = test.service.localWorkspaceIds()[0]
+      assert.ok(localWorkspaceId)
+      const blank = await test.service.startBlankSession('host-test', { localWorkspaceId })
+      const lazy = test.liveAgents.get(blank.localSessionId) as unknown as {
+        send(message: unknown, target?: unknown, wakeup?: boolean): void
+        inbox: {
+          splice(target: 'next-turn' | 'next-step', start: number, deleteCount: number, inserted: unknown[]): unknown[]
+        }
+      }
+      const queued = { id: 'queued-1', role: 'user', content: [{ type: 'text', text: 'the follow-up' }] }
+      lazy.inbox.splice('next-turn', 0, 0, [queued])
+      lazy.send({ id: 'message-1', role: 'user', content: [{ type: 'text', text: 'first' }] }, undefined, true)
+      for (let attempt = 0; attempt < 100 && test.prompts.length === 0; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      assert.equal(test.prompts.length, 1, 'the first prompt materialized the Session')
+      const materialized = test.liveAgents.get(blank.localSessionId) as unknown as {
+        inbox: { nextTurn: readonly unknown[] }
+      }
+      assert.deepEqual(
+        materialized.inbox.nextTurn.map(message => (message as { id?: string }).id),
+        ['queued-1'],
+        'the queued message moved to the queue the flush reads',
+      )
+    } finally {
+      await test.service.dispose()
+      await test.ctx.fiber.dispose()
+    }
+  })
   it('retries a failed promotion against the same remote Session', async () => {
     const test = harness()
     try {
