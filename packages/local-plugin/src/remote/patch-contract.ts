@@ -125,6 +125,16 @@ export const REQUIRED_SKILL_CATALOG_METHODS = ['list'] as const
  */
 export const REQUIRED_WORKING_DIRECTORY_METHODS = ['ensure', 'get', 'set'] as const
 
+/**
+ * The `sessionFileReferences` method the `@` menu adapter replaces.
+ *
+ * The service owns the `fileReferences` Remote namespace, so `list` is the single
+ * method the browser's `@` source calls. A Host that renames it must report "the
+ * remote menu is inactive" rather than let the stock method answer: that one
+ * walks this machine's tree and would present it as the remote project's files.
+ */
+export const REQUIRED_FILE_REFERENCE_METHODS = ['list'] as const
+
 /** One expected method the service did not offer. */
 export interface MissingPatchMethod {
   readonly method: string
