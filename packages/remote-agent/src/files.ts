@@ -42,6 +42,33 @@ function statVersion(value: { mtimeNs: bigint; size: bigint }): string {
   return `${value.mtimeNs.toString()}:${value.size.toString()}`
 }
 
+/** What one stat result is, in the vocabulary the wire uses. */
+type PathType = 'file' | 'directory' | 'other'
+
+/** Classify one stat result. */
+function statType(value: { isFile(): boolean; isDirectory(): boolean }): PathType {
+  if (value.isDirectory()) return 'directory'
+  return value.isFile() ? 'file' : 'other'
+}
+
+/** The refusal a read owes a path that is not a regular file. */
+function notRegularFile(path: string, kind: PathType): RemoteProtocolError {
+  return new RemoteProtocolError({
+    code: 'workspace-file/not-regular-file',
+    message: `not a regular file: ${path}`,
+    details: { path, kind },
+  })
+}
+
+/**
+ * Stat one path, whatever it is.
+ *
+ * Answering a directory here rather than throwing is what lets the local `fs`
+ * adapter tell the truth: it has nowhere else to learn the type from, and a
+ * caller that only wants metadata (the file tree, `workingDirectory.ensure`)
+ * asks exactly this question. The reads below keep their own refusal, because a
+ * reader genuinely cannot read a directory.
+ */
 async function fileStat(path: string): Promise<RemoteFileStat> {
   let value
   try {
@@ -61,14 +88,15 @@ async function fileStat(path: string): Promise<RemoteFileStat> {
     }
     throw new RemoteProtocolError({ code: 'workspace-file/not-found', message: `not found: ${path}`, details: { path }, cause: error })
   }
-  if (!value.isFile()) {
-    throw new RemoteProtocolError({
-      code: 'workspace-file/not-regular-file',
-      message: `not a regular file: ${path}`,
-      details: { path, kind: value.isDirectory() ? 'directory' : 'other' },
-    })
+  const type = statType(value)
+  return {
+    absolutePath: path,
+    version: statVersion(value),
+    // `bytes` stays file-only: a directory has no size this protocol defines,
+    // and reporting `st_size` for one would invite a caller to page it.
+    ...type === 'file' ? { bytes: Number(value.size) } : {},
+    type,
   }
-  return { absolutePath: path, version: statVersion(value), bytes: Number(value.size) }
 }
 
 /** Stat one regular file. */
@@ -76,9 +104,30 @@ export async function statFile(path: string): Promise<RemoteFileStat> {
   return fileStat(path)
 }
 
+/**
+ * Stat a path and refuse anything that is not a regular file.
+ *
+ * `fileStat` answers a directory rather than throwing, so the refusal a read owes
+ * lives here. It is not cosmetic: `createReadStream` on a directory yields EISDIR
+ * on Linux, and the reader below treats an unreadable stream as an empty one —
+ * reporting "0 lines" for a directory, which is indistinguishable from an empty
+ * file. A stat with no `type` at all cannot come from this agent; if one does,
+ * `file` is the same reading the local adapter applies.
+ *
+ * @param path - the path about to be read.
+ * @returns its stat, with `type: 'file'`.
+ * @throws `workspace-file/not-regular-file` for a directory or a special file.
+ */
+async function statRegular(path: string): Promise<RemoteFileStat & { readonly type: 'file' }> {
+  const info = await fileStat(path)
+  const type = info.type ?? 'file'
+  if (type !== 'file') throw notRegularFile(path, type)
+  return { ...info, type }
+}
+
 /** Read one text page with the same line semantics as the old SSH helper. */
 export async function readText(path: string, offsetInput?: number, limitInput?: number): Promise<RemoteFileText> {
-  const info = await fileStat(path)
+  const info = await statRegular(path)
   const offset = Math.max(1, Math.trunc(offsetInput ?? 1))
   const limit = Math.max(1, Math.min(Math.trunc(limitInput ?? 200), 2_000))
   const lines: string[] = []
@@ -132,7 +181,10 @@ export async function readText(path: string, offsetInput?: number, limitInput?: 
 
 /** Read one bounded byte window. */
 export async function readBytes(path: string, offsetInput?: number, lengthInput?: number): Promise<RemoteFileBytes> {
-  const info = await fileStat(path)
+  // Same refusal as `readText`: `open(path, 'r')` succeeds for a directory on
+  // most POSIX hosts and the first `read` is what fails, so the check has to come
+  // before the handle is opened.
+  const info = await statRegular(path)
   const offset = Math.max(0, Math.trunc(offsetInput ?? 0))
   const length = Math.max(0, Math.min(Math.trunc(lengthInput ?? MAX_BYTES), MAX_BYTES))
   const handle = await open(path, 'r')

@@ -36,7 +36,18 @@ function fakeMirrors() {
   }
 }
 
-function fakeHosts(text = 'line one\nline two', bytes = Buffer.from('hello'), missing = new Set<string>()) {
+/**
+ * One fake agent.
+ *
+ * @param kind - the type the agent reports. `undefined` is an agent older than
+ *   the field, which sends no `type` at all.
+ */
+function fakeHosts(
+  text = 'line one\nline two',
+  bytes = Buffer.from('hello'),
+  missing = new Set<string>(),
+  kind: 'file' | 'directory' | 'other' | undefined = 'file',
+) {
   const calls: Array<{ op: string; path: string; offset?: number }> = []
   const hosts = {
     calls,
@@ -49,10 +60,18 @@ function fakeHosts(text = 'line one\nline two', bytes = Buffer.from('hello'), mi
             // Exactly what the agent answers for an absent path.
             return Promise.reject(Object.assign(new Error(`not found: ${path}`), { code: 'workspace-file/not-found' }))
           }
-          return Promise.resolve({ absolutePath: path, version: 'v1', bytes: bytes.length })
+          return Promise.resolve({
+            absolutePath: path,
+            version: 'v1',
+            ...kind === 'file' ? { bytes: bytes.length } : {},
+            // `undefined` is omitted by JSON on the wire, which is what an older
+            // agent's response looks like after validation.
+            ...kind === undefined ? {} : { type: kind },
+          })
         },
         fileRead(path: string, offset = 1, limit = 200) {
           calls.push({ op: 'read', path, offset })
+          if (kind !== 'file') return Promise.reject(notRegularFile(path))
           const lines = text.split('\n')
           const slice = lines.slice(offset - 1, offset - 1 + limit)
           return Promise.resolve({
@@ -66,6 +85,7 @@ function fakeHosts(text = 'line one\nline two', bytes = Buffer.from('hello'), mi
         },
         fileBytes(path: string, offset = 0, length = 5_000_000) {
           calls.push({ op: 'bytes', path, offset })
+          if (kind !== 'file') return Promise.reject(notRegularFile(path))
           const slice = bytes.subarray(offset, offset + length)
           return Promise.resolve({
             absolutePath: path,
@@ -86,6 +106,11 @@ function fakeHosts(text = 'line one\nline two', bytes = Buffer.from('hello'), mi
     },
   }
   return hosts
+}
+
+/** The refusal the agent raises for a read of a directory or a special file. */
+function notRegularFile(path: string) {
+  return Object.assign(new Error(`not a regular file: ${path}`), { code: 'workspace-file/not-regular-file' })
 }
 
 function fakeFs() {
@@ -270,6 +295,63 @@ it('reports an absent remote file as FS_NOT_FOUND', async () => {
     await assert.rejects(
       () => service.readBytes(target, undefined, 1024),
       (error: any) => error.code !== 'FS_NOT_FOUND',
+    )
+    restore()
+  })
+
+  it('reports a remote directory as a directory', async () => {
+    // The agent used to refuse a directory outright, so the adapter could only
+    // ever answer `type: 'file'` (or fail). A file tree that stats each child
+    // needs the truth here.
+    const service = fakeFs()
+    const hosts = fakeHosts('x', Buffer.from('hello'), new Set(), 'directory')
+    const restore = install(service, hosts)
+    const target = await service.resolve('src', { cwd: ANCHOR })
+    const info = await service.stat(target)
+    assert.equal(info?.type, 'directory')
+    assert.equal(info?.version, 'v1')
+    // No size is defined for a directory, so none is invented.
+    assert.equal(info?.size, undefined)
+    restore()
+  })
+
+  it('reports a non-regular path as other', async () => {
+    const service = fakeFs()
+    const restore = install(service, fakeHosts('x', Buffer.from('hello'), new Set(), 'other'))
+    const info = await service.stat(await service.resolve('sock', { cwd: ANCHOR }))
+    assert.equal(info?.type, 'other')
+    restore()
+  })
+
+  it('forwards the type through lstat as well', async () => {
+    const service = fakeFs()
+    const restore = install(service, fakeHosts('x', Buffer.from('hello'), new Set(), 'directory'))
+    const info = await service.lstat('src', { cwd: ANCHOR })
+    assert.equal(info?.type, 'directory')
+    restore()
+  })
+
+  it('treats an agent that reports no type as a file', async () => {
+    // The field is optional on the wire, so an agent one release behind has to
+    // reproduce exactly what this adapter answered before the field existed
+    // rather than fail or claim a directory.
+    const service = fakeFs()
+    const restore = install(service, fakeHosts('x', Buffer.from('hello'), new Set(), undefined))
+    const info = await service.stat(await service.resolve('a.txt', { cwd: ANCHOR }))
+    assert.equal(info?.type, 'file')
+    assert.equal(info?.size, 5)
+    restore()
+  })
+
+  it('reports a directory read as FS_NOT_REGULAR_FILE, not FS_NOT_FOUND', async () => {
+    // Reading a directory is a distinct answer from reading a missing path: the
+    // path is right there, and a reader told "not found" would go check it.
+    const service = fakeFs()
+    const restore = install(service, fakeHosts('x', Buffer.from('hello'), new Set(), 'directory'))
+    const target = await service.resolve('.', { cwd: ANCHOR })
+    await assert.rejects(
+      () => service.readText(target),
+      (error: any) => error.code === 'FS_NOT_REGULAR_FILE',
     )
     restore()
   })

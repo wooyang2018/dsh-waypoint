@@ -25,6 +25,67 @@ describe('remote files', () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  it('reports what it stat-ed instead of refusing a directory', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-stat-'))
+    try {
+      const file = join(dir, 'sample.txt')
+      await writeFile(file, 'abc')
+      const directory = await statFile(dir)
+      assert.equal(directory.type, 'directory')
+      // The version has to survive: the change adapter keys invalidation on it.
+      assert.equal(typeof directory.version, 'string')
+      assert.ok(directory.version.length > 0)
+      // No size is defined for a directory here, so none is claimed.
+      assert.equal(directory.bytes, undefined)
+
+      const regular = await statFile(file)
+      assert.equal(regular.type, 'file')
+      assert.equal(regular.bytes, 3)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('classifies a non-regular file as other', { skip: process.platform === 'win32' && 'needs a POSIX socket path' }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-other-'))
+    const { createServer } = await import('node:net')
+    // A unix socket is the cheapest non-file, non-directory path Node can make
+    // without privileges (a fifo would need `mkfifo`).
+    const socketPath = join(dir, 'sock')
+    const server = createServer()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject)
+        server.listen(socketPath, resolve)
+      })
+      const info = await statFile(socketPath)
+      assert.equal(info.type, 'other')
+      assert.equal(info.bytes, undefined)
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('still refuses to read a directory', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-waypoint-nodir-'))
+    try {
+      // The refusal moved out of `fileStat` and into the reads. Without it the
+      // line reader treats the unreadable stream as empty and answers "0 lines",
+      // which reads exactly like an empty file.
+      await assert.rejects(
+        () => readText(dir),
+        (error: any) => error.code === 'workspace-file/not-regular-file',
+      )
+      await assert.rejects(
+        () => readBytes(dir),
+        (error: any) => error.code === 'workspace-file/not-regular-file',
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('remote terminal', () => {

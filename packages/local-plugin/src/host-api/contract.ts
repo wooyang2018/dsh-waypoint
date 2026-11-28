@@ -130,6 +130,18 @@ export interface RemoteHostsState {
     readonly status: 'active' | 'bypassed'
     readonly missing?: readonly string[]
   }
+  /**
+   * Whether host-side working-directory routing is installed.
+   *
+   * `bypassed` means a mirrored Session's recorded remote cwd is validated
+   * against this machine's disk: every tool that resolves a cwd, the `@` mention
+   * menu and the `/` skill list then fail on a directory that only exists on the
+   * remote.
+   */
+  readonly workingDirectoryRouting: {
+    readonly status: 'active' | 'bypassed'
+    readonly missing?: readonly string[]
+  }
 }
 
 /** Result of parsing a destination. */

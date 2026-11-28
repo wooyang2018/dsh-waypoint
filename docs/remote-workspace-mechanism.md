@@ -746,6 +746,27 @@ side differ:
    as `remote file path is outside the mirrored workspace`, and the sidebar rendered that as
    `读取失败：…` — an error naming the mirror for a path the mirror was never asked about.
 
+**The working directory is the same question, asked of a different service.** `dsh-working-directory`
+commits a Session's effective directory with `working-directory/change`, and the mirror replays that like
+any other event, so a mirrored Session's projection becomes the *remote* absolute path. Its `ensure()`
+then validated that value through `ctx.fs` — this machine's disk — and `ensure()` sits on the path of
+every tool that resolves a cwd, of the `@` mention menu and of the `/` skill list, which is why those
+failed together. `installRemoteWorkingDirectory` (`src/remote/working-directory.ts`) answers it with one
+`file.stat` on the owning host and writes nothing: the projection append the stock service performs would
+be a second writer for an event the remote already owns, and its "recovery" would rewrite a healthy
+remote cwd to a local default. While the projection is still the local anchor, the remote Session is
+asked for its cwd once (`session.snapshot`) and kept per projection, so the warm path stays one call.
+`set()` is refused with `WORKING_DIRECTORY_REMOTE` rather than forwarded — the remote owns `/cd`, and a
+local commit would fork the two logs — and a path two hosts claim is refused instead of guessed, the
+rule §3 of [host resolution](mirror-host-resolution.md) applies to every adapter. A remote `/cd` outside
+every mirrored workspace is answered truthfully too, but the local file menu cannot follow it there: the
+`fs` adapter names a host through its workspace roots and will not invent one (see §9).
+
+That `file.stat` is also why the type belongs on the wire: stat-ing a directory used to be an error, so
+nothing could ask a remote path whether it *was* one. `RemoteFileStat.type` is optional so an older
+agent stays readable, and the adapter reads an absent value as `file` — the answer it has always given —
+rather than inventing a directory out of silence.
+
 ### 6.2 The native file panel, and why one interception layer is enough
 
 The Host ships its own right-sidebar file panel (`@deepseek-ai/dsh-client-ui-sidebar-files`, the
@@ -1236,6 +1257,10 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | Cold sessions have no event stream, only polling | The remote answers `session/not-live`; cold resume is not implemented |
 | The anchor is empty, so reading `fs` locally sees nothing | Remote content never lands on local disk |
 | A renamed `workspaceFiles` method would silently switch file routing off | The install step checks the live service and reports `fileRouting: 'bypassed'` (6.2) |
+| A renamed `workingDirectory` method would validate a remote cwd against local disk again | Checked against `REQUIRED_WORKING_DIRECTORY_METHODS` and reported as `workingDirectoryRouting: 'bypassed'` (6.1) |
+| `/cd` is refused inside a mirrored Session | The remote owns that directory; forwarding needs a `session.cd` route and an owner for the event (6.1) |
+| A remote directory cannot be stat-ed through an agent older than the `type` field | The field is optional on the wire and read as `file`, which reproduces the previous behaviour (6.1) |
+| A remote cwd outside every mirrored workspace is not reachable from the local file menu | The `fs` adapter attributes a remote path to a host through its workspace roots, so it refuses to guess one; the agent's own tools still run in that directory |
 | Remote diffs / some advanced file actions still use the native tool results | Only `workspaceFiles` and the terminal are intercepted |
 | SSH reachability required; no relay/NAT traversal | Only ssh `-L`/`-R` today |
 | Windows remotes unsupported | The bootstrap is POSIX bash, and Node.js is handled as Linux/macOS |
@@ -1259,6 +1284,7 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | Remote events → local session | `#appendEvent`, `toSeedEvent`, `isMirrorNoise` |
 | Adding a remote capability | `packages/protocol/src/routes.ts` + `packages/remote-agent/src/http.ts` + `RemoteAgentClient` |
 | File/terminal routing | `src/remote/files.ts`, `src/remote/terminal-controller.ts` |
+| A mirrored Session's working directory | `src/remote/working-directory.ts` (6.1) |
 | The `/` menu and command execution in a mirror | `src/remote/catalog.ts`, `packages/remote-agent/src/catalog.ts`, `catalogAddressFor` in `src/mirror/service.ts` (6.6) |
 | Whether a mirrored command row shows a compaction card | `isCompactionCheckpoint` / `localSpan` in `src/mirror/service.ts`; the order matters — the `surfaceOp` remap comes first (5.8) |
 | Remote dev-server ports | `src/client/link-forwarding.ts` (the click), `src/client/loopback-url.ts` (which addresses count), `publishPort` in `src/service.ts`, `host/ports/publish` in `src/host-api/` |

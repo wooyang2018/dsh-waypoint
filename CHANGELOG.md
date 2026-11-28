@@ -13,6 +13,49 @@
   section never stayed visible. The catalog now advertises a default only when one of its own groups
   lists it, falling back to the first routable model; the client applies the same rule so hosts still
   running an older agent recover without being re-provisioned.
+- **A mirrored Session's working directory is now validated on the host that owns it.** The mirror
+  replays the remote's own `working-directory/change`, so the local projection becomes the *remote*
+  absolute path — `/data/home/user00/proj`. `dsh-working-directory` then committed `ensure()` through
+  `ctx.fs`, which on this side is this machine's disk: that path does not exist on a Windows client,
+  and where it did resolve it described the wrong machine. `ensure()` sits on the path of every agent
+  tool that resolves a cwd, of the `@` mention menu and of the `/` skill list, so those failed
+  together — and the failures were swallowed into `gateway/internal`, which is why an empty menu was
+  the visible symptom rather than an error naming a directory.
+
+  `src/remote/working-directory.ts` answers `ensure()` with one `file.stat` on the owning host and
+  writes nothing. Both writes the stock service would make are wrong here: the projection append
+  would be a second writer for an event the remote already owns, and a "recovery" would rewrite a
+  healthy remote cwd to a local default. A Session whose projection is still its local anchor asks
+  the remote Session for its cwd once (`session.snapshot`) and caches it per projection, so the warm
+  path stays one call. `set()` is refused with `WORKING_DIRECTORY_REMOTE` rather than forwarded: the
+  remote owns `/cd`, and a local commit would fork the two logs. Ambiguous ownership is refused, not
+  guessed — the same rule the file adapter applies. A non-mirrored Session delegates all three
+  methods unchanged, and a composition that mounts no `workingDirectory` is skipped entirely.
+
+- **`file.stat` reports a path's type instead of refusing a directory.** The wire type had no `type`
+  field and the agent threw `workspace-file/not-regular-file` for anything that was not a regular
+  file, even though `file.list` classified children correctly — so listing a directory worked and
+  stat-ing one did not. Left unchecked the local `fs` adapter answered `type: 'file'` for a
+  directory, which is the one answer a file tree cannot survive.
+
+  `RemoteFileStat.type` is optional on the wire on purpose: an agent that predates it stays readable
+  and the adapter reads an absent value as `file`, so an older agent reproduces exactly the behaviour
+  it had rather than failing validation. `file.stat` answers `directory`/`other` with a `version` and
+  no `bytes` (no size is defined for a directory here), while `readText`/`readBytes` keep refusing a
+  non-regular file — now with an explicit guard, because moving that throw out of the stat would make
+  a directory read report "0 lines", which is indistinguishable from an empty file.
+
+  Two error translations change with it. A read of a directory reaches the Host as
+  `FS_NOT_REGULAR_FILE` rather than a raw protocol error — the code this repository had not used
+  before, and the honest one: the path exists, and `FS_NOT_FOUND` would send a reader to check a path
+  that is correct. Directory reads through `readText`/`readByteRange` now pass through the same
+  translation as `stat` and `readBytes`; they previously let protocol codes through untranslated.
+
+### Added
+
+- `workingDirectoryRouting` in the state the Settings page reads, alongside `fileRouting`, so a DSH
+  release that renames `ensure`/`get`/`set` reports "routing is off" instead of leaving every
+  mirrored cwd to be validated against local disk.
 
 ## 1.1.4
 

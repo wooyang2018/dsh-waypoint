@@ -1,6 +1,6 @@
 # 远端目录必须报告自己的类型，工作目录必须在远端解析
 
-状态：设计已定稿。实现按 §12 的切片推进。
+状态：已实现（§12 记录了切片；发布说明见 CHANGELOG 的 `Unreleased` 一节）。
 
 ## 1. 背景与目标
 
@@ -232,12 +232,17 @@ return { version: FsVersion(result.version), type: kind, ...result.bytes === und
 
 ```ts
 if (code === 'workspace-file/not-regular-file') {
-  throw new FsError(`not a regular file on the remote host: ${remotePath}`, 'FS_IO_ERROR', { cause: error })
+  throw new FsError(`not a regular file on the remote host: ${remotePath}`, 'FS_NOT_REGULAR_FILE', { cause: error })
 }
 ```
 
-选 `FS_IO_ERROR` 而不是 `FS_NOT_FOUND`：路径是存在的，只是不能当文件读；报成「不存在」会把读者
-指向一条其实正确的路径——这与 agent 自己 `EACCES` 分支记录的理由相同。
+选 `FS_NOT_REGULAR_FILE` 而不是 `FS_NOT_FOUND` 或 `FS_IO_ERROR`：路径是存在的，只是不能当文件读；
+报成「不存在」会把读者指向一条其实正确的路径——这与 agent 自己 `EACCES` 分支记录的理由相同。
+`FS_IO_ERROR` 说的是「发生过一次 I/O 失败」，而这里并没有发生。为什么改掉了本节初稿的写法，见 §11。
+
+另外，走这层翻译的不只是 `stat` 和 `readBytes`：`readText` 与 `readByteRange` 现在也经过它。它们原先
+直接调用 agent，于是「远端文件不存在」到达调用方时是 `workspace-file/not-found`，而不是适配器承诺的
+`FS_NOT_FOUND`。
 
 ### 6.4 `workingDirectory` 适配器（R5、R6、R7、R8）
 
@@ -303,7 +308,8 @@ ctx.inject(['workingDirectory'], child => {
 
 `remote/patch-contract.ts` 的 `REQUIRED_WORKING_DIRECTORY_METHODS` 沿用既有模式
 （字面方法名、与活的实例比对、结果上报到设置页状态），这样 DSH 若重命名 `ensure`，
-症状是「路由关闭」，而不是 cwd 悄悄变成本地的。
+症状是「路由关闭」，而不是 cwd 悄悄变成本地的。状态里的字段是 `workingDirectoryRouting`，
+与既有的 `fileRouting` 并列。
 
 ## 7. 边界与失败
 
@@ -342,7 +348,7 @@ ctx.inject(['workingDirectory'], child => {
 - 同一文件 —— 目录上的 `file-read` 与 `file-bytes` 仍然以 `workspace-file/not-regular-file` 失败，
   且**不是**「0 行的空文本」（§6.2 的坑）。
 - `packages/local-plugin/test/remote-fs.test.ts` —— `stat`/`lstat` 透传 `directory`/`other`；
-  不带 `type` 的 agent 响应产出 `file`；目录上的 `readText` 抛出带 `FS_IO_ERROR` 的 `FsError`。
+  不带 `type` 的 agent 响应产出 `file`；目录上的 `readText` 抛出带 `FS_NOT_REGULAR_FILE` 的 `FsError`。
 - `packages/local-plugin/test/remote-working-directory.test.ts`（新增）—— 镜像会话经 agent 解析，
   且**不产生**任何本地 `fs` 调用（断言本地服务从未被进入）；非镜像委托；路径不存在抛
   `WORKING_DIRECTORY_UNAVAILABLE`；主机不确定时拒绝；镜像上的 `set` 拒绝；主机断开时不回落。
@@ -368,7 +374,18 @@ ctx.inject(['workingDirectory'], child => {
   → 锚点，直到远端写出一个；`@` 与技能仍然可用，因为它们走 `ensure()`，而 `ensure()` 解析远端根目录。
 - **镜像上的 `set()` 选择拒绝而非转发。** 转发需要一条 `session.cd` 路由，以及一个「先写哪份日志」的决定。
   以具名原因拒绝是诚实的，也正是 `/cd` 入口应当呈现的东西；后续改动再加路由。
-- **「不是普通文件」用 `FS_IO_ERROR`。** 依据见 §6.3。
+- **「不是普通文件」用 `FS_NOT_REGULAR_FILE`。** 本文初稿写的是 `FS_IO_ERROR`，实现时改掉了：
+  `@deepseek-ai/dsh-fs` 的 `FS_ERROR_CODES` 里本来就有这个码，翻译不需要发明词汇，也不丢信息。
+  另外两个候选按 §6.3 的理由被否——路径明明存在，`FS_NOT_FOUND` 会把读者指向正确的路径去核对；
+  而 `FS_IO_ERROR` 描述的是一次并未发生的瞬时失败。
+- **`set()` 的拒绝码不是原生的那个。** 适配器抛的是 `RemoteWorkingDirectoryError`，而不是 import
+  `WorkingDirectoryError`：`@deepseek-ai/dsh-working-directory` 在无头组合里是可选的，静态值 import
+  会在缺包的地方让模块加载直接失败，并把文件与终端适配器一起拖下水。`ensure()` 保留原生的
+  `WORKING_DIRECTORY_UNAVAILABLE`，已按该码分支的调用方行为不变；`set()` 用 `WORKING_DIRECTORY_REMOTE`，
+  原生分支不会匹配，所以呈现给用户的是消息本身。
+- **镜像不触发 `working-directory/access` 瀑布。** 那个事件用于把一次目录访问与**本地**资源操作
+  （例如删除一个 checkout）协调起来。远端目录没有对应的本地资源，而它的事件监听方会按本机命名空间
+  去读那条路径。
 
 ## 12. 实现切片
 
