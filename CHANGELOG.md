@@ -148,11 +148,30 @@
   that is correct. Directory reads through `readText`/`readByteRange` now pass through the same
   translation as `stat` and `readBytes`; they previously let protocol codes through untranslated.
 
+- **Concurrent `/` menu reads share one tunnel round trip.** `ui-commands` re-reads a Session's
+  command catalog on every keystroke, and the five-second cache only answered *settled* reads: once it
+  lapsed, a burst of input started one request per key while each waited on the previous one. Both
+  catalog reads now run through the repository's single-flight helper, keyed like the cache, so a
+  burst resolves once. A cancelled skill read rejects the shared flight, and every caller then takes
+  the local fallback a timeout already takes.
+
+- **A queue action this build does not know is refused instead of deleting the item.**
+  `sessionController.updateQueue` handled `edit` and `steer` explicitly and let every other `kind`
+  fall into the removal branch; a client sending a fourth action variant would have withdrawn the
+  user's queued message rather than have the mutation rejected. The kind is now checked before the
+  inbox is touched and answers `gateway/bad-request`.
+
+- **A host without `attachment.read` says so once, at debug.** A replayed reference on an old agent
+  leaves a placeholder in the transcript, and the sync returned `unsupported` without logging —
+  the one state a user could not diagnose. The missing route is now named with the host and object,
+  at the same level the pruned-object case uses.
+
 ### Added
 
 - `workingDirectoryRouting` in the state the Settings page reads, alongside `fileRouting`, so a DSH
   release that renames `ensure`/`get`/`set` reports "routing is off" instead of leaving every
-  mirrored cwd to be validated against local disk.
+  mirrored cwd to be validated against local disk. The page now renders either surface whenever it
+  is bypassed, which is what turns that state into something a user can act on.
 
 ## 1.1.4
 
