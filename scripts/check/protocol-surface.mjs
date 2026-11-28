@@ -48,6 +48,12 @@ const CONTRACT_BY_CLIENT_SIGNATURE = new Set([
   'RemoteTerminalFrame', 'RemoteTerminalInfo', 'RemoteTerminalInput',
   'RemoteModelFailure', 'RemoteModelGroup', 'RemoteModelReasoning',
   'RemoteApprovalFrame', 'WebUrlResult',
+  // A rename's response type is small enough that a consumer could inline it,
+  // and then a wire change would compile everywhere while breaking the caller
+  // that assumed the old shape. It is named, returned by
+  // `RemoteAgentClient.renameSession`, and depended on by `RemoteHostsService`,
+  // so it is contract.
+  'RenameSessionResult',
 ])
 
 /**

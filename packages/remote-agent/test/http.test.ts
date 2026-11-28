@@ -12,6 +12,7 @@ import {
   sessionCancelPath,
   sessionModelPath,
   sessionPromptPath,
+  sessionRenamePath,
   sessionUnarchivePath,
   terminalClosePath,
   terminalInputPath,
@@ -29,6 +30,7 @@ describe('agent HTTP file and terminal surface', () => {
   const token = 'http-test-token'
   const archiveCalls: Array<{ sessionId: string; stopActivity: boolean }> = []
   const unarchiveCalls: Array<{ sessionId: string }> = []
+  const renameCalls: Array<{ sessionId: string; title: string }> = []
   const questionAnswers: Array<{ id: string; outcome: unknown }> = []
   let questionListener: ((request: unknown) => void) | undefined
   const service = {
@@ -42,6 +44,10 @@ describe('agent HTTP file and terminal surface', () => {
     async unarchiveSession(sessionId: string) {
       unarchiveCalls.push({ sessionId })
       return { accepted: true }
+    },
+    async renameSession(sessionId: string, request: { title: string }) {
+      renameCalls.push({ sessionId, title: request.title })
+      return { title: request.title.trim() }
     },
     attachQuestionStream: () => () => {},
     questionRequests: () => [{
@@ -199,8 +205,31 @@ describe('agent HTTP file and terminal surface', () => {
     assert.equal(response.status, 405)
   })
 
-  it('rejects GET on the unarchive route', async () => {
-    const response = await fetch(`${baseUrl}${sessionUnarchivePath('s1')}`, {
+  it('renames a session through the agent route', async () => {
+    const client = new RemoteAgentClient({ baseUrl, token })
+    const accepted = await client.renameSession('s1', '  Renamed  ')
+    assert.deepEqual(renameCalls.at(-1), { sessionId: 's1', title: '  Renamed  ' })
+    // The route answers with whatever the title service accepted, so the caller
+    // can label the Session without waiting for the replayed event.
+    assert.equal(accepted.title, 'Renamed')
+  })
+
+  it('rejects a blank rename body before it reaches the title service', async () => {
+    const calls = renameCalls.length
+    const response = await fetch(`${baseUrl}${sessionRenamePath('s1')}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-dsh-waypoint-protocol': '1',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ title: '   ' }),
+    })
+    assert.equal(response.status, 400)
+    assert.equal(renameCalls.length, calls, 'a titleless request must not reach the host')
+  })
+
+  it('rejects GET on the unarchive route', async () => {    const response = await fetch(`${baseUrl}${sessionUnarchivePath('s1')}`, {
       headers: {
         authorization: `Bearer ${token}`,
         'x-dsh-waypoint-protocol': '1',

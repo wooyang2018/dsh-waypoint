@@ -1058,6 +1058,31 @@ export class RemoteHostsService {
     }
   }
 
+  /**
+   * Rename one remote Session.
+   *
+   * Returns the title the remote accepted rather than echoing the request: the
+   * remote normalizes the text, and the caller reports that value as the
+   * optimistic label the sidebar shows until the replayed event arrives.
+   * @param id - host owning the Session.
+   * @param sessionId - remote Session to rename.
+   * @param title - proposed title.
+   * @returns the accepted title.
+   * @throws when the host is not connected or refuses the title.
+   */
+  async renameSession(
+    id: string,
+    sessionId: string,
+    title: string,
+  ): Promise<import('@dsh-waypoint/protocol').RenameSessionResult> {
+    const client = this.#requireClient(id)
+    try {
+      return await client.renameSession(sessionId, title)
+    } catch (error) {
+      throw this.#remoteFailure(id, error)
+    }
+  }
+
   /** Resolve the remote Web UI behind this host's tunnel. */
   async webUrl(id: string): Promise<{ url: string }> {
     const client = this.#requireClient(id)

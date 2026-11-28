@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { after, describe, it } from 'node:test'
 
+import type { Context } from '@deepseek-ai/cordis'
+import { RemoteProtocolError } from '@dsh-waypoint/protocol'
+
 import {
   isLoopbackAddress,
   isValidToken,
@@ -20,6 +23,7 @@ import {
   toWireEvent,
 } from '../src/projection.ts'
 import { AsyncQueue } from '../src/queue.ts'
+import { renameForwardedSession } from '../src/service.ts'
 import {
   openState,
   parseState,
@@ -200,5 +204,106 @@ describe('async queue', () => {
     queue.push(1)
     assert.equal(queue.push(2), false)
     await assert.rejects(queue.next(), /exceeded 1/)
+  })
+})
+
+/**
+ * A Host composed of exactly the two services a forwarded rename touches.
+ *
+ * `sessionController.rename` reproduces the shipped controller's body
+ * (`dsh-api-session-controller`'s `commands.ts`): resolve the Agent, hand the
+ * text to `sessionTitle.rename`, and narrow the title service's rejection onto a
+ * `RemoteError`. Reproducing it rather than stubbing `renameSession` is what
+ * makes these cases prove the text reaches `sessionTitle.rename` with the right
+ * Session — the bug being fixed is a title stored on the wrong side of the
+ * tunnel, and a stub could not observe that.
+ *
+ * The class is matched on `name`, not `instanceof`: the real narrowing is on a
+ * class from a package this one deliberately does not depend on at runtime.
+ */
+function renameHost(options: {
+  readonly accept?: (title: string) => string
+  readonly refuse?: 'title-invalid' | 'not-found' | 'unknown'
+}) {
+  /** One call as the title service received it. */
+  const titleCalls: Array<{ readonly sessionId: string; readonly title: string }> = []
+  const sessionTitle = {
+    rename(session: { id: string }, title: string) {
+      titleCalls.push({ sessionId: session.id, title })
+      if (options.refuse === 'title-invalid') {
+        const error = new Error('session title must contain visible characters')
+        error.name = 'SessionTitleInvalidError'
+        throw error
+      }
+      if (options.refuse === 'unknown') throw new Error('session store is closed')
+      return { title: (options.accept ?? (value => value.trim()))(title), eventSeq: 7 }
+    },
+  }
+  const sessionController = {
+    async rename(request: { sessionId: string; title: string }) {
+      if (options.refuse === 'not-found') {
+        throw Object.assign(new Error(`session "${request.sessionId}" was not found`), {
+          name: 'RemoteError',
+          code: 'session/not-found',
+          isDSHRemoteError: true,
+        })
+      }
+      const session = { id: request.sessionId }
+      try {
+        const accepted = sessionTitle.rename(session, request.title)
+        return { title: accepted.title, seq: accepted.eventSeq }
+      } catch (error) {
+        if (error instanceof Error && error.name === 'SessionTitleInvalidError') {
+          throw Object.assign(new Error(error.message), {
+            name: 'RemoteError',
+            code: 'session/title-invalid',
+            isDSHRemoteError: true,
+          })
+        }
+        throw error
+      }
+    },
+  }
+  return { ctx: { sessionController } as unknown as Context, titleCalls }
+}
+
+describe('forwarded session rename', () => {
+  it('reaches the title service with the addressed Session and reports its accepted title', async () => {
+    const host = renameHost({ accept: title => title.replace(/\s+/gu, ' ').trim() })
+    const accepted = await renameForwardedSession(host.ctx, 'session-remote', '  Quarterly\nplan  ')
+    assert.deepEqual(host.titleCalls, [{ sessionId: 'session-remote', title: '  Quarterly\nplan  ' }])
+    // The remote's own normalization is what the caller must show: reporting the
+    // raw text here would label the Session with a title the remote never stored.
+    assert.equal(accepted.title, 'Quarterly plan')
+    assert.deepEqual(Object.keys(accepted), ['title'], 'the wire must not carry the remote log seq')
+  })
+
+  it('maps a refused title onto session/title-invalid', async () => {
+    const host = renameHost({ refuse: 'title-invalid' })
+    await assert.rejects(renameForwardedSession(host.ctx, 'session-remote', '   '), (error: unknown) => {
+      assert.ok(error instanceof RemoteProtocolError)
+      assert.equal(error.code, 'session/title-invalid')
+      assert.equal(error.httpStatus, 400)
+      assert.deepEqual(error.details, { sessionId: 'session-remote' })
+      return true
+    })
+  })
+
+  it('maps an unknown Session onto session/not-found', async () => {
+    const host = renameHost({ refuse: 'not-found' })
+    await assert.rejects(renameForwardedSession(host.ctx, 'session-gone', 'Name'), (error: unknown) => {
+      assert.ok(error instanceof RemoteProtocolError)
+      assert.equal(error.code, 'session/not-found')
+      return true
+    })
+  })
+
+  it('leaves a genuine fault untouched instead of relabelling it as a bad title', async () => {
+    const host = renameHost({ refuse: 'unknown' })
+    await assert.rejects(renameForwardedSession(host.ctx, 'session-remote', 'Name'), (error: unknown) => {
+      assert.equal(error instanceof RemoteProtocolError, false)
+      assert.match((error as Error).message, /session store is closed/u)
+      return true
+    })
   })
 })

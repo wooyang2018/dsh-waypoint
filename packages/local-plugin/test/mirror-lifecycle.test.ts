@@ -109,6 +109,38 @@ describe('mirror Agent integration', () => {
     } finally { gate.resolve(); await test.service.dispose(); await test.ctx.fiber.dispose() }
   })
 
+  it('replays a remote session/title instead of treating it as mirror noise', async () => {
+    const test = await mounted()
+    try {
+      const seeded = parentSnapshot([])
+      test.setSnapshot(parent.sessionId, {
+        cursor: seeded.cursor + 1,
+        live: true,
+        truncated: false,
+        events: [
+          ...seeded.events,
+          {
+            seq: seeded.cursor,
+            type: 'session/title',
+            data: { title: 'Renamed on the remote', messageSeqs: [], source: { kind: 'user' } },
+          },
+        ],
+      })
+
+      await test.poll(parent.sessionId)
+
+      // A renamed mirror converges on the replayed event and has no local writer
+      // of its own, so adding `session/title` to `isMirrorNoise` would silently
+      // undo every remote rename — the local title would revert, and the remote
+      // Web UI would keep showing one this projection never updates.
+      const local = test.sessions.get(test.record.localSessionId)
+      assert.ok(local !== undefined)
+      const titles = local.snapshotEvents().filter(event => event.type === 'session/title')
+      assert.equal(titles.length, 1)
+      assert.equal((titles[0]?.data as { title?: unknown }).title, 'Renamed on the remote')
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+
   it('installs persisted-mirror ownership before the plugin entry awaits host startup', async () => {
     const test = harness()
     test.ctx.provide('connection', { fetch: { register: () => async () => {} } } as never)

@@ -145,7 +145,24 @@ export const REQUIRED_FILE_REFERENCE_METHODS = ['list'] as const
  * and reaches a mirrored Session's items only because the façade happens to be
  * registered as an Agent — ownership this plugin should not inherit by accident.
  */
-export const REQUIRED_SESSION_CONTROLLER_METHODS = ['updateQueue'] as const
+export const REQUIRED_SESSION_CONTROLLER_QUEUE_METHODS = ['updateQueue'] as const
+
+/**
+ * The `sessionController` method the rename interposer replaces.
+ *
+ * `rename` is the sidebar's rename seam: the action resolves through the
+ * controller, so replacing the instance method is what lets a mirrored Session
+ * write its title where the Session actually lives. A Host that renames this
+ * method must leave the plugin renaming locally only, rather than failing the
+ * action or writing half a round trip.
+ *
+ * Deliberately separate from the queue list even though both name the same
+ * service: each installer replaces one method and each check must speak for the
+ * one it owns. Folding them into one list would have either installer refuse to
+ * run because a *different* method was renamed — a bypass with no symptom, which
+ * is the failure this file exists to prevent.
+ */
+export const REQUIRED_SESSION_CONTROLLER_RENAME_METHODS = ['rename'] as const
 
 /** One expected method the service did not offer. */
 export interface MissingPatchMethod {

@@ -26,6 +26,7 @@ import type {
   RemoteSessionEvent,
   RemoteSessionSummary,
   RemoteWorkspace,
+  RenameSessionResult,
   SessionSnapshot,
   SessionStreamFrame,
   WebUrlResult,
@@ -241,6 +242,16 @@ export function isCreateSessionResult(value: unknown): value is CreateSessionRes
 /** Guard for `session.prompt` / `session.cancel`. */
 export function isAcceptedResult(value: unknown): value is AcceptedResult {
   return isRecord(value) && value.accepted === true
+}
+
+/**
+ * Guard for `session.rename`.
+ *
+ * The title is required and non-empty: an empty one is the shape a caller would
+ * render as a nameless Session, and the remote cannot have accepted it anyway.
+ */
+export function isRenameSessionResult(value: unknown): value is RenameSessionResult {
+  return isRecord(value) && isString(value.title) && value.title !== ''
 }
 
 /** Guard for `web.url`. */

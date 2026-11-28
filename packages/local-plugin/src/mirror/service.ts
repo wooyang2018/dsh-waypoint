@@ -2740,7 +2740,50 @@ export class RemoteMirrorService {
     const runtime = this.#runtimes.get(record.localSessionId)
     if (runtime === undefined) throw new Error('remote mirror Agent is unavailable')
     this.#pendingBlanks.delete(pending.localSessionId)
+    // The draft may have been renamed before the remote Session existed, which
+    // the interposer correctly wrote locally. The remote Session exists now and
+    // the first prompt is about to be forwarded, so this is the one moment the
+    // name the user typed can still be handed to the Session that will own it.
+    await this.#applyDraftTitle(pending.hostId, remoteSessionId, pending.session)
     return runtime.agent as RemoteMirrorAgent
+  }
+
+  /**
+   * Hand a renamed draft's title to the remote Session it just materialized.
+   *
+   * A blank mirror keeps a local rename, because there is no remote Session to
+   * rename yet; without this the name disappears the moment the conversation
+   * starts, which is the same loss this feature exists to end, one step later.
+   *
+   * Best effort on purpose. The title is a label, and the prompt that triggered
+   * materialization is the user's actual message: failing the whole turn because
+   * a rename was refused would trade a lost name for a lost message. Nothing
+   * retries it, so a failure is logged with the Session it belongs to.
+   *
+   * @param hostId - host the Session was created on.
+   * @param remoteSessionId - the Session that now exists remotely.
+   * @param session - the local draft whose log holds the title.
+   */
+  async #applyDraftTitle(hostId: string, remoteSessionId: string, session: Session): Promise<void> {
+    const title = latestTitle(session)
+    if (title === undefined) return
+    if (!this.canRenameRemote(hostId)) {
+      this.#ctx.logger.debug(
+        'dsh-waypoint: host %s cannot rename a remote Session; the draft title %j stays local',
+        hostId,
+        title,
+      )
+      return
+    }
+    try {
+      await this.#hosts.renameSession(hostId, remoteSessionId, title)
+    } catch (error) {
+      this.#ctx.logger.warn(
+        'dsh-waypoint: could not apply the draft title to remote Session %s: %s',
+        remoteSessionId,
+        String(error),
+      )
+    }
   }
 
   /** Read the blank Session's selected Agent preset, falling back to its header. */
@@ -3366,6 +3409,57 @@ export class RemoteMirrorService {
       )
       throw error
     }
+  }
+
+  /**
+   * Whether this host can write a title on behalf of a mirrored Session.
+   *
+   * Unlike the archive pair there is no companion capability to require: an
+   * agent without `session.rename` keeps renaming the local projection, which is
+   * the pre-fix behaviour and a smaller harm than refusing the action.
+   * @param hostId - host owning the remote Session.
+   * @returns true when the agent serves the rename route.
+   */
+  canRenameRemote(hostId: string): boolean {
+    return this.#hosts.supportsAgent(hostId, 'session.rename')
+  }
+
+  /**
+   * Rename the remote Session behind one local mirror.
+   *
+   * Called by the host-side rename interposer *before* anything is written
+   * locally, so a refusal leaves the old title in both logs. The remote's own
+   * `session/title` event is what updates the projection afterwards; nothing
+   * here appends a local copy, because a second writer would be overwritten by
+   * the next replayed event and the rename would silently revert.
+   *
+   * @param localSessionId - the mirrored Session a user renamed.
+   * @param title - the title to store, as the caller framed it.
+   * @returns the title the remote accepted, plus this log's current head as the
+   * optimistic `seq` a caller reports before the replayed event lands.
+   * @throws when the Session is not a mirror or the host refuses the rename.
+   */
+  async renameRemoteFor(localSessionId: string, title: string): Promise<{ title: string; seq: number }> {
+    const target = this.mirrorFor(localSessionId)
+    if (target === undefined || target.remoteSessionId === '') {
+      throw new Error('this Session is not a remote mirror')
+    }
+    const accepted = await this.#hosts.renameSession(target.hostId, target.remoteSessionId, title)
+    return { title: accepted.title, seq: this.#localHeadSeq(localSessionId) }
+  }
+
+  /**
+   * The local log's current head for one Session.
+   *
+   * A rename reports it because the event it describes has not been appended
+   * yet: the client uses it only to place an optimistic label, and the replayed
+   * event supersedes it. A Session with no runtime yet falls back to the store,
+   * so the answer stays the length of the log rather than a made-up zero.
+   */
+  #localHeadSeq(localSessionId: string): number {
+    const runtime = this.#runtimes.get(localSessionId)
+    if (runtime !== undefined) return runtime.session.seq
+    return this.#sessions.get(localSessionId as SessionId)?.seq ?? 0
   }
 
   /** Detach a blank mirror so it can never materialize a remote Session. */
@@ -5482,6 +5576,28 @@ function latestSelection(session: Session): { provider: string; model: string; r
         ...typeof data.reasoningEffort === 'string' ? { reasoningEffort: data.reasoningEffort } : {},
       }
     }
+  }
+  return undefined
+}
+
+/**
+ * Read the newest title from a Session log.
+ *
+ * The log is the source of truth: DSH's title service folds exactly this event,
+ * so scanning it answers the same question without a service lookup the plugin
+ * might not be composed with. Used for a draft, whose rename was written locally
+ * before any remote Session existed.
+ *
+ * @param session - Session whose log to scan.
+ * @returns the newest accepted title, or undefined when the Session has none.
+ */
+function latestTitle(session: Session): string | undefined {
+  const events = session.snapshotEvents()
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index] as unknown as { type?: string; data?: { title?: unknown } }
+    if (event.type !== 'session/title') continue
+    const title = event.data?.title
+    if (typeof title === 'string' && title !== '') return title
   }
   return undefined
 }

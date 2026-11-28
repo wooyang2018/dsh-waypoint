@@ -748,6 +748,49 @@ replacement. A checkpoint whose span the window still holds is placed; one whose
 dropped, so a mirror opened long after the compaction shows the command row. The streaming path
 (`#appendEvent`) is the one a live `/compact` takes, and it places the checkpoint from the runtime's map.
 
+### 5.9 Rename: the title belongs to the Session that owns it
+
+Renaming a mirrored Session is the one sidebar action whose *only* writer used to be the local
+projection. `sessionController.rename` appends `session/title` to the Session the controller holds, and
+for a mirror that is the local copy: the sidebar showed the new name at once, the remote Web UI kept the
+old one, and the rename survived only until the local log was rebuilt — re-adding the workspace, a pruned
+mirror, or another machine all brought the remote's title back. Nothing looked wrong, which is why it went
+unnoticed: the projection really did change.
+
+`installRemoteSessionRename` (`src/remote/rename.ts`) replaces `sessionController.rename` on the live
+instance, the same one-layer interposition §5.8 describes for archiving and §6.2 for files. The rename
+action resolves through that method, so no client adapter could see it.
+
+**The order is the reverse of archive, deliberately.** Archiving writes locally first because hiding a row
+is fail-open — the sync pass keeps an archived mirror from coming back even when the remote call failed.
+A rename has no such repair: a local write is exactly what makes the sidebar change, so writing first
+would leave two logs permanently disagreeing after a refusal, and the local title is the copy that gets
+lost anyway. Renaming is cheap to retry and hides nothing, so there is no reason to prefer local
+consistency over an honest failure. The forwarded call is therefore the only write: the remote appends
+`session/title`, the mirror replays it (it is not in `isMirrorNoise`, and `mirror-lifecycle.test.ts` pins
+that), and the projection converges from the event. A second local writer would be overwritten by the
+next replayed event, so the rename would silently revert.
+
+**Nothing is written locally before the remote call, including validation.** A title the title service
+would refuse has to be refused before it enters the tunnel, but the service exposes no validate-only
+path — `rename` is the only entry that applies its rules and it also appends the event this interposer
+exists to avoid. The emptiness rule is therefore copied into the interposer, with a TODO naming its
+eventual replacement. The byte cap is *not* copied: the service truncates to it rather than rejecting, and
+the cap is configuration the plugin cannot read off the service, so any local copy would be a guess that
+disagreed with the host. Over-long titles travel unchanged and are truncated where they are stored. The
+refusal is raised as `session/title-invalid` with a structurally-built Remote failure, so the browser
+reports the same code and sentence whether the refusal came from this machine or the host.
+
+**Drafts are the exception, and they are local on purpose.** A blank mirror has no remote Session until
+the first prompt, so there is nothing to rename there and the local write is correct. `#materializeBlankOnce`
+then hands the title over once the Session exists — after creation, before the first prompt is forwarded —
+so the name the user typed survives into the conversation. That hand-off is best effort: a refused title
+must not cost the user the message that created the Session.
+
+**An agent without `session.rename` keeps the pre-fix behaviour** and logs it at debug. Unlike archive,
+this fallback is not a refusal: an archived remote without a way back cannot run a model step, while a
+title that stays local costs only the name's persistence.
+
 ## 6. Files and terminals: two adapters that pick an outlet per session
 
 ### 6.1 Files

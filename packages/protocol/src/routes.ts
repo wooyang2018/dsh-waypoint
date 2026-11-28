@@ -55,6 +55,7 @@ export type AgentRoute =
   | { readonly kind: 'session-cancel'; readonly sessionId: string }
   | { readonly kind: 'session-archive'; readonly sessionId: string }
   | { readonly kind: 'session-unarchive'; readonly sessionId: string }
+  | { readonly kind: 'session-rename'; readonly sessionId: string }
   | { readonly kind: 'workspace-sessions'; readonly workspaceId: string }
   | { readonly kind: 'web-url' }
   | { readonly kind: 'approval-events' }
@@ -126,6 +127,17 @@ export function sessionArchivePath(sessionId: string): string {
  */
 export function sessionUnarchivePath(sessionId: string): string {
   return `${sessionPath(sessionId)}/unarchive`
+}
+
+/**
+ * Path that renames one remote session.
+ *
+ * A rename is the one title mutation that has to reach the Session's owner. The
+ * remote writes `session/title` itself and the mirror replays it, so the title
+ * ends up stored where the Session lives rather than only in a local projection.
+ */
+export function sessionRenamePath(sessionId: string): string {
+  return `${sessionPath(sessionId)}/rename`
 }
 
 /** Path of one session's live event stream. */
@@ -282,6 +294,7 @@ export function matchAgentRoute(pathname: string): AgentRoute | undefined {
       if (parts[1] === 'cancel') return { kind: 'session-cancel', sessionId }
       if (parts[1] === 'archive') return { kind: 'session-archive', sessionId }
       if (parts[1] === 'unarchive') return { kind: 'session-unarchive', sessionId }
+      if (parts[1] === 'rename') return { kind: 'session-rename', sessionId }
     }
     return undefined
   }

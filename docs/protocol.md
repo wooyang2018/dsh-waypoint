@@ -113,6 +113,7 @@ Failure:
 | `session/not-found` | 404 | Session is neither live nor resolvable through persistence |
 | `session/not-live` | 409 | A live-only route (`/sessions/:id/events`, `/sessions/:id/assistant-events`, `/sessions/:id/sandbox`) was used on a cold session; cold resume is not implemented |
 | `session/model-unavailable` | 400 | The selected provider/model is absent from this host's catalog. `retryable: false`, `details: { provider, model }`; resending the same selection cannot succeed |
+| `session/title-invalid` | 400 | The host's title service refused the text (it normalizes to nothing visible). `details: { sessionId }`. A malformed body is `request/invalid` instead: this code means the *title* was unacceptable, not the request |
 | `agent/not-ready` | 503 | The agent has no bound web listener. Raised while mounting, so a client normally never observes it as a response |
 | `workspace-file/not-found` | 404 | A `files/*` target does not exist, or could not be stat-ed |
 | `workspace-file/not-regular-file` | 404 | Target exists but is a directory or another non-regular file. `details.kind` is `directory` or `other` |
@@ -162,6 +163,7 @@ Read routes use `GET`. Write routes use `POST` with a JSON body:
 | `POST` | `/sessions/:id/cancel` | `{}` | `{ "accepted": true }` |
 | `POST` | `/sessions/:id/archive` | `{ "stopActivity"?: true }` (default `true`) | `{ "accepted": true }` |
 | `POST` | `/sessions/:id/unarchive` | `{}` | `{ "accepted": true }` |
+| `POST` | `/sessions/:id/rename` | `{ "title": "…" }` | `RenameSessionResult`: `{ "title": "…" }` — the title the host accepted, after its own normalization |
 | `POST` | `/attachments/read` | `{ "kind": "image" \| "file", "ref": { … } }` | `AttachmentReadResult`; `attachment/not-found` when the object is gone |
 | `POST` | `/catalog/commands` | `{ "sessionId": "…" }` or `{ "agentPreset": "…", "cwd": "/abs/dir" }` | `{ commands: RemoteCommandDescriptor[] }` |
 | `POST` | `/catalog/skills` | the same two addressing shapes | `{ skills: RemoteSkillEntry[] }` |
@@ -189,7 +191,8 @@ A wrong method on a known path returns `405` with code `request/invalid`. That c
 POST-only route, `POST` on a read route, and any method other than `GET` or `POST` anywhere. A client
 can therefore rely on the method check rather than treating a timeout as a possible answer.
 
-The HTTP write surface creates workspaces and sessions, submits prompts, cancels a turn, reads files
+The HTTP write surface creates workspaces and sessions, submits prompts, cancels a turn, renames a
+Session, reads files
 for the native file tree/preview, stages a forwarded attachment, and owns PTY terminals. File reads are
 read-only; the terminal
 surface — both `POST /terminals` (which allocates the PTY and starts the login shell) and
@@ -478,6 +481,11 @@ never logged or stored by the local plugin.
   restored, so archiving remotely without a way back would leave a mirror that looks usable and
   rejects every prompt. `session.unarchive` only removes an id from the archive set — it grants no
   new write surface, and it is idempotent for a Session that is not archived.
+- `session.rename` is advertised alone rather than paired, because the fallback for an agent without
+  it is the pre-fix behaviour: the local plugin keeps renaming the local projection only. That is not
+  the archive trap — a title that stays local strands nothing, it is merely forgotten when the mirror
+  is rebuilt — so the action is degraded rather than refused. The local plugin therefore checks this
+  one capability by itself before forwarding.
 
 ## Security notes
 
@@ -486,7 +494,8 @@ never logged or stored by the local plugin.
   disabling it; a direct public port cannot.
 - State files are written atomically with `0600`.
 - The protocol never carries model credentials.
-- The agent's write surface is session/workspace creation, prompts, cancel, archive, unarchive, model
+- The agent's write surface is session/workspace creation, prompts, cancel, archive, unarchive, rename,
+  model
   and sandbox selection, approval answers, attachment admission for a forwarded prompt, and terminal
   input/rename/close. The native UI's file tree, previews,
   file watching, workspace search, and terminals are served by this same HTTP protocol over the
@@ -620,12 +629,12 @@ only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
-`index.ts` exports 173 symbols in total. They split into 79 contract symbols and 94 symbols that no
+`index.ts` exports 176 symbols in total. They split into 80 contract symbols and 96 symbols that no
 other package consumes, of which 2 are referenced nowhere at all. Every name below is listed
 explicitly, and `scripts/check/protocol-surface.mjs` recomputes these numbers from the source tree; run it
 whenever you add or remove an export, and a test fails if the two disagree.
 
-**Import contract (79 symbols).** Consumed by another package's production code through a named
+**Import contract (80 symbols).** Consumed by another package's production code through a named
 import, or reached through `RemoteAgentClient`'s signatures. Changing or removing one of these is a
 cross-package change. Test files are not counted as consumers: a test that imports a path builder to
 build a URL does not make it part of the contract.
@@ -639,10 +648,11 @@ build a URL does not make it part of the contract.
 - Envelopes and errors (4): `ApiSuccess`, `ApiFailure`, `RemoteProtocolError`, `httpStatusForCode`
 - Host and workspace (5): `AgentCapability`, `HostInfo`, `RemoteWorkspace`, `CreateWorkspaceRequest`,
   `ListWorkspacesResult`
-- Sessions and prompts (15): `RemoteSessionSummary`, `RemoteSessionEvent`, `SessionSnapshot`,
+- Sessions and prompts (16): `RemoteSessionSummary`, `RemoteSessionEvent`, `SessionSnapshot`,
   `SessionStreamFrame`, `ListSessionsResult`, `RemoteAssistantFrame`, `AcceptedResult`,
   `CreateSessionRequest`, `CreateSessionResult`, `PromptSessionRequest`, `PromptContentPart`,
-  `PromptFilePart`, `PromptDeliveryMode`, `SelectModelRequest`, `AttachmentReadRequest`
+  `PromptFilePart`, `PromptDeliveryMode`, `SelectModelRequest`, `AttachmentReadRequest`,
+  `RenameSessionResult`
 - Remote catalogs (5): `RemoteCommandDescriptor`, `RemoteCommandCatalogResult`,
   `RemoteSkillCatalogResult`, `RemoteSkillEntry`, `isRemoteCommandAttachmentList`
 - Remote command parts (1): `RemoteCommandAttachment`
@@ -659,26 +669,26 @@ build a URL does not make it part of the contract.
   `RemoteApprovalRequest`, `JsonValue`, `WebUrlResult`
 - Questions (3): `RemoteQuestionAnswerItem`, `RemoteQuestionOutcome`, `RemoteQuestionRequest`
 
-**Internal (94 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
+**Internal (96 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
 private: they carry no cross-package guarantee, and nothing outside `packages/protocol/src` should
 start importing them without promoting them to the contract above.
 
-*Used inside `packages/protocol/src` (92).*
+*Used inside `packages/protocol/src` (94).*
 
-- Guards (36): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`, `isCreateSessionResult`,
+- Guards (37): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`, `isCreateSessionResult`,
   `isCursor`, `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`,
   `isModelCatalogResult`, `isProtocolSupported`, `isRecord`, `isRemoteApprovalFrame`,
   `isRemoteAssistantFrame`, `isRemoteChangesDiff`, `isRemoteChangesSummary`,
   `isRemoteCommandCatalogResult`, `isRemoteCommandExecuteResult`, `isRemoteDirectoryListing`,
   `isRemoteFileBytes`, `isRemoteFileListing`, `isRemoteFileReferenceResult`, `isRemoteFileSearchResult`,
   `isRemoteFileStat`, `isRemoteFileText`, `isRemoteFileWatchFrame`, `isRemoteGitResult`,
-  `isRemoteQuestionFrame`, `isRemoteSkillCatalogResult`, `isRemoteTerminalFrame`,
-  `isRemoteTerminalInfo`, `isRemoteTerminalListResult`, `isRemoteWorkspace`, `isRetryableCode`,
-  `isSessionSnapshot`, `isSessionStreamFrame`, `isWebUrlResult`
-- Path builders (16): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
+  `isRemoteQuestionFrame`, `isRenameSessionResult`, `isRemoteSkillCatalogResult`,
+  `isRemoteTerminalFrame`, `isRemoteTerminalInfo`, `isRemoteTerminalListResult`, `isRemoteWorkspace`,
+  `isRetryableCode`, `isSessionSnapshot`, `isSessionStreamFrame`, `isWebUrlResult`
+- Path builders (17): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
   `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionArchivePath`,
-  `sessionUnarchivePath`, `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`,
-  `terminalAttachPath`, `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
+  `sessionUnarchivePath`, `sessionRenamePath`, `workspaceSessionsPath`, `directoryListPath`,
+  `fileWatchPath`, `terminalAttachPath`, `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
 - Types, constants, and functions used inside the package (40): `AttachmentReadResult`,
   `CursorAcceptance`, `DEFAULT_REQUEST_TIMEOUT_MS`, `DISCOVERY_STATE_VERSION`, `JsonPrimitive`,
   `MAX_SUPPORTED_PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`,
