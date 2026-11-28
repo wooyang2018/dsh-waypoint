@@ -2625,12 +2625,24 @@ export class RemoteMirrorService {
    * the Session's own workspace is the stronger claim and the alternative is
    * uploading this machine's bytes under a remote name.
    *
+   * A Session in an *ungrouped* record is the exception the lookup above cannot
+   * answer: that record deliberately names no checkout, so
+   * `remoteContextForRemotePath` declines to attribute anything to it. The menu
+   * still searched *that Session's* directory, though, and the mirror knows it
+   * from the anchor, so the Session's own root is consulted directly. Without
+   * this, a POSIX client refuses a mention its own menu just produced.
+   *
    * @param path - the reference's absolute path, quotes already removed.
    * @param runtime - mirror forwarding the prompt.
    * @returns whether the path belongs to the Session's remote workspace.
    */
   #isRemoteMenuPath(path: string, runtime: MirrorRuntime): boolean {
-    return this.remoteContextForRemotePath(path, runtime.record.hostId) !== undefined
+    if (this.remoteContextForRemotePath(path, runtime.record.hostId) !== undefined) return true
+    const own = this.remoteFileContext(runtime.record.anchor)
+    if (own === undefined) return false
+    const root = own.remoteRoot.endsWith('/') ? own.remoteRoot.slice(0, -1) : own.remoteRoot
+    if (root === '') return false
+    return path === root || path.startsWith(`${root}/`)
   }
 
   /**

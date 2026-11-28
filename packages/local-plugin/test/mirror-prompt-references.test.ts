@@ -197,3 +197,51 @@ describe('a local absolute reference is still rewritten', () => {
     }
   })
 })
+
+describe('an ungrouped mirror still owns what its own menu offers', () => {
+  it('forwards a mention under the Session directory as text', async () => {
+    // An ungrouped record deliberately names no checkout, so the workspace lookup
+    // declines to attribute anything to it — but the `@` menu searched *this
+    // Session's* directory, and the mirror knows it. Without the Session's own
+    // root as the second answer, a POSIX client refuses a mention its own menu
+    // just produced.
+    const test = harness()
+    test.setRemoteCatalog({
+      hosts: [{ id: 'host-test', label: 'test', phase: 'connected' as const }],
+      perHost: {
+        'host-test': [{ workspaceId: 'ungrouped:home', path: '/data/home/user00', title: 'home' }],
+      },
+    })
+    const summary = {
+      sessionId: 'session-ungrouped',
+      workspaceId: null,
+      cwd: '/data/home/user00/scratch',
+      createdAt: '2026-11-27T00:00:00.000Z',
+      live: true,
+      eventCount: 1,
+    }
+    test.setRemote([summary])
+    test.setSnapshot('session-ungrouped', {
+      cursor: 1,
+      live: true,
+      truncated: false,
+      events: [{ seq: 0, type: 'turn/start', data: { turn: 1 } }],
+    })
+    await test.service.start()
+    try {
+      const record = Object.values((await test.state()).sessions)
+        .find(entry => entry.remoteSessionId === 'session-ungrouped')
+      assert.ok(record !== undefined, 'the fixture must mirror the ungrouped Session')
+      const agent = test.liveAgents.get(record.localSessionId)
+      assert.ok(agent !== undefined, 'the fixture must mount an Agent for it')
+      const reference = '@/data/home/user00/scratch/README.md'
+      ;(agent as unknown as { send(message: unknown): void }).send(userMessage(`${reference} summarise it`))
+      await settle()
+      assert.equal(test.prompts.length, 1, 'the prompt must reach the remote')
+      assert.equal(test.prompts[0]?.text, `${reference} summarise it`, 'the remote path survives verbatim')
+      assert.deepEqual(kinds(test.prompts[0]?.content), ['text'], 'nothing is read from this disk')
+    } finally {
+      await test.service.dispose(); await test.ctx.fiber.dispose()
+    }
+  })
+})
