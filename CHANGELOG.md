@@ -4,6 +4,21 @@
 
 ### Fixed
 
+- **A mirrored Session no longer accepts writes it cannot forward.** Several Remote namespaces are
+  addressed by `Agent`, and for a mirror that Agent is the local façade — registered in the `agents`
+  registry, so every `assertLive` guard passes and the service reads or writes *this* machine's state.
+  Goal mutations, Team mode, subagent control and message feedback therefore appeared to succeed while
+  the machine running the conversation never heard about them: the local banner, the continuation
+  driver and the toggle were all wrong, and nothing reported it. The classification is now data
+  (`remote/namespace-policy.ts`): `goals`, `agentTeams` and the job roster are forwarded over
+  `POST /sessions/:id/goals`, `POST /sessions/:id/team` and `GET /sessions/:id/jobs`, so the owning
+  host appends the event and the replay keeps the local projection correct; `job/kill`,
+  `subagents.prompt`/`interruptByUser`, `messageFeedback` writes and `session.fork` are refused with a
+  `mirror/unsupported` error carrying a localizable reason, live tool results end their stream instead
+  of waiting on a process that is not here, and pinning stays local on purpose. Reads that were already
+  correct — `goals.get`, todos, permission presets, plan mode, agent preset, model — are untouched, and
+  an agent that predates a route keeps the previous behaviour instead of half-forwarding.
+
 - **Renaming a mirrored Session now renames its remote Session.** The rename only ever wrote
   `session/title` into the local projection, so the remote Web UI kept the old name and the new one
   vanished as soon as the mirror was rebuilt — re-adding the workspace, pruning, or moving machines

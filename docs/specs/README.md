@@ -6,9 +6,7 @@
 
 ## 待实现（Open）
 
-| 文档 | 修复什么 | 涉及包 |
-|---|---|---|
-| [镜像会话的命名空间策略](2026-11-27-mirrored-namespace-policy.md) | goal、jobs、teams、subagents、feedback 静默写入本地状态，远端毫不知情 | protocol、remote-agent、local-plugin |
+暂无。新的设计文档加在这里，落地后移到下面的表。
 
 ## 已实现（Implemented）
 
@@ -20,3 +18,4 @@
 | [附件双向一致性](2026-11-27-mirror-attachment-parity.md) | 未发布 —— 工具结果里的图片也会同步，纯附件提示词只产生一个气泡 |
 | [队列消息的编辑与删除](2026-11-27-mirror-queue-mutation.md) | 未发布 —— 编辑、删除、转 steer 都由镜像自己的队列作答，并沿用原生拒绝 |
 | [会话重命名](2026-11-27-mirror-session-rename.md) | 未发布 —— 重命名先到远端，本地投影跟随回放；草稿标题在首次提示词落地时交付 |
+| [镜像会话的命名空间策略](2026-11-27-mirrored-namespace-policy.md) | 未发布 —— goal/团队/任务转发，其余写入具名拒绝，投影类读取不动 |
