@@ -75,6 +75,7 @@ import type {
   RemoteFileSearchRequest,
   RemoteFileSearchResult,
 } from './files.ts'
+import type { RemoteFileReferenceRequest, RemoteFileReferenceResult } from './file-references.ts'
 import type {
   RemoteTerminalCreateRequest,
   RemoteTerminalFrame,
@@ -117,6 +118,7 @@ import {
   isRemoteFileText,
   isRemoteFileWatchFrame,
   isRemoteFileSearchResult,
+  isRemoteFileReferenceResult,
   isRemoteTerminalFrame,
   isRemoteTerminalInfo,
   isRemoteTerminalListResult,
@@ -511,6 +513,30 @@ export class RemoteAgentClient {
    */
   fileSearch(request: RemoteFileSearchRequest, signal?: AbortSignal): Promise<RemoteFileSearchResult> {
     return this.#request(AGENT_ROUTES.fileSearch, isRemoteFileSearchResult, { method: 'POST', body: request, signal })
+  }
+
+  /**
+   * Ask the remote Host for its `@` file-reference candidates.
+   *
+   * A route of its own rather than a `fileSearch` call: this answers the Host's
+   * `fileReferences` provider, whose prefix grammar, ignore rules and result cap
+   * belong to the remote. Translating one request shape into the other would
+   * move those rules into this repository, and the two would drift.
+   *
+   * `query` travels exactly as the composer holds it. The remote provider is the
+   * only authority on what a prefix means, and a query may legitimately be empty
+   * — that is the menu's opening state.
+   * @param request - the remote Session whose directory bounds discovery, plus
+   *   the raw query text.
+   * @param signal - cancels the round trip and the remote walk behind it.
+   * @returns the remote provider's candidates, unmapped and in its own order.
+   */
+  fileReferences(request: RemoteFileReferenceRequest, signal?: AbortSignal): Promise<RemoteFileReferenceResult> {
+    return this.#request(AGENT_ROUTES.fileReferences, isRemoteFileReferenceResult, {
+      method: 'POST',
+      body: request,
+      signal,
+    })
   }
 
   /**

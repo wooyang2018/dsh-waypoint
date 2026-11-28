@@ -49,6 +49,7 @@ import type {
   RemoteFileWatchFrame,
   RemoteFileSearchResult,
 } from './files.ts'
+import type { RemoteFileReferenceResult } from './file-references.ts'
 import type {
   RemoteTerminalFrame,
   RemoteTerminalInfo,
@@ -392,6 +393,23 @@ export function isRemoteFileSearchResult(value: unknown): value is RemoteFileSea
     && value.matches.every(isRemoteFileSearchMatch)
     && typeof value.truncated === 'boolean'
     && typeof value.incomplete === 'boolean'
+}
+
+/**
+ * Guard for one remote reference menu answer.
+ *
+ * `kind` is checked against the two values the client renders differently: an
+ * unknown one would be a directory the menu cannot descend into, or a file it
+ * cannot insert. `path` may be any non-empty spelling — this side never parses
+ * it, because the remote's spelling is exactly what the prompt has to carry.
+ */
+export function isRemoteFileReferenceResult(value: unknown): value is RemoteFileReferenceResult {
+  return isRecord(value)
+    && Array.isArray(value.candidates)
+    && value.candidates.every(candidate => isRecord(candidate)
+      && isString(candidate.path)
+      && candidate.path !== ''
+      && (candidate.kind === 'file' || candidate.kind === 'directory'))
 }
 
 function isRemoteTerminalShell(value: unknown): boolean {

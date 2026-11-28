@@ -37,6 +37,17 @@ export type AgentCapability =
   | 'file.bytes'
   | 'file.watch'
   | 'file.search'
+  /**
+   * The agent serves `/file-references`, the remote `@` completion menu.
+   *
+   * Its own capability rather than part of `file.search`, because the two answer
+   * different questions from different providers: search is the file panel's
+   * bounded walk over a workspace root, while a reference query is the Host's
+   * `fileReferences` provider answering a prefix. An agent that predates this
+   * route keeps the local menu — wrong, but visibly wrong on this machine — which
+   * is why a client must be able to see the absence before asking.
+   */
+  | 'file.references'
   | 'directory.list'
   | 'git.exec'
   | 'workspace.changes'

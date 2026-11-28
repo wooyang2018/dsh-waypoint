@@ -44,6 +44,11 @@ export type {
   RemoteTerminalShell,
 } from './terminal.ts'
 
+export type {
+  RemoteFileReferenceCandidate,
+  RemoteFileReferenceRequest,
+  RemoteFileReferenceResult,
+} from './file-references.ts'
 export type { RemoteGitRequest, RemoteGitResult } from './git.ts'
 export { isRemoteGitResult } from './git.ts'
 export type {
@@ -191,6 +196,7 @@ export {
   isRemoteFileText,
   isRemoteFileWatchFrame,
   isRemoteFileSearchResult,
+  isRemoteFileReferenceResult,
   isRemoteTerminalFrame,
   isRemoteTerminalInfo,
   isRemoteTerminalListResult,

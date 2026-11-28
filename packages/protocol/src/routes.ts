@@ -27,6 +27,7 @@ export const AGENT_ROUTES = {
   fileBytes: `${AGENT_API_PREFIX}/files/bytes`,
   fileWatch: `${AGENT_API_PREFIX}/files/watch`,
   fileSearch: `${AGENT_API_PREFIX}/files/search`,
+  fileReferences: `${AGENT_API_PREFIX}/file-references`,
   directories: `${AGENT_API_PREFIX}/directories`,
   gitExec: `${AGENT_API_PREFIX}/git`,
   changesSummary: `${AGENT_API_PREFIX}/workspace-changes/summary`,
@@ -66,6 +67,7 @@ export type AgentRoute =
   | { readonly kind: 'file-bytes' }
   | { readonly kind: 'file-watch' }
   | { readonly kind: 'file-search' }
+  | { readonly kind: 'file-references' }
   | { readonly kind: 'directory-list' }
   | { readonly kind: 'git-exec' }
   | { readonly kind: 'changes-summary' }
@@ -224,6 +226,8 @@ export function matchAgentRoute(pathname: string): AgentRoute | undefined {
       return { kind: 'file-watch' }
     case AGENT_ROUTES.fileSearch:
       return { kind: 'file-search' }
+    case AGENT_ROUTES.fileReferences:
+      return { kind: 'file-references' }
     case AGENT_ROUTES.directories:
       return { kind: 'directory-list' }
     case AGENT_ROUTES.gitExec:
