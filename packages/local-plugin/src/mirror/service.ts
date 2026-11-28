@@ -66,6 +66,75 @@ const SURFACE_TYPES = new Set([
   'tool/result',
 ])
 
+/**
+ * Event types whose payload can carry an attachment reference.
+ *
+ * The gate asks "can this event type carry a reference?", not "is it the one
+ * type that happens to today". It was the latter, so a remote `read_image`
+ * result — whose `tool/result` payload carries an `ImageAttachmentRef` — never
+ * had its bytes fetched: the local tool card rendered from the reference, found
+ * nothing in the local store, and stayed blank for the life of the Session.
+ *
+ * `assistant/message` is listed although nothing produces an assistant image
+ * reference yet. The cost is one `Array.isArray` check per event; the
+ * alternative is a third silent omission the next time an event type gains a
+ * reference. The accessor table below is keyed by the same union, so a new
+ * member cannot arrive without its content entry.
+ */
+const ATTACHMENT_BEARING_EVENTS = new Set(['user/message', 'assistant/message', 'tool/result'])
+
+/** The event types {@link ATTACHMENT_BEARING_EVENTS} names. */
+type AttachmentBearingEvent = 'user/message' | 'assistant/message' | 'tool/result'
+
+/**
+ * Where each attachment-bearing event type keeps its content blocks.
+ *
+ * Reading the wrong field is indistinguishable from "this event has no
+ * attachments", which is why this is a table rather than a guess: a
+ * `user/message` *is* the message and keeps `content` on the payload, while an
+ * `assistant/message` and a `tool/result` wrap theirs in `message.content`
+ * (`SessionEventMap` in `@deepseek-ai/dsh-session`).
+ */
+const ATTACHMENT_CONTENT: Readonly<Record<AttachmentBearingEvent, (data: unknown) => unknown>> = {
+  'user/message': data => eventRecord(data)?.content,
+  'assistant/message': data => eventMessageContent(data),
+  'tool/result': data => eventMessageContent(data),
+}
+
+/** One event payload as a plain record, or undefined when it is not one. */
+function eventRecord(data: unknown): Record<string, unknown> | undefined {
+  return typeof data === 'object' && data !== null && !Array.isArray(data)
+    ? data as Record<string, unknown>
+    : undefined
+}
+
+/** `data.message.content` of an event that wraps its blocks in a message. */
+function eventMessageContent(data: unknown): unknown {
+  const message = eventRecord(eventRecord(data)?.message)
+  return message?.content
+}
+
+/**
+ * The content blocks one event carries, when its type can carry a reference.
+ *
+ * Shared by the live and seed paths, and by every member of
+ * {@link ATTACHMENT_BEARING_EVENTS}: a type whose payload does not look the way
+ * the table expects answers `undefined`, which the caller treats as "nothing to
+ * sync" rather than as an error. A shape disagreement must never cost an event
+ * its projection.
+ *
+ * @param type - remote event type.
+ * @param data - the event's payload.
+ * @returns the blocks, or undefined when this event cannot carry one.
+ */
+function attachmentEventContent(type: string, data: unknown): readonly unknown[] | undefined {
+  if (!ATTACHMENT_BEARING_EVENTS.has(type)) return undefined
+  const read = ATTACHMENT_CONTENT[type as AttachmentBearingEvent]
+  if (read === undefined) return undefined
+  const content = read(data)
+  return Array.isArray(content) ? content : undefined
+}
+
 interface MirrorRecord {
   readonly hostId: string
   readonly remoteSessionId: string
@@ -1160,7 +1229,7 @@ export class RemoteMirrorService {
   }
 
   /**
-   * Pull a user message's remote attachments into the local store.
+   * Pull the remote attachments one event refers to into the local store.
    *
    * Prefetch, like {@link #prefetchChanges} and for a stronger reason: the
    * transcript's image loader is *not* retried. `HistoricalImageCache` drops a
@@ -1179,7 +1248,7 @@ export class RemoteMirrorService {
    * @param event - the event about to be projected.
    */
   async #prefetchAttachments(runtime: MirrorRuntime, event: RemoteSessionEvent): Promise<void> {
-    if (event.type !== 'user/message') return
+    if (!ATTACHMENT_BEARING_EVENTS.has(event.type)) return
     await this.#syncEventAttachments(runtime.record.hostId, event)
   }
 
@@ -1191,9 +1260,10 @@ export class RemoteMirrorService {
   /**
    * Sync every attachment one event references.
    *
-   * Shared by the live and seed paths so the two cannot drift: attachment
-   * references appear in `user/message` only, and both paths must reach the same
-   * local store before the event becomes visible.
+   * Shared by the live stream, the snapshot replay and the seed so the three
+   * cannot drift: whichever path makes an event visible must reach the same
+   * local store first. Which events are worth looking at is decided by
+   * {@link ATTACHMENT_BEARING_EVENTS}, not by a list of types hard-coded here.
    *
    * Never throws — an unreachable host or a pruned object degrades that one
    * attachment, and losing a whole event over it would be worse than a blank
@@ -1202,9 +1272,8 @@ export class RemoteMirrorService {
    * @param event - candidate event.
    */
   async #syncEventAttachments(hostId: string, event: RemoteSessionEvent): Promise<void> {
-    if (event.type !== 'user/message') return
-    const content = (event.data as { content?: unknown }).content
-    if (!Array.isArray(content)) return
+    const content = attachmentEventContent(event.type, event.data)
+    if (content === undefined) return
     for (const part of content) {
       if (typeof part !== 'object' || part === null) continue
       const type = (part as { type?: unknown }).type
@@ -4238,6 +4307,13 @@ export class RemoteMirrorService {
         const localBefore = runtime.session.seq
         try {
           await this.#prefetchChanges(runtime, event)
+          // The replay path has always fetched bytes before projecting; this
+          // path did not, so an attachment that arrived live — a user typing
+          // into the remote Session, or a remote `read_image` result — had its
+          // reference projected against a store that would never be filled:
+          // the stream advances `lastSeq`, so the later snapshot replay skips
+          // the same seq and the image stays blank for good.
+          await this.#prefetchAttachments(runtime, event)
           this.#appendEvent(runtime, event)
         } catch (error) {
           runtime.skippedRemoteSeqs.add(event.seq)

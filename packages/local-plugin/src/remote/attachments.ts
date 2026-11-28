@@ -150,9 +150,18 @@ async function exists(path: string): Promise<boolean> {
 /**
  * Ensure one remote reference's bytes exist in the local attachment store.
  *
- * Idempotent and cheap to repeat: a present object short-circuits before any
- * network traffic, which is what keeps a long mirrored history from
- * re-downloading on every launch.
+ * Idempotent and cheap to repeat: a present image short-circuits before any
+ * network traffic, which is what keeps a long mirrored history — and a log
+ * replayed after every restart — from re-downloading objects it already holds.
+ *
+ * That presence check is deliberately images only. An image *is* its bytes and
+ * lives at the object path its id names, so "the object exists" is the whole
+ * question. A file's readability also depends on the per-name hard link the
+ * store creates beside the object, and only the store knows the name it
+ * sanitized, so answering `present` from the object alone could hand back a
+ * reference the transcript still cannot open. Re-saving a file is idempotent
+ * there in any case: the store is content-addressed, so identical bytes land on
+ * the identical object and the identical reference.
  *
  * A host without `attachment.read` answers `unsupported` rather than throwing —
  * the caller then renders what the reference alone allows, which for a file is
@@ -177,9 +186,10 @@ export async function syncRemoteAttachment(
     ctx.logger.debug('dsh-waypoint: ignoring attachment with a non-sha256 id: %s', ref.attachmentId)
     return { kind: 'unsupported' }
   }
-  if (!hosts.supportsAgent(hostId, 'attachment.read')) return { kind: 'unsupported' }
   const store = getLocalStore(ctx)
   const root = attachmentRoot(store)
+  if (kind === 'image' && await exists(imageObjectPath(root, digest))) return { kind: 'present' }
+  if (!hosts.supportsAgent(hostId, 'attachment.read')) return { kind: 'unsupported' }
   let result: { readonly data: string }
   try {
     result = await hosts.readAttachment(hostId, { kind, ref: { ...ref } })
