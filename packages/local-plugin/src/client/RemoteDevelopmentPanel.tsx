@@ -609,6 +609,16 @@ export function RemoteDevelopmentPanel({ api, t }: PanelProps) {
         </div>
       </header>
 
+      {/* A bypassed routing surface is why a mirrored tree looks empty or a
+          remote cwd is refused; saying so here beats leaving it in the log.
+          `?.` keeps a state snapshot from an older host renderable. */}
+      {state !== null && (state.fileRouting?.status === 'bypassed' || state.workingDirectoryRouting?.status === 'bypassed') && (
+        <div className="dshwp-detail dshwp-agent-outdated" role="status">
+          {state.fileRouting?.status === 'bypassed' && <p>{t('settings.fileRoutingBypassed')}</p>}
+          {state.workingDirectoryRouting?.status === 'bypassed' && <p>{t('settings.workingDirectoryRoutingBypassed')}</p>}
+        </div>
+      )}
+
       <section className="dshwp-card">
         <div className="dshwp-section-title">
           <h3>{t('settings.hosts')}</h3>

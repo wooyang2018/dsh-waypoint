@@ -31,6 +31,10 @@ export const zh = {
   'settings.confirmRemovePrefix': '删除主机「',
   'settings.confirmRemoveSuffix': '」？远端文件与会话不会被删除。',
   'settings.agentOutdated': '远端 agent 较旧，请点击重新安装以启用文件/终端 API',
+  'settings.fileRoutingBypassed':
+    '远端文件路由未生效：镜像工作区的文件树会显示空的本地锚点，看起来像远端目录为空。请重新安装插件后重试。',
+  'settings.workingDirectoryRoutingBypassed':
+    '远端工作目录路由未生效：镜像会话的 cwd 会按本机磁盘校验，涉及 cwd 的工具、@ 菜单与 / 技能列表都会失败。请重新安装插件后重试。',
   'error.requestInvalid': '请求参数无效',
   'error.hostInvalid': 'SSH 目标无效',
   'error.hostDuplicate': '该主机已存在',
@@ -227,6 +231,10 @@ export const en: Record<CopyKey, string> = {
   'settings.confirmRemovePrefix': 'Remove host "',
   'settings.confirmRemoveSuffix': '"? Remote files and sessions are not deleted.',
   'settings.agentOutdated': 'The remote agent is old; click Reinstall to enable the file/terminal APIs',
+  'settings.fileRoutingBypassed':
+    'Remote file routing is inactive: a mirrored workspace shows its empty local anchor, which reads as an empty remote directory. Reinstall the plugin to restore it.',
+  'settings.workingDirectoryRoutingBypassed':
+    'Remote working-directory routing is inactive: a mirrored Session\'s cwd is validated against this machine, so every tool that resolves one, the @ menu and the / skill list fail. Reinstall the plugin to restore it.',
   'error.requestInvalid': 'Invalid request',
   'error.hostInvalid': 'Invalid SSH target',
   'error.hostDuplicate': 'This host is already configured',

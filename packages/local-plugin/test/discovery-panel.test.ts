@@ -158,6 +158,24 @@ describe('SSH config discovery in the Settings panel', () => {
     assert.ok(endpoints.includes('alice@192.0.2.10:36000'), `endpoint missing: ${endpoints.join(' | ')}`)
   })
 
+  it('names a bypassed routing surface on the settings page', async () => {
+    // The state carried `fileRouting`/`workingDirectoryRouting` but nothing
+    // rendered it, so a broken adapter only showed up as an empty remote tree or
+    // a refused cwd. The working-directory spec asks the settings page to say it.
+    const { renderer } = await render({
+      state: async () => ({
+        hosts: [],
+        mirroredWorkspaceIds: [],
+        mirroredWorkspaces: [],
+        fileRouting: { status: 'bypassed', missing: ['stat'] },
+        workingDirectoryRouting: { status: 'active' },
+      }),
+    })
+    const text = JSON.stringify(renderer.toJSON())
+    assert.ok(text.includes('settings.fileRoutingBypassed'), 'the bypassed surface is named')
+    assert.equal(text.includes('settings.workingDirectoryRoutingBypassed'), false, 'an active one stays quiet')
+  })
+
   it('marks registered hosts and offers connect only for the rest', async () => {
     const { renderer } = await render({})
     const text = JSON.stringify(renderer.toJSON())
