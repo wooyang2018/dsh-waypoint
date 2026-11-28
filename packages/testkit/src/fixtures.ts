@@ -8,6 +8,7 @@ import type {
   AgentCapability,
   HostInfo,
   RemoteCommandDescriptor,
+  RemoteFileReferenceCandidate,
   RemoteSessionEvent,
   RemoteSessionSummary,
   RemoteSkillEntry,
@@ -42,6 +43,13 @@ export interface Fixtures {
   commands: RemoteCommandDescriptor[]
   /** Skill entries the fake catalog answers with. */
   skills: RemoteSkillEntry[]
+  /**
+   * Candidates the fake `@` reference menu answers with.
+   *
+   * Mutable for the same reason `commands` is: a test can change what the host
+   * offers between two reads without rewriting the fixture.
+   */
+  fileReferences: RemoteFileReferenceCandidate[]
 }
 
 /** Build deterministic fixtures with two workspaces and three sessions. */
@@ -124,6 +132,7 @@ export function createFixtures(hostId = 'fake-host'): Fixtures {
     'approval.answer',
     'session.catalog',
     'session.command',
+    'file.references',
   ]
   const hostInfo: HostInfo = {
     hostId,
@@ -146,6 +155,7 @@ export function createFixtures(hostId = 'fake-host'): Fixtures {
     sessions,
     commands: createCommands(),
     skills: createSkills(),
+    fileReferences: createFileReferences(),
   }
 }
 
@@ -176,6 +186,21 @@ function createSkills(): RemoteSkillEntry[] {
   return [
     { name: 'dsh-doc', description: 'DeepSeek Harness reference', modelInvocable: true },
     { name: 'spec', description: 'Design a feature', whenToUse: 'before implementing', modelInvocable: true },
+  ]
+}
+
+/**
+ * Reference candidates the fake host's `@` menu answers with.
+ *
+ * A POSIX path in the first Session's directory, one directory and one file:
+ * the pair a caller has to keep distinct, because a directory candidate keeps the
+ * menu open while a file one finishes it. The paths are remote-spelled on
+ * purpose — that is what a client must not rewrite.
+ */
+function createFileReferences(): RemoteFileReferenceCandidate[] {
+  return [
+    { path: '/srv/alpha/src', kind: 'directory' },
+    { path: '/srv/alpha/README.md', kind: 'file' },
   ]
 }
 

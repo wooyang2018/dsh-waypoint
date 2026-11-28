@@ -20,10 +20,11 @@ import { installRemoteSandboxPolicy } from './remote/sandbox-policy.ts'
 import { installRemoteFileSystem } from './remote/fs.ts'
 import { installRemoteSubprocess } from './remote/subprocess.ts'
 import { installRemoteWorkspaceChanges, prefetchChangesSummary, RemoteChangesCache } from './remote/workspace-changes.ts'
-import { checkPatchContract, describePatchContract, REQUIRED_COMMAND_METHODS, REQUIRED_SKILL_CATALOG_METHODS, REQUIRED_WORKING_DIRECTORY_METHODS } from './remote/patch-contract.ts'
+import { checkPatchContract, describePatchContract, REQUIRED_COMMAND_METHODS, REQUIRED_FILE_REFERENCE_METHODS, REQUIRED_SKILL_CATALOG_METHODS, REQUIRED_WORKING_DIRECTORY_METHODS } from './remote/patch-contract.ts'
 import { installRemoteTerminalController } from './remote/terminal-controller.ts'
 import { installRemoteCatalog } from './remote/catalog.ts'
 import { installRemoteWorkingDirectory } from './remote/working-directory.ts'
+import { installRemoteFileReferences } from './remote/file-references.ts'
 import { RemoteTerminals } from './remote/terminal.ts'
 import { RemoteHostsService } from './service.ts'
 import { installRemoteToolGuards, registerRemoteTools } from './tools.ts'
@@ -163,6 +164,25 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
       () => installRemoteWorkspaceChanges(child, mirrors, service, changesCache),
       'dsh-waypoint: remote workspace changes',
     )
+  })
+  // A mirrored Session's `@` menu is answered by this Host's `fileReferences`
+  // provider, which walks *this* machine's tree. The Session works in a remote
+  // directory, so the adapter asks the owning host for its own provider's answer
+  // instead. A composition without the service is skipped entirely.
+  ctx.inject(['sessionFileReferences'], child => {
+    child.effect(() => {
+      const references = child.get('sessionFileReferences') as unknown as object | undefined
+      const report = references === undefined
+        ? { active: false, missing: [{ method: 'sessionFileReferences', reason: 'absent' as const }] }
+        : checkPatchContract(references, REQUIRED_FILE_REFERENCE_METHODS)
+      if (!report.active) {
+        ctx.logger.warn(
+          'dsh-waypoint: remote file-reference menu is %s; a mirrored Session lists this machine\'s files',
+          describePatchContract(report),
+        )
+      }
+      return installRemoteFileReferences(child, mirrors, service)
+    }, 'dsh-waypoint: remote file references')
   })
   ctx.inject(['terminalController'], child => {
     const controller = child.get('terminalController')

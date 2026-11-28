@@ -160,6 +160,25 @@ describe('remote agent wire contract', () => {
     })
   })
 
+  it('answers the reference menu from the fake provider, and can be told to fail it', async () => {
+    // The route a mirrored `@` menu depends on: the fake must answer it, or
+    // every adapter test above it measures a host that cannot serve the call.
+    const answer = await client().fileReferences({ sessionId: 'session-alpha', query: 'src/' })
+    assert.deepEqual(answer.candidates, [
+      { path: '/srv/alpha/src', kind: 'directory' },
+      { path: '/srv/alpha/README.md', kind: 'file' },
+    ])
+    assert.deepEqual(host.fileReferenceQueries.at(-1), { sessionId: 'session-alpha', query: 'src/' })
+    assert.ok((await client().health()).capabilities.includes('file.references'))
+
+    host.failNextFileReferences = true
+    await assert.rejects(client().fileReferences({ sessionId: 'session-alpha', query: '' }), (error: unknown) => {
+      assert.ok(error instanceof RemoteProtocolError)
+      assert.equal(error.code, 'internal')
+      return true
+    })
+  })
+
   it('surfaces authentication and protocol failures', async () => {
     await assert.rejects(client('wrong').health(), (error: unknown) => {
       assert.ok(error instanceof RemoteProtocolError)

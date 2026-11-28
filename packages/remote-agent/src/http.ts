@@ -34,6 +34,7 @@ import {
   type RemoteTerminalCreateRequest,
   type RemoteTerminalInput,
   type RemoteFileSearchRequest,
+  type RemoteFileReferenceRequest,
   type RemoteGitRequest,
   type RemoteChangesSummaryRequest,
   type RemoteChangesDiffRequest,
@@ -45,6 +46,7 @@ import type { AgentRoute } from '@dsh-waypoint/protocol'
 import { parseBearer, tokensEqual } from './auth.ts'
 import { listDirectories, listFile, readBytes, readText, statFile, watchFile } from './files.ts'
 import { searchFiles } from './search.ts'
+import { listFileReferences } from './file-references.ts'
 import { runGit } from './git.ts'
 import { diffFor, summaryFor } from './workspace-changes.ts'
 import type { RemoteAgentService } from './service.ts'
@@ -213,6 +215,9 @@ export async function handleAgentRequest(
           sendJson(res, await searchFiles(search.path, search, watchCancellation(req, res)))
           return
         }
+        case 'file-references':
+          sendJson(res, await listFileReferences(ctx, asFileReferenceRequest(body), watchCancellation(req, res)))
+          return
         case 'terminals':
           sendJson(res, service.terminals.create(asTerminalCreate(body)))
           return
@@ -319,6 +324,7 @@ export async function handleAgentRequest(
       case 'catalog-commands':
       case 'catalog-skills':
       case 'command-execute':
+      case 'file-references':
       case 'approval-answer':
       case 'question-answer':
         throw new RemoteProtocolError({ code: 'request/invalid', message: 'POST is required', httpStatus: 405 })
@@ -948,6 +954,31 @@ function asSearchRequest(value: unknown): RemoteFileSearchRequest {
     ...typeof body.includeHidden === 'boolean' ? { includeHidden: body.includeHidden } : {},
     ...typeof body.respectGitignore === 'boolean' ? { respectGitignore: body.respectGitignore } : {},
   }
+}
+
+/**
+ * Read the Session and query out of one file-reference request.
+ *
+ * The query is intentionally *not* trimmed or bounded: it is path text whose
+ * meaning belongs to the remote provider, and an empty one is the menu's opening
+ * state rather than a missing field. Only its type is checked, so a body that is
+ * not a string cannot reach the provider as `undefined`.
+ *
+ * @param value - parsed JSON body.
+ * @returns the remote Session and the raw query.
+ */
+function asFileReferenceRequest(value: unknown): RemoteFileReferenceRequest {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
+  }
+  const body = value as Record<string, unknown>
+  if (typeof body.sessionId !== 'string' || body.sessionId === '') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'sessionId must be a non-empty string' })
+  }
+  if (typeof body.query !== 'string') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'query must be a string' })
+  }
+  return { sessionId: body.sessionId, query: body.query }
 }
 
 /**

@@ -90,6 +90,10 @@ export class FakeRemoteHost {
   readonly terminalCreates: Array<{ readonly id: string; readonly cwd: string; readonly title?: string; readonly shellPath?: string }> = []
   /** Catalog reads accepted by this fake host, in order, for assertions. */
   readonly catalogRequests: Array<{ readonly sessionId?: string; readonly agentPreset?: string; readonly cwd?: string }> = []
+  /** `@` reference queries accepted by this fake host, for assertions. */
+  readonly fileReferenceQueries: Array<{ readonly sessionId: string; readonly query: string }> = []
+  /** Fail the next reference query, to exercise a client's fallback. */
+  failNextFileReferences = false
   /** Command executions accepted by this fake host, for assertions. */
   readonly commandRequests: Array<{ readonly sessionId: string; readonly line: string; readonly attachments: readonly unknown[] }> = []
   /** Input/resize commands accepted by the fake PTYs, for assertions. */
@@ -342,6 +346,25 @@ export class FakeRemoteHost {
             this.#getSession(route.sessionId)
             sendJson(res, { accepted: true })
             return
+          case 'file-references': {
+            const record = body as { sessionId?: unknown; query?: unknown }
+            if (typeof record.sessionId !== 'string' || record.sessionId === '') {
+              throw new RemoteProtocolError({ code: 'request/invalid', message: 'sessionId is required' })
+            }
+            if (typeof record.query !== 'string') {
+              throw new RemoteProtocolError({ code: 'request/invalid', message: 'query is required' })
+            }
+            this.fileReferenceQueries.push({ sessionId: record.sessionId, query: record.query })
+            if (this.failNextFileReferences) {
+              this.failNextFileReferences = false
+              throw new RemoteProtocolError({ code: 'internal', message: 'forced reference failure' })
+            }
+            // The fake host answers for any Session it knows, cold or live: the
+            // route it stands in for resolves the Agent itself, and a cold remote
+            // answers an empty menu rather than an error.
+            sendJson(res, { candidates: this.#fixtures.fileReferences })
+            return
+          }
           case 'catalog-commands': {
             const record = body as { sessionId?: unknown; agentPreset?: unknown; cwd?: unknown }
             this.catalogRequests.push({

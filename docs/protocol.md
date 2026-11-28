@@ -170,6 +170,7 @@ Read routes use `GET`. Write routes use `POST` with a JSON body:
 | `POST` | `/questions/answer` | `{ "id": "…", "outcome": { "kind": "answer", "answers": [{ "id": "…", "selected": ["…"], "custom"?: "…" }] } \| { "kind": "delegated" } \| { "kind": "cancelled" } }` | `{ "accepted": true }` |
 | `POST` | `/files/stat`, `/files/list`, `/files/read`, `/files/bytes` | `{ "path": "/abs/path", "offset"?, "limit"?, "length"? }` | file/list result |
 | `POST` | `/files/search` | `{ "path": "/abs/root", "query": "…", "excludedPaths"?, "includeHidden"?, "respectGitignore"? }` | `RemoteFileSearchResult` |
+| `POST` | `/file-references` | `{ "sessionId": "…", "query": "…" }` | `{ candidates: [{ "path": "…", "kind": "file" \| "directory" }] }` |
 | `POST` | `/git` | `{ "cwd": "/abs/dir", "args": ["status", "--porcelain=v2"], "env"?, "timeoutMs"? }` | `RemoteGitResult` |
 | `POST` | `/workspace-changes/summary` | `{ "sessionId": "…", "turn": 3 }` | `RemoteWorkspaceChangesSummary` |
 | `POST` | `/workspace-changes/diff` | `{ "sessionId": "…", "turn": 3, "index": 0 }` | `RemoteWorkspaceFileDiff` |
@@ -210,6 +211,17 @@ its entry budget, its depth limit, its deadline, or an unreadable directory. A c
 stopped walk as "no results": absence of a match after an incomplete walk is not evidence that the file
 does not exist. The walk never follows a symbolic link and never leaves the root it was given, so a link
 inside a workspace cannot widen a search to the host.
+
+`/file-references` answers the `@` completion menu from the remote's own `fileReferences` provider, and
+it is a separate route rather than a form of `/files/search` on purpose: search is a bounded walk of a
+root with the caller's `includeHidden`/`respectGitignore` switches, while a reference query is a prefix
+with its own candidate cap and per-row `file`/`directory` classification. Translating one into the
+other would move the provider's rules into the client. `query` is carried **verbatim** — a query may be
+empty (that is the menu's opening state), and any normalisation here would decide on the caller's
+machine what a remote prefix means. A cold remote Session — one whose log is on the host but whose Agent
+is not bound, the ordinary state after a restart — answers `candidates: []`, which is what the remote Web
+UI shows; a host that composes no provider answers `request/invalid` instead, because an empty list there
+would be a claim about a workspace nothing looked at.
 
 ## Approvals
 
@@ -567,6 +579,40 @@ an image already arrives as base64, while a file crosses as bytes and is re-stag
 a receipt that host minted. Command attachment traffic needs `session.file-attachment` in addition to
 `session.command`.
 
+### File references: why a menu needs the remote, and two ways to spell `@`
+
+The `@` source calls `ctx.remote.fileReferences.list`, which resolves to the Host's
+`sessionFileReferences` service and from there to the composed `fileReferences` provider —
+`dsh-file-reference-local` on the Web surface, which walks the **local** directory tree with `node:fs`.
+A mirrored Session's committed directory is the remote absolute path, so that walk answers about the
+wrong machine. `POST /file-references` asks the host that owns the Session instead; the remote runs the
+provider its own Web UI runs, so ordering, ignore rules, the entry budget and the result cap all stay
+the remote's.
+
+| Capability | Route | Why it is separate |
+|---|---|---|
+| `file.references` | `POST /file-references` | The answer is one provider's prefix query, not the file panel's bounded search. An agent that predates the route keeps the local menu, which a client reaches only by delegating. |
+
+**Failure delegates; it does not answer empty.** A menu is an assertion about what exists. An empty
+list means "this project has no files", which is a false statement about the remote workspace and one a
+user will act on, so a failed remote read leaves the local answer in place and logs the host. The local
+list is wrong too, but visibly: those paths do not appear in the remote Session's log afterwards. This
+is also why a host that composes no provider answers `request/invalid` rather than an empty menu.
+
+**Two `@` spellings look identical.** A path chosen from the remote menu is the remote's POSIX absolute
+path and must travel as text for the remote to resolve; a path picked on this machine is an absolute
+path whose bytes must cross, because the remote cannot open it. On a Windows client the two cannot be
+told apart by shape, so the local rewrite (`RemoteMirrorService.#resolveTextReferences`) applies only to
+paths this machine's filesystem could hold: `C:\…` and `\\…` anywhere, and `/…` only where the platform
+is not Windows. A Windows client therefore never rewrites a `/…` reference — the cost is that `@` cannot
+forward a local POSIX path there, which a staged attachment covers. On a POSIX client both spellings are
+local, so `/…` keeps being rewritten.
+
+**The capability is compile-time, not a probe.** Whether a profile mounts `dsh-file-reference` is a
+property of that profile, and asking per query would cost a round trip on every keystroke. A host
+without a provider therefore looks like a host whose project is empty; the delegated fallback and its
+warning are what keep that visible.
+
 ## Package surface: contract versus internals
 
 `@dsh-waypoint/protocol` is a workspace package, not a published one — the release workflow publishes
@@ -574,12 +620,12 @@ only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
-`index.ts` exports 169 symbols in total. They split into 78 contract symbols and 91 symbols that no
+`index.ts` exports 173 symbols in total. They split into 79 contract symbols and 94 symbols that no
 other package consumes, of which 2 are referenced nowhere at all. Every name below is listed
 explicitly, and `scripts/check/protocol-surface.mjs` recomputes these numbers from the source tree; run it
 whenever you add or remove an export, and a test fails if the two disagree.
 
-**Import contract (78 symbols).** Consumed by another package's production code through a named
+**Import contract (79 symbols).** Consumed by another package's production code through a named
 import, or reached through `RemoteAgentClient`'s signatures. Changing or removing one of these is a
 cross-package change. Test files are not counted as consumers: a test that imports a path builder to
 build a URL does not make it part of the contract.
@@ -600,9 +646,9 @@ build a URL does not make it part of the contract.
 - Remote catalogs (5): `RemoteCommandDescriptor`, `RemoteCommandCatalogResult`,
   `RemoteSkillCatalogResult`, `RemoteSkillEntry`, `isRemoteCommandAttachmentList`
 - Remote command parts (1): `RemoteCommandAttachment`
-- Files (10): `RemoteFileStat`, `RemoteFileText`, `RemoteFileBytes`, `RemoteFileEntry`,
-  `RemoteFileListing`, `RemoteFileWatchFrame`, `RemoteDirectoryListing`, `RemoteFileSearchRequest`,
-  `RemoteFileSearchResult`, `RemoteFileSearchMatch`
+- Files (11): `RemoteFileStat`, `RemoteFileText`, `RemoteFileBytes`, `RemoteFileEntry`,
+  `RemoteFileListing`, `RemoteFileReferenceCandidate`, `RemoteFileWatchFrame`, `RemoteDirectoryListing`,
+  `RemoteFileSearchRequest`, `RemoteFileSearchResult`, `RemoteFileSearchMatch`
 - Git (2): `RemoteGitRequest`, `RemoteGitResult`
 - Review data (2): `RemoteWorkspaceChangesSummary`, `RemoteWorkspaceFileDiff`
 - Terminals (4): `RemoteTerminalCreateRequest`, `RemoteTerminalFrame`, `RemoteTerminalInfo`,
@@ -613,34 +659,35 @@ build a URL does not make it part of the contract.
   `RemoteApprovalRequest`, `JsonValue`, `WebUrlResult`
 - Questions (3): `RemoteQuestionAnswerItem`, `RemoteQuestionOutcome`, `RemoteQuestionRequest`
 
-**Internal (91 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
+**Internal (94 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
 private: they carry no cross-package guarantee, and nothing outside `packages/protocol/src` should
 start importing them without promoting them to the contract above.
 
-*Used inside `packages/protocol/src` (89).*
+*Used inside `packages/protocol/src` (92).*
 
-- Guards (35): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`, `isCreateSessionResult`,
+- Guards (36): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`, `isCreateSessionResult`,
   `isCursor`, `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`,
   `isModelCatalogResult`, `isProtocolSupported`, `isRecord`, `isRemoteApprovalFrame`,
   `isRemoteAssistantFrame`, `isRemoteChangesDiff`, `isRemoteChangesSummary`,
   `isRemoteCommandCatalogResult`, `isRemoteCommandExecuteResult`, `isRemoteDirectoryListing`,
-  `isRemoteFileBytes`, `isRemoteFileListing`, `isRemoteFileSearchResult`, `isRemoteFileStat`,
-  `isRemoteFileText`, `isRemoteFileWatchFrame`, `isRemoteGitResult`, `isRemoteQuestionFrame`,
-  `isRemoteSkillCatalogResult`, `isRemoteTerminalFrame`, `isRemoteTerminalInfo`,
-  `isRemoteTerminalListResult`, `isRemoteWorkspace`, `isRetryableCode`, `isSessionSnapshot`,
-  `isSessionStreamFrame`, `isWebUrlResult`
+  `isRemoteFileBytes`, `isRemoteFileListing`, `isRemoteFileReferenceResult`, `isRemoteFileSearchResult`,
+  `isRemoteFileStat`, `isRemoteFileText`, `isRemoteFileWatchFrame`, `isRemoteGitResult`,
+  `isRemoteQuestionFrame`, `isRemoteSkillCatalogResult`, `isRemoteTerminalFrame`,
+  `isRemoteTerminalInfo`, `isRemoteTerminalListResult`, `isRemoteWorkspace`, `isRetryableCode`,
+  `isSessionSnapshot`, `isSessionStreamFrame`, `isWebUrlResult`
 - Path builders (16): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
   `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionArchivePath`,
   `sessionUnarchivePath`, `workspaceSessionsPath`, `directoryListPath`, `fileWatchPath`,
   `terminalAttachPath`, `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
-- Types, constants, and functions used inside the package (38): `AttachmentReadResult`,
+- Types, constants, and functions used inside the package (40): `AttachmentReadResult`,
   `CursorAcceptance`, `DEFAULT_REQUEST_TIMEOUT_MS`, `DISCOVERY_STATE_VERSION`, `JsonPrimitive`,
   `MAX_SUPPORTED_PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`,
   `PromptImagePart`, `ProtocolErrorCode`, `ProtocolNegotiation`,
   `RemoteAgentClientOptions`, `RemoteCatalogRequest`, `RemoteChangesDiffRequest`,
   `RemoteChangesSummaryRequest`, `RemoteCommandExecuteRequest`, `RemoteCommandExecuteResult`,
   `RemoteCommandInput`, `RemoteCommandOutcome`, `RemoteDirectoryEntry`, `RemoteFailure`,
-  `RemoteFileSearchEntryType`, `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteQuestionFrame`,
+  `RemoteFileReferenceRequest`, `RemoteFileReferenceResult`, `RemoteFileSearchEntryType`,
+  `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteQuestionFrame`,
   `RemoteQuestionItem`, `RemoteQuestionOption`, `RemoteReasoningEffort`, `RemoteSandboxMode`,
   `RemoteTerminalListResult`, `RemoteTerminalShell`, `RemoteWorkspaceChangedFile`,
   `RemoteWorkspaceDiffHunk`, `SessionSnapshotOptions`, `SessionStreamEndReason`,

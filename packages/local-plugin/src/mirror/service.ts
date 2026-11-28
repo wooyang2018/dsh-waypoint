@@ -2044,6 +2044,17 @@ export class RemoteMirrorService {
    * confirmed with `stat`, so the decision to forward rests on the filesystem
    * rather than on how the text looks.
    *
+   * TWO `@` SPELLINGS LOOK IDENTICAL IN THE COMPOSER. A path chosen from the
+   * remote `@` menu is the *remote* absolute path, which the remote provider
+   * spells POSIX, and it must travel as text for the remote to resolve. A path
+   * typed or picked locally is an absolute path this machine can hold, and it
+   * must become bytes because the remote cannot open it. On a Windows client the
+   * two cannot be told apart by shape, so the rule is the machine's own
+   * capability: only a path in a spelling this filesystem could hold is
+   * rewritten ({@link isLocalAbsolutePath}). A Windows client therefore leaves
+   * every `/…` reference alone — the accepted cost of keeping remote paths
+   * intact, with staged attachments covering the local case.
+   *
    * @param text - one text content part.
    * @param runtime - mirror forwarding the prompt.
    * @param forwarded - object ids already carried, mutated as files are added.
@@ -5255,17 +5266,43 @@ interface LocalPathReference {
 }
 
 /**
+ * Whether a path is absolute in a spelling this machine's filesystem could hold.
+ *
+ * The composer uses one `@` grammar for two different things: a file the user
+ * picked on *this* machine, and a file the remote `@` menu offered from the
+ * Session's remote directory. The second is POSIX-spelled absolute, and sending
+ * it as bytes would read the wrong disk — or, where the spelling happens to
+ * exist locally, upload an unrelated file under a remote name.
+ *
+ * The discriminator is therefore this machine, not the text: a drive-letter or
+ * UNC path is a Windows path whatever platform reads it, while `/…` is absolute
+ * only where the local filesystem is POSIX. A Windows client consequently never
+ * rewrites a `/…` reference, which is what keeps a remote path intact for the
+ * remote to resolve.
+ *
+ * @param path - the candidate path, with quotes already removed.
+ * @returns whether this machine could hold that path.
+ */
+function isLocalAbsolutePath(path: string): boolean {
+  if (/^[A-Za-z]:[\\/]/u.test(path)) return true
+  if (path.startsWith('\\\\')) return true
+  return process.platform !== 'win32' && path.startsWith('/')
+}
+
+/**
  * Find `@`-prefixed absolute local paths in one text part.
  *
  * Deliberately narrow. A candidate must be introduced by `@` *and* be absolute
- * in a host spelling (`C:\…`, `\\server\share\…`, or `/…`), because the false
- * positives that matter are ordinary prose: a bare `a/b`, a drive letter in a
- * sentence, an `@mention`. Requiring the prefix keeps this from reading any of
+ * in a spelling this machine can hold ({@link isLocalAbsolutePath}), because the
+ * false positives that matter are ordinary prose: a bare `a/b`, a drive letter in
+ * a sentence, an `@mention`. Requiring the prefix keeps this from reading any of
  * those as a file request, and the caller still confirms each hit with `stat`
  * before anything is forwarded.
  *
  * The quoted form `@"…"` is recognized because that is how the composer itself
- * spells a path containing spaces.
+ * spells a path containing spaces — which is also how the remote menu spells one,
+ * so quoting says nothing about which machine owns the path and the same
+ * absolute-path test decides.
  *
  * @param text - one text content part.
  * @returns distinct references in the order they appear.
@@ -5289,6 +5326,7 @@ function localPathReferences(text: string): LocalPathReference[] {
       const path = raw.trim()
       // A lone separator or a bare drive root is not a file request.
       if (path === '' || /^[A-Za-z]:[\\/]?$/u.test(path) || /^\/{1,2}$/u.test(path)) continue
+      if (!isLocalAbsolutePath(path)) continue
       seen.add(token)
       found.push({ token, path })
     }
