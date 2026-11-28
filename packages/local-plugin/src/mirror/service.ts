@@ -34,6 +34,10 @@ import type {
   RemoteAssistantFrame,
   RemoteSessionEvent,
   RemoteSessionSummary,
+  RemoteGoalRequest,
+  RemoteGoalResult,
+  RemoteJobFollowFrame,
+  RemoteJobListFrame,
   SessionSnapshot,
   RemoteWorkspace,
   PromptContentPart,
@@ -3304,6 +3308,188 @@ export class RemoteMirrorService {
   canArchiveRemote(hostId: string): boolean {
     return this.#hosts.supportsAgent(hostId, 'session.archive')
       && this.#hosts.supportsAgent(hostId, 'session.unarchive')
+  }
+
+  /**
+   * Performs one goal operation on the host that owns the Session.
+   *
+   * A goal is durable Session state whose writer is the process running the
+   * conversation. Appending `goal/change` here would publish a banner the remote
+   * never sees and, worse, could arm this side's continuation driver for a goal
+   * that does not exist on the machine doing the work. Forwarding makes the
+   * remote the writer, and the replayed event is what updates the local
+   * projection — so `goals.get` keeps working unchanged.
+   *
+   * Three answers, deliberately distinct:
+   * - `undefined` — this is not a mirrored Session, or its agent predates the
+   *   route. The caller keeps today's local behaviour (the design's R6), which is
+   *   wrong but visible, and an upgrade fixes it.
+   * - a result — the remote committed the change; the value is the remote's own
+   *   view.
+   * - a throw — the host is not connected, or the remote refused. Nothing was
+   *   written locally, and the operation reports failure. There is deliberately no
+   *   fallback to a local write, because that is exactly the silent divergence
+   *   this exists to remove.
+   * @param localSessionId - the mirrored Session the operation was addressed to.
+   * @param request - operation and its fields.
+   * @returns the remote's answer, or undefined when the caller should delegate.
+   */
+  async forwardGoal(localSessionId: string, request: RemoteGoalRequest): Promise<RemoteGoalResult | undefined> {
+    const mirror = this.mirrorFor(localSessionId)
+    if (mirror === undefined) return undefined
+    const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
+    if (!this.#hosts.supportsAgent(hostId, 'session.goals')) {
+      this.#ctx.logger.debug(
+        'dsh-waypoint: agent for %s cannot forward goal operations; keeping the local goal',
+        hostId,
+      )
+      return undefined
+    }
+    // A draft has no remote Session until something is sent. Creating it here is
+    // the same act as the draft's first prompt — the user's `/goal` is equally a
+    // statement that the conversation should exist — and without it there is no
+    // process to own the goal.
+    const remoteSessionId = mirror.remoteSessionId === ''
+      ? await this.remoteSessionForCommand(localSessionId)
+      : mirror.remoteSessionId
+    try {
+      return await this.#hosts.goalOperation(hostId, remoteSessionId, request)
+    } catch (error) {
+      this.#ctx.logger.warn(
+        'dsh-waypoint: goal operation %s failed on %s for %s: %s',
+        request.op,
+        hostId,
+        remoteSessionId,
+        String(error),
+      )
+      throw error
+    }
+  }
+
+  /**
+   * Saves one Team mode selection on the host that owns the Session.
+   *
+   * Same reasoning as {@link forwardGoal}, for the `team/mode` event: a local
+   * append toggles this side's UI while the remote's own Team machinery keeps its
+   * previous state, which is the worst possible pair.
+   * @param localSessionId - the mirrored Session the toggle was used on.
+   * @param enabled - requested mode.
+   * @returns the applied mode, or undefined when the caller should delegate.
+   */
+  async forwardTeamMode(localSessionId: string, enabled: boolean): Promise<boolean | undefined> {
+    const mirror = this.mirrorFor(localSessionId)
+    if (mirror === undefined) return undefined
+    const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
+    if (!this.#hosts.supportsAgent(hostId, 'session.team')) {
+      this.#ctx.logger.debug(
+        'dsh-waypoint: agent for %s cannot forward Team mode; keeping the local selection',
+        hostId,
+      )
+      return undefined
+    }
+    const remoteSessionId = mirror.remoteSessionId === ''
+      ? await this.remoteSessionForCommand(localSessionId)
+      : mirror.remoteSessionId
+    const applied = await this.#hosts.setTeamMode(hostId, remoteSessionId, enabled)
+    return applied.enabled
+  }
+
+  /**
+   * Streams the remote host's job roster for one mirrored Session.
+   *
+   * The roster is the one read where a local answer is worse than a refusal: an
+   * empty list cannot be told apart from "nothing is running", and the person
+   * watching a long build is exactly the one who looks.
+   * @param localSessionId - the mirrored Session whose jobs to list.
+   * @param signal - consumer cancellation, forwarded to the remote stream.
+   * @returns the remote frames, or undefined when the caller should delegate.
+   */
+  forwardJobs(localSessionId: string, signal: AbortSignal): AsyncIterable<RemoteJobListFrame> | undefined {
+    const mirror = this.mirrorFor(localSessionId)
+    // A draft has no remote Session, and therefore no remote job that could
+    // belong to it. Delegating is the honest answer, not a forwarded empty read.
+    if (mirror === undefined || mirror.remoteSessionId === '') return undefined
+    const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
+    if (!this.#hosts.supportsAgent(hostId, 'session.jobs')) {
+      this.#ctx.logger.debug(
+        'dsh-waypoint: agent for %s cannot forward the job roster; the local list stays empty',
+        hostId,
+      )
+      return undefined
+    }
+    const remoteSessionId = mirror.remoteSessionId
+    return this.#followRemoteJobs(hostId, remoteSessionId, signal)
+  }
+
+  /**
+   * Streams one remote job's retained output and settlement.
+   *
+   * `jobId` names a job in the remote registry — this process has no such job, so
+   * the only thing it can do with the id is forward it.
+   * @param localSessionId - the mirrored Session the job belongs to.
+   * @param jobId - remote registry id, as the forwarded roster reported it.
+   * @param from - absolute byte offset to resume from.
+   * @param signal - consumer cancellation.
+   * @returns the remote frames, or undefined when the caller should delegate.
+   */
+  forwardJobOutput(
+    localSessionId: string,
+    jobId: string,
+    from: number | undefined,
+    signal: AbortSignal,
+  ): AsyncIterable<RemoteJobFollowFrame> | undefined {
+    const mirror = this.mirrorFor(localSessionId)
+    if (mirror === undefined || mirror.remoteSessionId === '') return undefined
+    const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
+    if (!this.#hosts.supportsAgent(hostId, 'session.jobs')) return undefined
+    const remoteSessionId = mirror.remoteSessionId
+    return this.#followRemoteJobOutput(hostId, remoteSessionId, jobId, from, signal)
+  }
+
+  /** One host's roster stream, as the async iterable a Remote stream method returns. */
+  async *#followRemoteJobs(
+    hostId: string,
+    remoteSessionId: string,
+    signal: AbortSignal,
+  ): AsyncGenerator<RemoteJobListFrame> {
+    yield* this.#hosts.followJobs(hostId, remoteSessionId, signal)
+  }
+
+  /** One host's job-output stream. */
+  async *#followRemoteJobOutput(
+    hostId: string,
+    remoteSessionId: string,
+    jobId: string,
+    from: number | undefined,
+    signal: AbortSignal,
+  ): AsyncGenerator<RemoteJobFollowFrame> {
+    yield* this.#hosts.followJobOutput(hostId, remoteSessionId, jobId, from, signal)
+  }
+
+  /**
+   * Require that a mirrored Session's host is connected before forwarding.
+   *
+   * A disconnected host must fail the operation rather than fall back to a local
+   * write: the design forbids a silent divergence, and "the host is not connected"
+   * is a fact the user can act on.
+   * @param localSessionId - the mirrored Session, for the message.
+   * @param hostId - owning host.
+   * @returns the host id, unchanged.
+   * @throws LocalError when that host is not connected.
+   */
+  #requireConnectedHost(localSessionId: string, hostId: string): string {
+    const phase = this.#hosts.list().find(host => host.id === hostId)?.phase
+    if (phase === 'connected') return hostId
+    throw new LocalError(
+      'host/not-connected',
+      `the remote host owning this mirrored Session is not connected (${phase ?? 'unknown'}), `
+        + `so the operation was not forwarded; nothing was written locally either`,
+      {
+        retryable: true,
+        ui: { key: 'error.hostNotConnected' },
+        details: { localSessionId, hostId },
+      },
+    )
   }
 
   /**

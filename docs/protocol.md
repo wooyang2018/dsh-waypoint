@@ -142,6 +142,8 @@ check and tunnel watcher schedule a bounded reconnect on any transport failure.
 | `GET` | `/sessions/:sessionId?limit=N` | `SessionSnapshot` |
 | `GET` | `/sessions/:sessionId/events?cursor=N` | SSE; `event:` is the frame type (`ready`/`event`/`heartbeat`/`end`) |
 | `GET` | `/sessions/:sessionId/assistant-events` | SSE `event: assistant` frames; live sessions only (`session/not-live` otherwise) |
+| `GET` | `/sessions/:sessionId/jobs` | SSE `event: rows` frames carrying the complete roster (`{ "type": "rows", "jobs": [...] }`); the stream has no natural end |
+| `GET` | `/sessions/:sessionId/jobs/:jobId?from=N` | SSE `event: opened`/`output`/`status` frames for one job; ends after `status` |
 | `GET` | `/web-url` | `{ path: "/?token=..." }` |
 | `GET` | `/llm/catalog` | `ModelCatalogResult` — the providers/models this host can actually route to |
 | `GET` | `/approvals/events` | SSE `event: ready`, then one `event: request` per pending approval, with `event: heartbeat` keepalives |
@@ -164,6 +166,8 @@ Read routes use `GET`. Write routes use `POST` with a JSON body:
 | `POST` | `/sessions/:id/archive` | `{ "stopActivity"?: true }` (default `true`) | `{ "accepted": true }` |
 | `POST` | `/sessions/:id/unarchive` | `{}` | `{ "accepted": true }` |
 | `POST` | `/sessions/:id/rename` | `{ "title": "…" }` | `RenameSessionResult`: `{ "title": "…" }` — the title the host accepted, after its own normalization |
+| `POST` | `/sessions/:id/goals` | `{ "op": "create" \| "edit" \| "pause" \| "resume" \| "complete" \| "clear" \| "block", "objective"?, "maxGoalRounds"?, "ref"? : { "id", "revision" }, "reason"? : { "code", "message" } }` | `{ "op", "view"? : RemoteGoalView, "cleared"? : RemoteGoalRef }`; the goal service's own rejection (`GOAL_*`) surfaces as `internal` with its message |
+| `POST` | `/sessions/:id/team` | `{ "enabled": true \| false }` | `{ "enabled": … }` |
 | `POST` | `/attachments/read` | `{ "kind": "image" \| "file", "ref": { … } }` | `AttachmentReadResult`; `attachment/not-found` when the object is gone |
 | `POST` | `/catalog/commands` | `{ "sessionId": "…" }` or `{ "agentPreset": "…", "cwd": "/abs/dir" }` | `{ commands: RemoteCommandDescriptor[] }` |
 | `POST` | `/catalog/skills` | the same two addressing shapes | `{ skills: RemoteSkillEntry[] }` |
@@ -487,6 +491,38 @@ never logged or stored by the local plugin.
   is rebuilt — so the action is degraded rather than refused. The local plugin therefore checks this
   one capability by itself before forwarding.
 
+## Mirrored Session state: goals, Team mode, jobs
+
+Three session-scoped facts belong to the process that runs the conversation, and a mirrored Session
+holds only a replay of them: the current goal, the Team-mode selection, and the background-job roster.
+Each already exists on this host as a Remote namespace addressed by a Session (`goals`, `agentTeams`,
+`job`), and a mirrored Session's Agent is the local façade — so without these routes the local service
+answers, writes into the local projection, and the machine doing the work never hears about it.
+
+| Route | Capability | Writer on the remote |
+|---|---|---|
+| `POST /sessions/:id/goals` | `session.goals` | `ctx.goals.<op>`, which appends `goal/change` |
+| `POST /sessions/:id/team` | `session.team` | `ctx.agentTeams.setEnabled`, which appends `team/mode` |
+| `GET /sessions/:id/jobs`, `GET /sessions/:id/jobs/:jobId` | `session.jobs` | `ctx.jobController.list`/`follow`, streamed from the remote registry |
+
+- **The point is the writer, not the value.** Every one of these routes ends in an append into the
+  remote Session log; the mirror replays that append like any other event, so the local projection,
+  the goal banner, and the job panel stay correct with no second writer to reconcile.
+- **The Agent is resolved, not received.** Each handler takes a Session id and resolves the live Agent
+  through `sessionController.resolveAgent` (falling back to `ctx.agents.get` on a release without it),
+  because the goal and Team services check *instance identity*, which a value rebuilt from the wire
+  could never satisfy.
+- **A job stream that cannot open fails loudly.** The first frame is pulled before the SSE headers are
+  written, so "no job controller on this host" or "no such job" is a JSON failure; an SSE response that
+  opened and closed without a frame would read as "the job finished".
+- **A job id is foreign.** `jobId` names a job in the remote registry and is carried by the forwarded
+  roster itself. Killing one is *not* forwarded: task control needs a route that owns the id mapping,
+  and a wrong id can stop an unrelated process.
+- **An unclassified namespace is announced.** The local plugin reads its own `typert` registry and logs
+  the namespaces its classification table does not cover, so a DSH release that grows the Remote
+  surface is visible at startup instead of silently defaulting to local. The classification itself
+  lives in `packages/local-plugin/src/remote/namespace-policy.ts`.
+
 ## Security notes
 
 - The route is not protected by DSH's `/api` browser fence; it has its own bearer token.
@@ -495,8 +531,8 @@ never logged or stored by the local plugin.
 - State files are written atomically with `0600`.
 - The protocol never carries model credentials.
 - The agent's write surface is session/workspace creation, prompts, cancel, archive, unarchive, rename,
-  model
-  and sandbox selection, approval answers, attachment admission for a forwarded prompt, and terminal
+  goal and Team-mode mutations, model and sandbox selection, approval answers, attachment admission for
+  a forwarded prompt, and terminal
   input/rename/close. The native UI's file tree, previews,
   file watching, workspace search, and terminals are served by this same HTTP protocol over the
   existing SSH tunnel (`/files/*`, `/files/watch`, `/files/search`, `/terminals/*`); the local plugin
@@ -629,12 +665,12 @@ only `dsh-waypoint` and `dsh-waypoint-agent`, and `scripts/build/build-host.mjs`
 bundles this package into the host entry so a packed tarball installs without it. Its `index.ts`
 therefore carries two different kinds of export, and they should be read differently.
 
-`index.ts` exports 176 symbols in total. They split into 80 contract symbols and 96 symbols that no
+`index.ts` exports 201 symbols in total. They split into 84 contract symbols and 117 symbols that no
 other package consumes, of which 2 are referenced nowhere at all. Every name below is listed
 explicitly, and `scripts/check/protocol-surface.mjs` recomputes these numbers from the source tree; run it
 whenever you add or remove an export, and a test fails if the two disagree.
 
-**Import contract (80 symbols).** Consumed by another package's production code through a named
+**Import contract (84 symbols).** Consumed by another package's production code through a named
 import, or reached through `RemoteAgentClient`'s signatures. Changing or removing one of these is a
 cross-package change. Test files are not counted as consumers: a test that imports a path builder to
 build a URL does not make it part of the contract.
@@ -668,40 +704,49 @@ build a URL does not make it part of the contract.
 - Approvals, JSON, and Web UI (5): `ApprovalOutcome`, `RemoteApprovalFrame`,
   `RemoteApprovalRequest`, `JsonValue`, `WebUrlResult`
 - Questions (3): `RemoteQuestionAnswerItem`, `RemoteQuestionOutcome`, `RemoteQuestionRequest`
+- Forwarded Session state and job streams (4): `RemoteGoalRequest`, `RemoteGoalResult`,
+  `RemoteJobListFrame`, `RemoteJobFollowFrame`
 
-**Internal (96 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
+
+**Internal (117 symbols).** Exported from `index.ts` but consumed by no other package. Treat them as
 private: they carry no cross-package guarantee, and nothing outside `packages/protocol/src` should
 start importing them without promoting them to the contract above.
 
-*Used inside `packages/protocol/src` (94).*
+*Used inside `packages/protocol/src` (115).*
 
-- Guards (37): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`, `isCreateSessionResult`,
-  `isCursor`, `isHostInfoValue`, `isListSessionsResult`, `isListWorkspacesResult`,
-  `isModelCatalogResult`, `isProtocolSupported`, `isRecord`, `isRemoteApprovalFrame`,
-  `isRemoteAssistantFrame`, `isRemoteChangesDiff`, `isRemoteChangesSummary`,
-  `isRemoteCommandCatalogResult`, `isRemoteCommandExecuteResult`, `isRemoteDirectoryListing`,
-  `isRemoteFileBytes`, `isRemoteFileListing`, `isRemoteFileReferenceResult`, `isRemoteFileSearchResult`,
-  `isRemoteFileStat`, `isRemoteFileText`, `isRemoteFileWatchFrame`, `isRemoteGitResult`,
-  `isRemoteQuestionFrame`, `isRenameSessionResult`, `isRemoteSkillCatalogResult`,
-  `isRemoteTerminalFrame`, `isRemoteTerminalInfo`, `isRemoteTerminalListResult`, `isRemoteWorkspace`,
-  `isRetryableCode`, `isSessionSnapshot`, `isSessionStreamFrame`, `isWebUrlResult`
-- Path builders (17): `AGENT_ROUTES`, `sessionPath`, `sessionPromptPath`, `sessionCancelPath`,
-  `sessionModelPath`, `sessionEventsPath`, `sessionAssistantEventsPath`, `sessionArchivePath`,
-  `sessionUnarchivePath`, `sessionRenamePath`, `workspaceSessionsPath`, `directoryListPath`,
-  `fileWatchPath`, `terminalAttachPath`, `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`
-- Types, constants, and functions used inside the package (40): `AttachmentReadResult`,
+- Guards (41): `isAcceptedResult`, `isApiFailure`, `isAttachmentReadResult`,
+  `isCreateSessionResult`, `isCursor`, `isHostInfoValue`, `isListSessionsResult`,
+  `isListWorkspacesResult`, `isModelCatalogResult`, `isProtocolSupported`, `isRecord`,
+  `isRemoteApprovalFrame`, `isRemoteAssistantFrame`, `isRemoteChangesDiff`,
+  `isRemoteChangesSummary`, `isRemoteCommandCatalogResult`, `isRemoteCommandExecuteResult`,
+  `isRemoteDirectoryListing`, `isRemoteFileBytes`, `isRemoteFileListing`,
+  `isRemoteFileReferenceResult`, `isRemoteFileSearchResult`, `isRemoteFileStat`, `isRemoteFileText`,
+  `isRemoteFileWatchFrame`, `isRemoteGitResult`, `isRemoteGoalResult`, `isRemoteJobFollowFrame`,
+  `isRemoteJobListFrame`, `isRemoteQuestionFrame`, `isRemoteSkillCatalogResult`,
+  `isRemoteTeamModeResult`, `isRemoteTerminalFrame`, `isRemoteTerminalInfo`,
+  `isRemoteTerminalListResult`, `isRemoteWorkspace`, `isRenameSessionResult`, `isRetryableCode`,
+  `isSessionSnapshot`, `isSessionStreamFrame`, `isWebUrlResult`
+- Path builders (21): `AGENT_ROUTES`, `directoryListPath`, `fileWatchPath`, `sessionArchivePath`,
+  `sessionAssistantEventsPath`, `sessionCancelPath`, `sessionEventsPath`, `sessionGoalsPath`,
+  `sessionJobFollowPath`, `sessionJobsPath`, `sessionModelPath`, `sessionPath`, `sessionPromptPath`,
+  `sessionRenamePath`, `sessionTeamPath`, `sessionUnarchivePath`, `terminalAttachPath`,
+  `terminalClosePath`, `terminalInputPath`, `terminalRenamePath`, `workspaceSessionsPath`
+- Types, constants, and functions used inside the package (53): `AttachmentReadResult`,
   `CursorAcceptance`, `DEFAULT_REQUEST_TIMEOUT_MS`, `DISCOVERY_STATE_VERSION`, `JsonPrimitive`,
   `MAX_SUPPORTED_PROTOCOL_VERSION`, `MIN_SUPPORTED_PROTOCOL_VERSION`, `PROTOCOL_ERROR_CODES`,
-  `PromptImagePart`, `ProtocolErrorCode`, `ProtocolNegotiation`,
-  `RemoteAgentClientOptions`, `RemoteCatalogRequest`, `RemoteChangesDiffRequest`,
-  `RemoteChangesSummaryRequest`, `RemoteCommandExecuteRequest`, `RemoteCommandExecuteResult`,
-  `RemoteCommandInput`, `RemoteCommandOutcome`, `RemoteDirectoryEntry`, `RemoteFailure`,
-  `RemoteFileReferenceRequest`, `RemoteFileReferenceResult`, `RemoteFileSearchEntryType`,
-  `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteQuestionFrame`,
+  `PromptImagePart`, `ProtocolErrorCode`, `ProtocolNegotiation`, `RemoteAgentClientOptions`,
+  `RemoteCatalogRequest`, `RemoteChangesDiffRequest`, `RemoteChangesSummaryRequest`,
+  `RemoteCommandExecuteRequest`, `RemoteCommandExecuteResult`, `RemoteCommandInput`,
+  `RemoteCommandOutcome`, `RemoteDirectoryEntry`, `RemoteFailure`, `RemoteFileReferenceRequest`,
+  `RemoteFileReferenceResult`, `RemoteFileSearchEntryType`, `RemoteGoalActivation`,
+  `RemoteGoalBlockReason`, `RemoteGoalOperation`, `RemoteGoalPhase`, `RemoteGoalRef`,
+  `RemoteGoalView`, `RemoteJobChannel`, `RemoteJobChunk`, `RemoteJobOutput`, `RemoteJobStatus`,
+  `RemoteJobView`, `RemoteModelCatalog`, `RemoteProtocolErrorInit`, `RemoteQuestionFrame`,
   `RemoteQuestionItem`, `RemoteQuestionOption`, `RemoteReasoningEffort`, `RemoteSandboxMode`,
-  `RemoteTerminalListResult`, `RemoteTerminalShell`, `RemoteWorkspaceChangedFile`,
-  `RemoteWorkspaceDiffHunk`, `SessionSnapshotOptions`, `SessionStreamEndReason`,
-  `SetSandboxModeRequest`, `SseMessage`, `parseSseStream`
+  `RemoteTeamModeRequest`, `RemoteTeamModeResult`, `RemoteTerminalListResult`,
+  `RemoteTerminalShell`, `RemoteWorkspaceChangedFile`, `RemoteWorkspaceDiffHunk`,
+  `SessionSnapshotOptions`, `SessionStreamEndReason`, `SetSandboxModeRequest`, `SseMessage`,
+  `parseSseStream`
 
 *Referenced nowhere (2).*
 

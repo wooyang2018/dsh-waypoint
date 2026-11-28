@@ -71,6 +71,15 @@ export const zh = {
   'error.mirrorLocalPathIsDirectory':
     '这个路径在本地是目录（{path}），远端会话无法读取它的内容。请改为指定目录里的具体文件，或放进远端工作区。',
   'error.mirrorPromptFailed': '这条消息没能转发到远端会话，远端没有收到它。请检查远端连接后重试。',
+  'error.mirrorUnsupported': '这个操作在镜像会话上不可用：它属于远端进程，本地不会假装成功。',
+  'error.mirrorJobKillUnsupported':
+    '后台任务由运行它的远端进程控制，这个版本还不能从镜像会话终止它；请到远端 DSH 网页里停止该任务。',
+  'error.mirrorSubagentControlUnsupported':
+    '子会话由远端进程管理，这个版本还不能从镜像会话向它发消息或中断它；请到远端 DSH 网页里操作。',
+  'error.mirrorFeedbackUnsupported':
+    '这条消息的评价会写在远端会话日志里，而当前版本还不能把反馈转发过去，所以没有记录；请在远端 DSH 网页里提交评价。',
+  'error.mirrorForkUnsupported':
+    '镜像会话不能在本地分叉：分支只会得到一份本地回放，没有对应的远端会话。请在远端 DSH 网页里分叉。',
   'error.operationFailed': '操作失败',
   'error.unavailable': '无法连接本地远程宿主服务',
   'error.internal': '插件内部错误',
@@ -258,6 +267,16 @@ export const en: Record<CopyKey, string> = {
     'This path is a local directory ({path}), so the remote Session cannot read its contents. Name a file inside it, or place the directory in the remote workspace.',
   'error.mirrorPromptFailed':
     'This message could not be forwarded to the remote Session, so the remote never received it. Check the remote connection and try again.',
+  'error.mirrorUnsupported':
+    'This action is not available on a mirrored Session: it belongs to the remote process, and this side will not pretend it succeeded.',
+  'error.mirrorJobKillUnsupported':
+    'Background jobs are controlled by the remote process that runs them, and this version cannot stop one from a mirrored Session yet. Stop it in the remote DSH web UI.',
+  'error.mirrorSubagentControlUnsupported':
+    'Child Sessions are managed by the remote process, and this version cannot message or interrupt one from a mirrored Session yet. Use the remote DSH web UI.',
+  'error.mirrorFeedbackUnsupported':
+    'Feedback on this message is stored in the remote Session log, which this version cannot write to from here, so nothing was recorded. Send the feedback in the remote DSH web UI.',
+  'error.mirrorForkUnsupported':
+    'A mirrored Session cannot be forked here: the branch would only inherit this local replay, with no remote Session behind it. Fork it in the remote DSH web UI.',
   'error.operationFailed': 'Operation failed',
   'error.unavailable': 'Cannot reach the local remote-host service',
   'error.internal': 'Plugin internal error',

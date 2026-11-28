@@ -41,6 +41,8 @@ import {
   type RemoteCatalogRequest,
   type RemoteCommandAttachment,
   type RemoteCommandExecuteRequest,
+  type RemoteGoalRequest,
+  type RemoteTeamModeRequest,
 } from '@dsh-waypoint/protocol'
 import type { AgentRoute } from '@dsh-waypoint/protocol'
 import { parseBearer, tokensEqual } from './auth.ts'
@@ -158,6 +160,12 @@ export async function handleAgentRequest(
         case 'session-cancel':
           sendJson(res, service.cancelSession(route.sessionId))
           return
+        case 'session-goals':
+          sendJson(res, await service.goalOperation(route.sessionId, asGoalRequest(body)))
+          return
+        case 'session-team':
+          sendJson(res, await service.setTeamMode(route.sessionId, asTeamModeRequest(body)))
+          return
         case 'session-archive':
           sendJson(res, await service.archiveSession(
             route.sessionId,
@@ -274,6 +282,14 @@ export async function handleAgentRequest(
       await streamAssistant(ctx, service, req, res, route.sessionId)
       return
     }
+    if (route.kind === 'session-jobs') {
+      await streamJobs(ctx, service, req, res, route.sessionId)
+      return
+    }
+    if (route.kind === 'session-job-follow') {
+      await streamJobOutput(ctx, service, req, res, route.sessionId, route.jobId, parseOffsetQuery(url.searchParams.get('from')))
+      return
+    }
     const hostId = parseHostId(req)
     switch (route.kind) {
       case 'health':
@@ -324,6 +340,8 @@ export async function handleAgentRequest(
       case 'session-archive':
       case 'session-unarchive':
       case 'session-rename':
+      case 'session-goals':
+      case 'session-team':
       case 'attachment-read':
       case 'catalog-commands':
       case 'catalog-skills':
@@ -662,6 +680,73 @@ function asRenameRequest(value: unknown): { title: string } {
   return { title }
 }
 
+/**
+ * Read one forwarded goal operation out of its request body.
+ *
+ * Only the envelope is validated here; whether the operation is allowed in the
+ * goal's current phase is the owning service's decision, and duplicating those
+ * rules would let the two disagree. The one shape this must enforce is that a
+ * ref is a `{ id, revision }` pair: a malformed one would reach a
+ * compare-and-set as `undefined` and read as a stale revision.
+ * @param value - parsed JSON body.
+ * @returns the operation plus the fields it carries.
+ */
+function asGoalRequest(value: unknown): RemoteGoalRequest {
+  const body = objectBody(value)
+  const op = body.op
+  if (op !== 'create' && op !== 'edit' && op !== 'pause' && op !== 'resume'
+    && op !== 'complete' && op !== 'clear' && op !== 'block') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'op must name a goal operation' })
+  }
+  if (op === 'create' || op === 'edit') {
+    if (body.objective !== undefined && (typeof body.objective !== 'string' || body.objective.trim() === '')) {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'objective must be a non-empty string' })
+    }
+    if (body.maxGoalRounds !== undefined && typeof body.maxGoalRounds !== 'number') {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'maxGoalRounds must be a number' })
+    }
+  }
+  let ref: RemoteGoalRequest['ref']
+  if (body.ref !== undefined) {
+    const record = objectBody(body.ref)
+    if (typeof record.id !== 'string' || record.id === '' || typeof record.revision !== 'number') {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'ref must carry an id and a revision' })
+    }
+    ref = { id: record.id, revision: record.revision }
+  }
+  if (op !== 'create' && ref === undefined) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: `${op} requires ref` })
+  }
+  let reason: RemoteGoalRequest['reason']
+  if (body.reason !== undefined) {
+    const record = objectBody(body.reason)
+    if (typeof record.code !== 'string' || typeof record.message !== 'string') {
+      throw new RemoteProtocolError({ code: 'request/invalid', message: 'reason must carry a code and a message' })
+    }
+    reason = { code: record.code, message: record.message }
+  }
+  return {
+    op,
+    ...typeof body.objective === 'string' ? { objective: body.objective } : {},
+    ...typeof body.maxGoalRounds === 'number' ? { maxGoalRounds: body.maxGoalRounds } : {},
+    ...ref === undefined ? {} : { ref },
+    ...reason === undefined ? {} : { reason },
+  }
+}
+
+/**
+ * Read one Team mode selection out of its request body.
+ * @param value - parsed JSON body.
+ * @returns the requested mode.
+ */
+function asTeamModeRequest(value: unknown): RemoteTeamModeRequest {
+  const body = objectBody(value)
+  if (typeof body.enabled !== 'boolean') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'enabled must be a boolean' })
+  }
+  return { enabled: body.enabled }
+}
+
 function asSelectModelRequest(value: unknown): { provider: string; model: string; reasoningEffort?: string } {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
@@ -930,6 +1015,142 @@ function streamApprovals(service: RemoteAgentService, req: IncomingMessage, res:
   }
   req.on('close', close)
   req.on('error', close)
+}
+
+/**
+ * Stream this host's job roster for one Session.
+ *
+ * The stream never ends on its own, exactly like the local `job/list` it stands
+ * in for: the carrier closes it when the caller stops listening.
+ * @param ctx - Host context, for the diagnostic log.
+ * @param service - agent service owning the roster projection.
+ * @param req - caller request, whose close event ends the stream.
+ * @param res - response to write frames to.
+ * @param sessionId - Session whose visible jobs to project.
+ */
+async function streamJobs(
+  ctx: Context,
+  service: RemoteAgentService,
+  req: IncomingMessage,
+  res: ServerResponse,
+  sessionId: string,
+): Promise<void> {
+  await streamFrames(ctx, req, res, `job roster of ${sessionId}`, 'rows', signal =>
+    service.followJobs(sessionId, signal))
+}
+
+/**
+ * Stream one remote job's retained output and settlement.
+ *
+ * Ends normally when the job settles and its ring is drained, which is how the
+ * consumer distinguishes "finished" from a dropped carrier.
+ * @param ctx - Host context, for the diagnostic log.
+ * @param service - agent service owning the job projection.
+ * @param req - caller request, whose close event ends the stream.
+ * @param res - response to write frames to.
+ * @param sessionId - Session the job belongs to.
+ * @param jobId - id in this host's job registry.
+ * @param from - absolute byte offset to resume from.
+ */
+async function streamJobOutput(
+  ctx: Context,
+  service: RemoteAgentService,
+  req: IncomingMessage,
+  res: ServerResponse,
+  sessionId: string,
+  jobId: string,
+  from: number | undefined,
+): Promise<void> {
+  await streamFrames(ctx, req, res, `output of job ${jobId}`, 'frame', signal =>
+    service.followJobOutput(sessionId, jobId, from, signal))
+}
+
+/**
+ * Write one `AsyncIterable` of JSON frames as SSE.
+ *
+ * The first frame is pulled **before** any header is written. A job stream fails
+ * at that first pull for reasons the caller must see — no job controller on this
+ * host, or an unknown/foreign job id — and an SSE response that opens and closes
+ * without a frame reads as "the job finished", which is a claim, not a failure.
+ * Everything after the first frame is a drop, and the carrier closing is then
+ * the honest report.
+ * @param ctx - Host context, for the diagnostic log.
+ * @param req - caller request, whose close event cancels the source.
+ * @param res - response to write frames to.
+ * @param subject - what the stream carries, for the failure message.
+ * @param firstEvent - SSE event name used when the frame does not name its own.
+ * @param open - builds the frame source for one cancellation signal.
+ */
+async function streamFrames<T extends { readonly type?: string }>(
+  ctx: Context,
+  req: IncomingMessage,
+  res: ServerResponse,
+  subject: string,
+  firstEvent: string,
+  open: (signal: AbortSignal) => AsyncIterable<T>,
+): Promise<void> {
+  const controller = new AbortController()
+  const onClose = (): void => { controller.abort() }
+  const iterator = open(controller.signal)[Symbol.asyncIterator]()
+  let first: IteratorResult<T>
+  try {
+    first = await iterator.next()
+  } catch (error) {
+    await iterator.return?.(undefined)
+    throw error
+  }
+  req.on('close', onClose)
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-store, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  })
+  res.flushHeaders?.()
+  res.write('retry: 5000\n\n')
+  const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': heartbeat\n\n') }, 15_000)
+  heartbeat.unref?.()
+  const write = (frame: T): void => {
+    if (res.writableEnded) return
+    res.write(`event: ${frame.type ?? firstEvent}\ndata: ${JSON.stringify(frame)}\n\n`)
+  }
+  try {
+    if (!first.done) write(first.value)
+    for (;;) {
+      const next = await iterator.next()
+      if (next.done) break
+      write(next.value)
+    }
+    res.end()
+  } catch (error) {
+    ctx.logger.warn('dsh-waypoint-agent: %s stream failed: %s', subject, String(error))
+    if (!res.writableEnded) res.end()
+  } finally {
+    clearInterval(heartbeat)
+    req.off('close', onClose)
+    controller.abort()
+    await iterator.return?.(undefined)
+  }
+}
+
+/**
+ * Read the resume offset of one job output stream.
+ * @param raw - the `from` query value.
+ * @returns the offset, or undefined for the retained head.
+ */
+function parseOffsetQuery(raw: string | null): number | undefined {
+  if (raw === null || raw === '') return undefined
+  if (!/^\d+$/u.test(raw)) {
+    throw new RemoteProtocolError({
+      code: 'request/invalid',
+      message: `invalid from: ${JSON.stringify(raw)}`,
+    })
+  }
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value)) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: `from is too large: ${raw}` })
+  }
+  return value
 }
 
 function asPath(value: unknown): string {

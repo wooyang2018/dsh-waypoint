@@ -67,6 +67,11 @@ export const UI_TEXT_KEYS = [
   'error.mirrorLocalPathUnavailable',
   'error.mirrorLocalPathIsDirectory',
   'error.mirrorPromptFailed',
+  'error.mirrorUnsupported',
+  'error.mirrorJobKillUnsupported',
+  'error.mirrorSubagentControlUnsupported',
+  'error.mirrorFeedbackUnsupported',
+  'error.mirrorForkUnsupported',
   'error.agentVersionMismatch',
   'error.agentStartTimeout',
   'error.agentInstallFailed',
@@ -110,6 +115,10 @@ export function uiForErrorCode(code: string): UiText {
     case 'ssh/tunnel-failed': return { key: 'error.sshTunnelFailed' }
     case 'agent/unavailable': return { key: 'error.agentUnavailable' }
     case 'agent/error': return { key: 'error.agentError' }
+    // The specific key is preferred by the throwing site; this is the fallback
+    // for a caller that only has the code, and it still says the operation is
+    // not available for a mirrored Session rather than "operation failed".
+    case 'mirror/unsupported': return { key: 'error.mirrorUnsupported' }
     case 'directory/unreadable': return { key: 'error.directoryUnreadable' }
     case 'port/invalid': return { key: 'error.portInvalid' }
     case 'port/forward-failed': return { key: 'error.portForwardFailed' }

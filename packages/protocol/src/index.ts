@@ -72,6 +72,27 @@ export type {
   RemoteWorkspaceFileDiff,
 } from './workspace-changes.ts'
 export { isRemoteChangesDiff, isRemoteChangesSummary } from './workspace-changes.ts'
+export type {
+  RemoteGoalActivation,
+  RemoteGoalBlockReason,
+  RemoteGoalOperation,
+  RemoteGoalPhase,
+  RemoteGoalRef,
+  RemoteGoalRequest,
+  RemoteGoalResult,
+  RemoteGoalView,
+  RemoteTeamModeRequest,
+  RemoteTeamModeResult,
+} from './session-state.ts'
+export type {
+  RemoteJobChannel,
+  RemoteJobChunk,
+  RemoteJobFollowFrame,
+  RemoteJobListFrame,
+  RemoteJobOutput,
+  RemoteJobStatus,
+  RemoteJobView,
+} from './jobs.ts'
 
 export type {
   AgentCapability,
@@ -157,6 +178,10 @@ export {
   sessionPromptPath,
   sessionRenamePath,
   sessionUnarchivePath,
+  sessionGoalsPath,
+  sessionJobsPath,
+  sessionJobFollowPath,
+  sessionTeamPath,
   workspaceSessionsPath,
   directoryListPath,
   fileWatchPath,
@@ -200,6 +225,10 @@ export {
   isRemoteFileWatchFrame,
   isRemoteFileSearchResult,
   isRemoteFileReferenceResult,
+  isRemoteGoalResult,
+  isRemoteTeamModeResult,
+  isRemoteJobListFrame,
+  isRemoteJobFollowFrame,
   isRemoteTerminalFrame,
   isRemoteTerminalInfo,
   isRemoteTerminalListResult,

@@ -103,6 +103,32 @@ export type AgentCapability =
    * capability delegates execution locally instead.
    */
   | 'session.command'
+  /**
+   * The agent serves `/sessions/:id/goals`, appending goal changes itself.
+   *
+   * A goal is durable Session state owned by the process that runs the
+   * conversation; a local append drives this side's banner and continuation while
+   * the remote knows nothing. A client without this capability keeps today's
+   * local behaviour, which is wrong but at least identical to the previous
+   * release instead of half-forwarded.
+   */
+  | 'session.goals'
+  /**
+   * The agent serves `/sessions/:id/jobs`, projecting its own job registry.
+   *
+   * Separate from `session.goals` because the two fail differently: a roster is a
+   * read, so without it a mirrored Session shows an empty list rather than
+   * breaking a write. A client without this capability delegates locally.
+   */
+  | 'session.jobs'
+  /**
+   * The agent serves `/sessions/:id/team`, appending `team/mode` itself.
+   *
+   * The same reasoning as `session.goals`: Team mode is a Session-log fact whose
+   * writer is the process running the tree, and a local toggle would leave the
+   * remote's Team machinery untouched while this side's UI claimed otherwise.
+   */
+  | 'session.team'
 
 /** Identity and environment of the remote DSH host serving the agent API. */
 export interface HostInfo {

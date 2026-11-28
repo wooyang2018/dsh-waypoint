@@ -62,6 +62,15 @@ import {
   type WebUrlResult,
   type AttachmentReadRequest,
   type AttachmentReadResult,
+  type RemoteGoalBlockReason,
+  type RemoteGoalRef,
+  type RemoteGoalRequest,
+  type RemoteGoalResult,
+  type RemoteGoalView,
+  type RemoteTeamModeRequest,
+  type RemoteTeamModeResult,
+  type RemoteJobFollowFrame,
+  type RemoteJobListFrame,
 } from '@dsh-waypoint/protocol'
 import { isLoopbackAddress } from './auth.ts'
 import {
@@ -146,6 +155,74 @@ interface ForwardedFileUploads {
 interface ForwardedAttachmentStore {
   readImage(ref: never, signal?: AbortSignal): Promise<{ readonly data: Uint8Array }>
   readFileStream(ref: never, signal?: AbortSignal): AsyncIterable<Uint8Array>
+}
+
+/**
+ * The slice of this Host's goal service a forwarded operation calls.
+ *
+ * Declared structurally rather than imported for the same reason
+ * {@link ForwardedFileUploads} is: `@deepseek-ai/dsh-goal` is a peer this profile
+ * may not compose at all, and a value import would fail to load on a host that
+ * simply has no goals. Every method takes the live `Agent` first, which is the
+ * signature the service's own `assertLive` defends.
+ */
+interface ForwardedGoalService {
+  create(agent: unknown, request: { readonly objective: string; readonly maxGoalRounds?: number }): RemoteGoalView
+  edit(
+    agent: unknown,
+    ref: RemoteGoalRef,
+    request: { readonly objective?: string; readonly maxGoalRounds?: number },
+  ): RemoteGoalView
+  pause(agent: unknown, ref: RemoteGoalRef): RemoteGoalView
+  resume(agent: unknown, ref: RemoteGoalRef): RemoteGoalView
+  complete(agent: unknown, ref: RemoteGoalRef): RemoteGoalView
+  clear(agent: unknown, ref: RemoteGoalRef): RemoteGoalRef
+  block(agent: unknown, ref: RemoteGoalRef, reason: RemoteGoalBlockReason): RemoteGoalView
+}
+
+/** The slice of this Host's Team service a forwarded selection calls. */
+interface ForwardedTeamService {
+  setEnabled(agent: unknown, enabled: boolean, signal?: AbortSignal): Promise<void>
+}
+
+/**
+ * The slice of this Host's `job` Remote owner the roster streams forward.
+ *
+ * `list` and `follow` are the owner's own stream methods: they already produce
+ * whole-set roster frames and coalesced output batches, so forwarding them keeps
+ * this route byte-identical to what the remote Web UI consumes.
+ */
+interface ForwardedJobController {
+  list(request: { readonly sessionId: string }, signal: AbortSignal): AsyncIterable<unknown>
+  follow(
+    request: { readonly sessionId: string; readonly jobId: string; readonly from?: number },
+    signal: AbortSignal,
+  ): AsyncIterable<unknown>
+}
+
+/**
+ * Whether a Session-resolution failure means the Session does not exist.
+ *
+ * `resolveAgent` answers a `RemoteError` whose `code` distinguishes "no such
+ * Session" from "this Session cannot be owned here"; reporting the first as
+ * `session/not-live` would tell the user to wait for something that is never
+ * coming.
+ * @param failure - the `error` half of a resolution result.
+ * @returns whether the Session itself is missing.
+ */
+function isSessionNotFound(failure: unknown): boolean {
+  return typeof failure === 'object' && failure !== null
+    && (failure as { code?: unknown }).code === 'session/not-found'
+}
+
+/** One failure's message, without trusting it to be an Error. */
+function messageOf(value: unknown): string {
+  if (value instanceof Error) return value.message
+  if (typeof value === 'object' && value !== null) {
+    const message = (value as { message?: unknown }).message
+    if (typeof message === 'string' && message !== '') return message
+  }
+  return String(value)
 }
 
 /**
@@ -359,6 +436,15 @@ export class RemoteAgentService {
         // it cannot run, while a forwarded line it cannot run is a dead end.
         ...this.catalog.available ? ['session.catalog' as const] : [],
         ...this.catalog.available ? ['session.command' as const] : [],
+        // Session-scoped state whose writer must be the process that owns the
+        // Agent. Each is advertised only when this profile composes the
+        // service: claiming one it cannot serve would turn a missing plugin into
+        // a forwarded call that fails after the user committed to it. A profile
+        // that mounts no goal service has nothing to forward to, and the client
+        // keeps its local behaviour instead.
+        ...this.#goalsService() === undefined ? [] : ['session.goals' as const],
+        ...this.#jobController() === undefined ? [] : ['session.jobs' as const],
+        ...this.#teamService() === undefined ? [] : ['session.team' as const],
       ],
       workspaceCount: this.ctx.workspaceRegistry.list().length,
       modelBaseUrl: process.env.DEEPSEEK_BASE_URL ?? null,
@@ -1039,6 +1125,202 @@ export class RemoteAgentService {
   cancelSession(sessionId: string): AcceptedResult {
     this.ctx.sessionController.cancel({ sessionId: sessionId as SessionId })
     return { accepted: true }
+  }
+
+  /**
+   * Perform one goal operation on this host's own goal service.
+   *
+   * The service appends the `goal/change` event into the Session log, which is
+   * the whole reason this route exists: the mirrored copy of that log replays the
+   * event, so the local banner follows without a second writer and without the
+   * local side having to know what a goal revision is.
+   *
+   * The Agent is resolved from the Session id rather than taken from the caller:
+   * on this host it is the real Agent, and the goal service's own `assertLive`
+   * compares identity (`ctx.agents.get(agent.id) === agent`), which a value
+   * reconstructed from the wire could never satisfy.
+   * @param sessionId - Session owning the goal.
+   * @param request - operation plus the fields it needs.
+   * @returns the resulting view, or the `clear` tombstone.
+   */
+  async goalOperation(sessionId: string, request: RemoteGoalRequest): Promise<RemoteGoalResult> {
+    const goals = this.#goalsService()
+    if (goals === undefined) {
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'this host composes no goal service',
+        details: { sessionId },
+      })
+    }
+    const agent = await this.#agentFor(sessionId)
+    switch (request.op) {
+      case 'create': {
+        const view = goals.create(agent, {
+          objective: request.objective ?? '',
+          ...request.maxGoalRounds === undefined ? {} : { maxGoalRounds: request.maxGoalRounds },
+        })
+        return { op: 'create', view }
+      }
+      case 'edit':
+        return {
+          op: 'edit',
+          view: goals.edit(agent, this.#goalRef(request), {
+            ...request.objective === undefined ? {} : { objective: request.objective },
+            ...request.maxGoalRounds === undefined ? {} : { maxGoalRounds: request.maxGoalRounds },
+          }),
+        }
+      case 'pause':
+        return { op: 'pause', view: goals.pause(agent, this.#goalRef(request)) }
+      case 'resume':
+        return { op: 'resume', view: goals.resume(agent, this.#goalRef(request)) }
+      case 'complete':
+        return { op: 'complete', view: goals.complete(agent, this.#goalRef(request)) }
+      case 'block':
+        return {
+          op: 'block',
+          view: goals.block(agent, this.#goalRef(request), {
+            code: request.reason?.code ?? '',
+            message: request.reason?.message ?? '',
+          }),
+        }
+      case 'clear':
+        return { op: 'clear', cleared: goals.clear(agent, this.#goalRef(request)) }
+    }
+  }
+
+  /**
+   * Save one Session tree's Team selection on this host.
+   *
+   * Same reasoning as {@link goalOperation}: the selection is a `team/mode`
+   * append, and only this process owns the tree it describes.
+   * @param sessionId - Session whose tree receives the selection.
+   * @param request - selected mode.
+   * @returns the mode that took effect.
+   */
+  async setTeamMode(sessionId: string, request: RemoteTeamModeRequest): Promise<RemoteTeamModeResult> {
+    const teams = this.#teamService()
+    if (teams === undefined) {
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'this host composes no Team service',
+        details: { sessionId },
+      })
+    }
+    const agent = await this.#agentFor(sessionId)
+    await teams.setEnabled(agent, request.enabled)
+    return { enabled: request.enabled }
+  }
+
+  /**
+   * Stream this host's job roster for one Session.
+   *
+   * Delegated to the Host's own `job` Remote owner rather than rebuilt here: its
+   * frames are already whole-set projections, and a second implementation would
+   * eventually disagree with the remote Web UI about coalescing and settlement.
+   * @param sessionId - Session whose visible jobs to project.
+   * @param signal - caller cancellation, forwarded to the owner.
+   */
+  followJobs(sessionId: string, signal: AbortSignal): AsyncIterable<RemoteJobListFrame> {
+    const controller = this.#jobController()
+    if (controller === undefined) {
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'this host composes no job controller',
+        details: { sessionId },
+      })
+    }
+    return controller.list({ sessionId }, signal) as AsyncIterable<RemoteJobListFrame>
+  }
+
+  /**
+   * Stream one job's retained output and settlement from this host.
+   * @param sessionId - Session the job belongs to (the fenced read's caller).
+   * @param jobId - id in this host's job registry.
+   * @param from - absolute byte offset to resume from.
+   * @param signal - caller cancellation.
+   */
+  followJobOutput(
+    sessionId: string,
+    jobId: string,
+    from: number | undefined,
+    signal: AbortSignal,
+  ): AsyncIterable<RemoteJobFollowFrame> {
+    const controller = this.#jobController()
+    if (controller === undefined) {
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'this host composes no job controller',
+        details: { sessionId, jobId },
+      })
+    }
+    return controller.follow({
+      sessionId,
+      jobId,
+      ...from === undefined ? {} : { from },
+    }, signal) as AsyncIterable<RemoteJobFollowFrame>
+  }
+
+  /**
+   * Resolve the live Agent behind one Session id.
+   *
+   * Through `sessionController.resolveAgent` when this release offers it, which
+   * resumes a cold Session exactly as a prompt would; otherwise the registry
+   * lookup alone, because an older release has no resolver to call. Both answer
+   * with the *live* instance, which is what the goal and Team services check.
+   * @param sessionId - Session to resolve.
+   * @returns the live Agent.
+   * @throws RemoteProtocolError when the Session cannot be resolved.
+   */
+  async #agentFor(sessionId: string): Promise<unknown> {
+    const controller = (this.ctx as unknown as { get(name: string): unknown }).get('sessionController') as
+      | { resolveAgent?(id: SessionId): Promise<{ agent?: unknown; error?: unknown }> }
+      | undefined
+    if (controller?.resolveAgent !== undefined) {
+      const resolved = await controller.resolveAgent(sessionId as SessionId)
+      if (resolved.agent !== undefined) return resolved.agent
+      const failure = resolved.error
+      throw new RemoteProtocolError({
+        code: failure !== undefined && isSessionNotFound(failure) ? 'session/not-found' : 'session/not-live',
+        message: `session ${sessionId} could not be resolved on this host: ${messageOf(failure)}`,
+        details: { sessionId },
+      })
+    }
+    const live = (this.ctx.agents as unknown as { get(id: string): unknown }).get(sessionId)
+    if (live !== undefined) return live
+    throw new RemoteProtocolError({
+      code: 'session/not-live',
+      message: `session ${sessionId} is not live on this host`,
+      details: { sessionId },
+    })
+  }
+
+  /** The goal service this profile composes, if any. */
+  #goalsService(): ForwardedGoalService | undefined {
+    return (this.ctx as unknown as { get(name: string): unknown }).get('goals') as ForwardedGoalService | undefined
+  }
+
+  /** The Team service this profile composes, if any. */
+  #teamService(): ForwardedTeamService | undefined {
+    return (this.ctx as unknown as { get(name: string): unknown }).get('agentTeams') as ForwardedTeamService | undefined
+  }
+
+  /** The Host's `job` Remote owner, if this profile composes one. */
+  #jobController(): ForwardedJobController | undefined {
+    return (this.ctx as unknown as { get(name: string): unknown }).get('jobController') as
+      | ForwardedJobController
+      | undefined
+  }
+
+  /** Require the compare-and-set reference a goal mutation names. */
+  #goalRef(request: RemoteGoalRequest): RemoteGoalRef {
+    const ref = request.ref
+    if (ref === undefined) {
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: `goal operation ${request.op} requires the ref it expects`,
+      })
+    }
+    return { id: ref.id, revision: ref.revision }
   }
   /** Read the newest page of one session's event log. */
   async snapshotSession(hostId: string, sessionId: string, limit?: number): Promise<SessionSnapshot> {

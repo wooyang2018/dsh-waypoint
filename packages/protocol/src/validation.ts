@@ -52,6 +52,11 @@ import type {
 } from './files.ts'
 import type { RemoteFileReferenceResult } from './file-references.ts'
 import type {
+  RemoteGoalResult,
+  RemoteTeamModeResult,
+} from './session-state.ts'
+import type { RemoteJobFollowFrame, RemoteJobListFrame } from './jobs.ts'
+import type {
   RemoteTerminalFrame,
   RemoteTerminalInfo,
   RemoteTerminalListResult,
@@ -549,4 +554,107 @@ export function isRemoteCommandExecuteResult(value: unknown): value is RemoteCom
  */
 export function isRemoteCommandAttachmentList(value: unknown): value is readonly RemoteCommandAttachment[] {
   return Array.isArray(value) && value.every(isRemoteCommandAttachment)
+}
+
+/** One goal reference (or tombstone). */
+function isRemoteGoalRef(value: unknown): boolean {
+  return isRecord(value) && isString(value.id) && value.id !== '' && typeof value.revision === 'number'
+}
+
+/** Guard for one goal view. */
+function isRemoteGoalView(value: unknown): boolean {
+  return isRecord(value)
+    && isRemoteGoalRef(value)
+    && isString(value.objective)
+    && (value.phase === 'active' || value.phase === 'paused'
+      || value.phase === 'blocked' || value.phase === 'complete')
+    && (value.blockedReason === undefined || (isRecord(value.blockedReason)
+      && isString(value.blockedReason.code) && isString(value.blockedReason.message)))
+    && typeof value.maxGoalRounds === 'number'
+    && typeof value.roundsStarted === 'number'
+    && typeof value.createdAt === 'number'
+    && typeof value.updatedAt === 'number'
+    && (value.activation === 'armed' || value.activation === 'disarmed')
+}
+
+/**
+ * Guard for one forwarded goal operation's answer.
+ *
+ * `view` and `cleared` are validated strictly rather than tolerated as unknown:
+ * the local caller uses whichever one its operation documents, and a shape it
+ * cannot read is a failure the caller must see instead of an `undefined` goal.
+ */
+export function isRemoteGoalResult(value: unknown): value is RemoteGoalResult {
+  if (!isRecord(value)) return false
+  const op = value.op
+  if (op === 'clear') return value.view === undefined && isRemoteGoalRef(value.cleared)
+  if (op !== 'create' && op !== 'edit' && op !== 'pause'
+    && op !== 'resume' && op !== 'complete' && op !== 'block') return false
+  return isRemoteGoalView(value.view) && value.cleared === undefined
+}
+
+/** Guard for one Team mode acknowledgement. */
+export function isRemoteTeamModeResult(value: unknown): value is RemoteTeamModeResult {
+  return isRecord(value) && typeof value.enabled === 'boolean'
+}
+
+/** One job's output-ring coordinates. */
+function isRemoteJobOutput(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.total === 'number'
+    && typeof value.earliest === 'number'
+    && (value.spillPaths === undefined || isStringArray(value.spillPaths))
+}
+
+/** Guard for one job projection. */
+function isRemoteJobView(value: unknown): boolean {
+  return isRecord(value)
+    && isString(value.id)
+    && isString(value.kind)
+    && isString(value.label)
+    && (value.owner === undefined || isString(value.owner))
+    && (value.outputLimitBytes === undefined || typeof value.outputLimitBytes === 'number')
+    && (value.status === 'running' || value.status === 'stopping'
+      || value.status === 'completed' || value.status === 'killed' || value.status === 'failed')
+    && (value.progress === undefined || isString(value.progress))
+    && (value.detail === undefined || isString(value.detail))
+    && typeof value.startedAt === 'number'
+    && (value.finishedAt === undefined || typeof value.finishedAt === 'number')
+    && isRemoteJobOutput(value.output)
+}
+
+/** One output chunk of a job's ring. */
+function isRemoteJobChunk(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.at === 'number'
+    && isString(value.text)
+    && (value.channel === undefined || value.channel === 'stdout'
+      || value.channel === 'stderr' || value.channel === 'log')
+    && (value.gapBefore === undefined || value.gapBefore === true)
+}
+
+/**
+ * Guard for one roster frame.
+ *
+ * A frame with no `jobs` array is rejected rather than read as an empty roster:
+ * "the remote is running nothing" is a claim, and a malformed answer must not be
+ * able to make it.
+ */
+export function isRemoteJobListFrame(value: unknown): value is RemoteJobListFrame {
+  return isRecord(value)
+    && value.type === 'rows'
+    && Array.isArray(value.jobs)
+    && value.jobs.every(isRemoteJobView)
+}
+
+/** Guard for one job observation frame. */
+export function isRemoteJobFollowFrame(value: unknown): value is RemoteJobFollowFrame {
+  if (!isRecord(value)) return false
+  if (value.type === 'opened') return isRemoteJobView(value.job) && typeof value.from === 'number'
+  if (value.type === 'status') return isRemoteJobView(value.job)
+  if (value.type !== 'output') return false
+  return Array.isArray(value.chunks)
+    && value.chunks.every(isRemoteJobChunk)
+    && typeof value.next === 'number'
+    && (value.lossy === undefined || value.lossy === true)
 }

@@ -21,6 +21,16 @@ export type LocalErrorCode =
   | 'ssh/tunnel-failed'
   | 'agent/unavailable'
   | 'agent/error'
+  /**
+   * A Remote operation a mirrored Session cannot answer honestly.
+   *
+   * Its own code rather than `request/invalid`: the request was well formed and
+   * the local service would have accepted it, so the refusal is about *where*
+   * the state lives, not about what the caller asked for. Every use pairs it with
+   * a `ui` key that names the operation, because "unsupported" alone is not
+   * something a user can act on.
+   */
+  | 'mirror/unsupported'
   | 'directory/unreadable'
   | 'port/invalid'
   | 'port/forward-failed'

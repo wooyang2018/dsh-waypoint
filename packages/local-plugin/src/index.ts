@@ -28,6 +28,16 @@ import { installRemoteWorkingDirectory } from './remote/working-directory.ts'
 import { installRemoteFileReferences } from './remote/file-references.ts'
 import { installRemoteSessionQueue } from './remote/session-queue.ts'
 import { RemoteTerminals } from './remote/terminal.ts'
+import {
+  installMirroredGoals,
+  installMirroredJobs,
+  installMirroredMessageFeedback,
+  installMirroredSessionFork,
+  installMirroredSubagentControl,
+  installMirroredTeamMode,
+  installMirroredToolResultStream,
+  reportUnclassifiedNamespaces,
+} from './remote/namespaces.ts'
 import { RemoteHostsService } from './service.ts'
 import { installRemoteToolGuards, registerRemoteTools } from './tools.ts'
 
@@ -255,6 +265,29 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
   ctx.inject(['tools'], child => {
     registerRemoteTools(child, service)
   })
+
+  // A mirrored Session's façade is registered in this Host's `agents` registry, so
+  // every `Agent`-addressed Remote service accepts it and reads or writes *this*
+  // machine's state for a conversation that runs elsewhere. `remote/namespace-
+  // policy.ts` classifies each namespace; these adapters are the enforcement, one
+  // `inject` per service so either may mount before or after this plugin.
+  for (const [serviceName, install, what] of [
+    ['goals', installMirroredGoals, 'goal forwarding'],
+    ['agentTeams', installMirroredTeamMode, 'Team-mode forwarding'],
+    ['jobController', installMirroredJobs, 'job forwarding'],
+    ['subagents', installMirroredSubagentControl, 'subagent control refusal'],
+    ['messageFeedback', installMirroredMessageFeedback, 'feedback refusal'],
+    ['sessionToolResults', installMirroredToolResultStream, 'live tool-result refusal'],
+    ['sessionController', installMirroredSessionFork, 'fork refusal'],
+  ] as const) {
+    ctx.inject([serviceName], child => {
+      child.effect(() => install(child, mirrors), `dsh-waypoint: mirrored Session ${what}`)
+    })
+  }
+  ctx.effect(() => {
+    reportUnclassifiedNamespaces(ctx)
+    return () => {}
+  }, 'dsh-waypoint: mirrored namespace classification')
 
   // Archiving a mirrored Session must reach its remote Session. The interposer
   // replaces the Host registry's own methods, because the sidebar's archive and

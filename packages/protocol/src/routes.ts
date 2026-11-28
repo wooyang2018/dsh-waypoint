@@ -56,6 +56,10 @@ export type AgentRoute =
   | { readonly kind: 'session-archive'; readonly sessionId: string }
   | { readonly kind: 'session-unarchive'; readonly sessionId: string }
   | { readonly kind: 'session-rename'; readonly sessionId: string }
+  | { readonly kind: 'session-goals'; readonly sessionId: string }
+  | { readonly kind: 'session-team'; readonly sessionId: string }
+  | { readonly kind: 'session-jobs'; readonly sessionId: string }
+  | { readonly kind: 'session-job-follow'; readonly sessionId: string; readonly jobId: string }
   | { readonly kind: 'workspace-sessions'; readonly workspaceId: string }
   | { readonly kind: 'web-url' }
   | { readonly kind: 'approval-events' }
@@ -138,6 +142,45 @@ export function sessionUnarchivePath(sessionId: string): string {
  */
 export function sessionRenamePath(sessionId: string): string {
   return `${sessionPath(sessionId)}/rename`
+}
+
+/**
+ * Path that performs one goal operation on the Session's owning host.
+ *
+ * The operation travels in the body, not the path: the owner's goal service is
+ * what validates it, and a path segment per operation would let a client and an
+ * agent disagree about the set without either failing loudly.
+ */
+export function sessionGoalsPath(sessionId: string): string {
+  return `${sessionPath(sessionId)}/goals`
+}
+
+/** Path that sets one Session tree's Team mode on its owning host. */
+export function sessionTeamPath(sessionId: string): string {
+  return `${sessionPath(sessionId)}/team`
+}
+
+/**
+ * Path of one Session's remote job roster stream.
+ *
+ * The roster is a stream rather than a snapshot because the remote panel is a
+ * stream: the owning host coalesces lifecycle commits into whole-set frames, and
+ * projecting that once on this side would need the same bookkeeping twice.
+ */
+export function sessionJobsPath(sessionId: string): string {
+  return `${sessionPath(sessionId)}/jobs`
+}
+
+/**
+ * Path of one remote job's output observation stream.
+ *
+ * `from` is an absolute byte offset in the job's output ring, resuming where a
+ * previous frame's `next` left off; omitting it starts at the oldest retained
+ * byte.
+ */
+export function sessionJobFollowPath(sessionId: string, jobId: string, from?: number): string {
+  const base = `${sessionJobsPath(sessionId)}/${encodeURIComponent(jobId)}`
+  return from === undefined ? base : `${base}?from=${encodeURIComponent(String(from))}`
 }
 
 /** Path of one session's live event stream. */
@@ -295,6 +338,18 @@ export function matchAgentRoute(pathname: string): AgentRoute | undefined {
       if (parts[1] === 'archive') return { kind: 'session-archive', sessionId }
       if (parts[1] === 'unarchive') return { kind: 'session-unarchive', sessionId }
       if (parts[1] === 'rename') return { kind: 'session-rename', sessionId }
+      if (parts[1] === 'goals') return { kind: 'session-goals', sessionId }
+      if (parts[1] === 'team') return { kind: 'session-team', sessionId }
+      if (parts[1] === 'jobs') return { kind: 'session-jobs', sessionId }
+    }
+    // `/sessions/:id/jobs/:jobId` — one job's observation stream. The job id is
+    // an opaque registry id (`bash-1a2b…`), so it is decoded like every other
+    // segment and never becomes a path.
+    if (parts.length === 3 && parts[1] === 'jobs') {
+      const sessionId = segment(parts[0] ?? '')
+      const jobId = segment(parts[2] ?? '')
+      if (sessionId === undefined || jobId === undefined) return undefined
+      return { kind: 'session-job-follow', sessionId, jobId }
     }
     return undefined
   }
