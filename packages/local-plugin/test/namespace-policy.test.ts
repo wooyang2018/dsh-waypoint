@@ -26,15 +26,24 @@ import { UI_TEXT_KEYS } from '../src/messages.ts'
  * Host's surface must fail here instead of silently defaulting to "local".
  */
 describe('mirrored namespace policy', () => {
-  it('classifies every Remote namespace the pinned DSH release exposes', () => {
-    const inventory = remoteNamespaceInventory(
-      HOST_REMOTE_NAMESPACES.flatMap(entry =>
-        entry.methods.map(method => ({ namespace: entry.namespace, method }))),
-    )
-    // Folding is part of the contract: the runtime check reads a flat descriptor
-    // list, and a namespace that appears once per method must not look like many.
+  it('classifies every Agent-addressed Remote namespace the pinned DSH release exposes', () => {
+    // The criterion is the design's own: a descriptor whose receiver is an Agent.
+    // That is the surface a mirrored Session reaches through its façade, so that is
+    // the surface a new release must not be able to grow silently.
+    const live = HOST_REMOTE_NAMESPACES.flatMap(entry =>
+      entry.methods.map(method => ({
+        namespace: entry.namespace,
+        method,
+        scope: { context: 'agent' },
+      })))
+    // A session-addressed endpoint is not part of this inventory and must not be
+    // pulled into it: it cannot reach a mirror through the façade.
+    live.push({ namespace: 'examples', method: 'bySessionId', scope: { context: 'session' } })
+
+    const inventory = remoteNamespaceInventory(live, { agentAddressed: true })
     assert.equal(inventory.length, HOST_REMOTE_NAMESPACES.length)
     assert.deepEqual(unclassifiedNamespaces(inventory), [])
+    assert.equal(inventory.some(entry => entry.namespace === 'examples'), false)
 
     for (const entry of HOST_REMOTE_NAMESPACES) {
       for (const method of entry.methods) {
@@ -47,19 +56,23 @@ describe('mirrored namespace policy', () => {
     }
   })
 
-  it('reports a namespace the table has never seen, so a new surface cannot default to local', () => {
+  it('reports an Agent-addressed namespace the table has never seen', () => {
     const grown = [
       ...HOST_REMOTE_NAMESPACES.flatMap(entry =>
-        entry.methods.map(method => ({ namespace: entry.namespace, method }))),
-      { namespace: 'brandNew', method: 'do' },
+        entry.methods.map(method => ({ namespace: entry.namespace, method, scope: { context: 'agent' } }))),
+      { namespace: 'brandNew', method: 'do', scope: { context: 'agent' } },
     ]
-    assert.deepEqual(unclassifiedNamespaces(remoteNamespaceInventory(grown)), ['brandNew'])
+    assert.deepEqual(
+      unclassifiedNamespaces(remoteNamespaceInventory(grown, { agentAddressed: true })),
+      ['brandNew'],
+    )
   })
 
   it('treats a missing Remote inventory as nothing to report', () => {
     // A composition without a Typert registry has no Remote surface at all, which
     // is not the same fact as "every namespace is unclassified".
     assert.deepEqual(remoteNamespaceInventory(undefined), [])
+    assert.deepEqual(remoteNamespaceInventory(undefined, { agentAddressed: true }), [])
     assert.deepEqual(unclassifiedNamespaces([]), [])
   })
 
@@ -154,20 +167,22 @@ describe('mirrored namespace policy', () => {
     }
   })
 
-  it('names an unclassified DSH namespace observed in the live registry', () => {
-    // The runtime half of the coverage check: a release that grows the Remote
-    // surface must announce the name instead of defaulting to "local".
+  it('names an unclassified Agent-addressed namespace observed in the live registry', () => {
+    // The runtime half of the coverage check: a release that grows the surface must
+    // announce the name instead of defaulting to "local".
     const ctx = new Context()
     const warnings: string[] = []
     ctx.logger.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')) }
     ctx.provide('typert' as never, {
       local: {
         list: () => [
-          { id: '@deepseek-ai/dsh-goal#goals/get', namespace: 'goals', method: 'get' },
-          { id: '@deepseek-ai/dsh-new#brandNew/do', namespace: 'brandNew', method: 'do' },
-          // A third-party plugin's own namespace is not DSH's to classify and must
-          // stay out of the report, or the one line that matters gets buried.
-          { id: 'some-plugin#own/thing', namespace: 'own', method: 'thing' },
+          { namespace: 'goals', method: 'get', scope: { context: 'agent' } },
+          { namespace: 'brandNew', method: 'do', scope: { context: 'agent' } },
+          // Session-addressed and Client-only namespaces are not the shape that
+          // reaches a mirror's façade, and reporting them would bury the one line
+          // that matters.
+          { namespace: 'own', method: 'thing' },
+          { namespace: 'session', method: 'prompt' },
         ],
       },
     } as never)

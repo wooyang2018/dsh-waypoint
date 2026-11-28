@@ -478,7 +478,8 @@ export function installMirroredSessionFork(ctx: Context, mirrors: RemoteMirrorSe
 }
 
 /**
- * Warn about any Remote namespace this Host exposes that the policy table misses.
+ * Warn about any Agent-addressed Remote namespace this Host exposes that the policy
+ * table misses.
  *
  * The table is data precisely so a new namespace is a decision; this is the runtime
  * half of that, and `namespace-policy.test.ts` is the other. It warns instead of
@@ -486,11 +487,11 @@ export function installMirroredSessionFork(ctx: Context, mirrors: RemoteMirrorSe
  * feature, and a plugin that refused to start over one would be worse than the
  * omission.
  *
- * Only DSH core's own namespaces are considered. A profile composes any number of
- * third-party plugins that publish Remote namespaces of their own, and warning
- * about each of them would be noise a reader learns to skip — which would bury the
- * one line that matters. The descriptor's `id` is `<package>#<endpoint>`, so the
- * filter needs nothing beyond what the registry already exposes.
+ * The filter is the design's own criterion — a descriptor whose receiver is an
+ * Agent — so a plugin that publishes an Agent-addressed surface is reported (that
+ * is the dangerous shape) while the many session-addressed and Client-only
+ * namespaces a profile composes are not. Warning about those would bury the one
+ * line that matters.
  * @param ctx - host context, read for its Typert registry.
  */
 export function reportUnclassifiedNamespaces(ctx: Context): void {
@@ -498,22 +499,20 @@ export function reportUnclassifiedNamespaces(ctx: Context): void {
     | {
       local?: {
         list?: () => readonly {
-          readonly id?: string
           readonly namespace: string
           readonly method: string
+          readonly scope?: { readonly context: string }
         }[]
       }
     }
     | undefined
   const descriptors = typert?.local?.list?.()
   if (descriptors === undefined) return
-  const core = descriptors.filter(descriptor =>
-    typeof descriptor.id === 'string' && descriptor.id.startsWith('@deepseek-ai/'))
-  const names = unclassifiedNamespaces(remoteNamespaceInventory(core))
+  const names = unclassifiedNamespaces(remoteNamespaceInventory(descriptors, { agentAddressed: true }))
   if (names.length === 0) return
   ctx.logger.warn(
-    'dsh-waypoint: these DSH Remote namespaces have no mirrored-Session policy, so a mirrored '
-      + 'Session keeps using the local implementation for them: %s',
+    'dsh-waypoint: these Agent-addressed Remote namespaces have no mirrored-Session policy, so a '
+      + 'mirrored Session keeps using the local implementation for them: %s',
     names.join(', '),
   )
 }

@@ -90,6 +90,54 @@ export const MIRRORED_NAMESPACE_POLICY = {
   skills: 'delegate',
   /** A directory picker for a new workspace is local until a workspace exists. */
   directoryPicker: 'delegate',
+  /**
+   * Card actions dispatch into the Agent that rendered the card.
+   *
+   * A mirrored Session's cards are replayed, and their actions belong to the
+   * process that produced them; the local façade implements no card handler, so a
+   * click fails loudly rather than writing anything. Forwarding them is not part
+   * of this design.
+   */
+  actionCards: 'delegate',
+  /**
+   * Preset selection is a known gap, and a small one.
+   *
+   * On a *draft* mirror it is how the Session's preset is chosen, and the value is
+   * consumed when the remote Session is created — so it must stay local. On a
+   * materialized mirror the remote's preset was fixed at creation, so a local
+   * selection changes this side only; `docs/remote-workspace-mechanism.md` records
+   * that rather than letting it read as forwarded state.
+   */
+  agentPresets: 'delegate',
+  /**
+   * Command catalog and execution are forwarded, by `remote/catalog.ts`.
+   *
+   * The adapter replaces these two methods directly, so the policy here only
+   * records that the namespace is accounted for.
+   */
+  commands: 'delegate',
+  /**
+   * An upload is staged on the Host that will admit the prompt.
+   *
+   * The mirror forwards a prompt's *bytes* and lets the remote mint its own receipt
+   * (`#promptContent`), so a local upload is the right local answer — a receipt
+   * cannot cross the tunnel.
+   */
+  fileUploads: 'delegate',
+  /**
+   * The mirror bridges questions on its own route, not through this namespace.
+   *
+   * A remote question reaches the local card through the host API and the answer
+   * travels back over the tunnel; a local `answer` call would resolve a wait this
+   * process does not hold.
+   */
+  userQuestions: 'delegate',
+  /** The plugin-inspector surface acts on this Host's own Agent. */
+  dynamicCordisRunner: 'delegate',
+  /** Reference candidates for one Agent: a read of this Host's composition. */
+  sessionReferenceResolver: 'delegate',
+  /** Recommendations for one Agent: a read, with no Session state behind it. */
+  pluginRecommendations: 'delegate',
 } as const satisfies Record<string, MirroredPolicy>
 
 /**
@@ -259,31 +307,48 @@ export const REPLAYED_PROJECTIONS = [
 ] as const
 
 /**
- * The Remote namespaces a DSH `0.2.2-rc.5` host composes.
+ * The Agent-addressed Remote namespaces a DSH `0.2.2-rc.5` host exposes.
  *
- * Derived by enumerating `ctx.typert.local.list()` on a live composition of that
- * release and collecting each descriptor's `namespace`; the recorded method lists
- * are what those descriptors exposed. Kept as data here for two reasons: the
- * table above is checked against it without booting DSH, and a release that adds a
- * namespace makes {@link unclassifiedNamespaces} report a name instead of letting
- * the new surface default to "local". Re-derive it the same way when moving the
- * pinned baseline (`docs/adapting-to-dsh-releases.md`).
+ * Derived from a live composition of that release: every Typert descriptor whose
+ * `scope.context` is `agent` — the ones whose first wire argument is an Agent id,
+ * which is the whole reason a mirrored Session reaches them at all — folded into
+ * one row per namespace. Kept as data here for two reasons: the table above is
+ * checked against it without booting DSH, and a release that adds a namespace makes
+ * {@link unclassifiedNamespaces} report a name instead of letting the new surface
+ * default to "local". Re-derive it the same way when moving the pinned baseline
+ * (`docs/adapting-to-dsh-releases.md`).
+ *
+ * The namespaces a mirrored Session also reaches through a *Session id*
+ * (`subagents`, `messageFeedback`, `toolResults`, `job`, `workspace`, `session`,
+ * `schedule`, `skills`, `workspaceFiles`, `directoryPicker`) are not in this list:
+ * they are addressed by Session, so the design's own table — not this
+ * enumeration — is what keeps them classified.
  */
 export const HOST_REMOTE_NAMESPACES = [
-  { namespace: 'goals', methods: ['clear', 'complete', 'create', 'edit', 'get', 'pause', 'resume'] },
-  { namespace: 'job', methods: ['follow', 'kill', 'list'] },
+  { namespace: 'actionCards', methods: ['act'] },
+  { namespace: 'agentPresets', methods: ['select'] },
   { namespace: 'agentTeams', methods: ['setEnabled'] },
-  { namespace: 'subagents', methods: ['interruptByUser', 'prompt'] },
-  { namespace: 'messageFeedback', methods: ['delete', 'list', 'put'] },
-  { namespace: 'toolResults', methods: ['watch'] },
-  { namespace: 'session', methods: ['cancel', 'fork', 'prompt', 'rename'] },
-  { namespace: 'workspace', methods: ['pinSession', 'unpinSession'] },
-  { namespace: 'schedule', methods: ['list'] },
-  { namespace: 'terminal', methods: ['attach', 'create', 'list'] },
-  { namespace: 'workspaceFiles', methods: ['list', 'read', 'stat'] },
+  { namespace: 'commands', methods: ['execute', 'list'] },
+  {
+    namespace: 'dynamicCordisRunner',
+    methods: [
+      'getClientCode',
+      'reportClientGuardFailure',
+      'reportRenderFailure',
+      'resolveInspectQuery',
+      'runHostHalf',
+      'settleUserRun',
+      'stopFromPanel',
+      'undefineFromPanel',
+    ],
+  },
   { namespace: 'fileReferences', methods: ['list'] },
-  { namespace: 'skills', methods: ['list'] },
-  { namespace: 'directoryPicker', methods: ['list'] },
+  { namespace: 'fileUploads', methods: ['upload'] },
+  { namespace: 'goals', methods: ['clear', 'complete', 'create', 'edit', 'get', 'pause', 'resume'] },
+  { namespace: 'pluginRecommendations', methods: ['describe'] },
+  { namespace: 'sessionReferenceResolver', methods: ['candidates'] },
+  { namespace: 'terminal', methods: ['attach', 'close', 'create', 'environment', 'rename', 'shells'] },
+  { namespace: 'userQuestions', methods: ['answer', 'attachWait'] },
 ] as const
 
 /** One namespace and the methods a host exposed for it. */
@@ -294,22 +359,32 @@ export interface RemoteNamespace {
   readonly methods: readonly string[]
 }
 
+/** One live Remote descriptor, reduced to the fields the classification reads. */
+export interface LiveRemoteDescriptor {
+  /** Wire namespace. */
+  readonly namespace: string
+  /** Wire method. */
+  readonly method: string
+  /** Receiver selector; `agent` marks an Agent-addressed endpoint. */
+  readonly scope?: { readonly context: string }
+}
+
 /**
- * Fold a flat list of live Remote descriptors into namespaces.
- *
- * The shape matches what `ctx.typert.local.list()` returns, reduced to the two
- * fields this module asks about, so the runtime check does not depend on the
- * registry package's types.
+ * Fold live Remote descriptors into namespaces.
  * @param descriptors - live descriptors, or `undefined` when the Host has no
  *   Typert registry (a composition without Remote at all).
+ * @param options - `agentAddressed` keeps only endpoints whose receiver is an
+ *   Agent, which is the surface a mirrored Session reaches through its façade.
  * @returns each namespace with its methods, in discovery order.
  */
 export function remoteNamespaceInventory(
-  descriptors: readonly { readonly namespace: string; readonly method: string }[] | undefined,
+  descriptors: readonly LiveRemoteDescriptor[] | undefined,
+  options: { readonly agentAddressed?: boolean } = {},
 ): RemoteNamespace[] {
   if (descriptors === undefined) return []
   const byNamespace = new Map<string, string[]>()
   for (const descriptor of descriptors) {
+    if (options.agentAddressed === true && descriptor.scope?.context !== 'agent') continue
     const methods = byNamespace.get(descriptor.namespace) ?? []
     methods.push(descriptor.method)
     byNamespace.set(descriptor.namespace, methods)
