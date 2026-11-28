@@ -165,26 +165,32 @@ interface PendingUser {
 }
 ```
 
-`signature` 由 `#promptContent` 实际转发出去的内容导出——即其非文本部分按序的
-`type:mediaType:name`，这个信息无需二次读取字节即可获得。示例：
+`signature` 由 `#promptContent` 实际转发出去的内容导出——**只取每一部分的种类，按序**，不取任何远端
+有权改写的字段。示例：
 
 | 提示词 | `text` | `signature` |
 |---|---|---|
 | `"hi"` | `hi` | ``（空） |
-| 一张 PNG | `` | `image:image/png:` |
-| 一张名为 `a.png` 的 PNG | `` | `image:image/png:a.png` |
-| `[a.pdf]`（被改写的 `@`） | `[a.pdf]` | `file::a.pdf` |
+| 一张 PNG | `` | `image` |
+| 一张名为 `a.png` 的 PNG | `` | `image` |
+| 图片 + 文件 | `` | `image\nfile` |
+| `[a.pdf]`（被改写的 `@`） | `[a.pdf]` | `file` |
 
-匹配变成：
+匹配变成「先精确、再退一步」：
 
 ```ts
-const index = runtime.pendingUsers.findIndex(pending =>
-  pending.text === text && pending.signature === signatureOfRemote(data))
+const exact = pending.findIndex(p => p.text === text && p.signature === signature)
+if (exact >= 0) return exact
+if (text === '') return -1                 // 纯附件没有退路，也不该乱认领
+return pending.findIndex(p => p.text === text)
 ```
 
-远端无需改动：签名是从**回显**的 `user/message` 内容算出的，用的是与转发侧同一个函数，
-所以二者按构造一致。若远端剥离或重命名了某个部分，签名随之不同，该条目便不匹配，
-自然落到今天的追加路径——这是安全的方向（多一个气泡胜过吞掉一条消息）。
+**为什么签名里不能有 `mediaType` 和名字。** 初稿写的是 `type:mediaType:name`，那在纯附件提示词上
+正好是错的方向：入站时会重新编码图片（alpha 通道决定 JPEG 还是 WebP），也会净化显示名，于是回显的
+引用与转发时的字段不同，签名必然对不上。有文本的提示词还能退回按文本配对，纯附件没有退路——落到
+追加路径，一张图两个气泡，正是 R3 要修的缺陷。种类加顺序足以区分形状（`image` 与 `file`、
+「图 + 文件」与「文件 + 图」），且在远端改动字节之后仍然稳定；两张只有图片不同的提示词由队列顺序
+区分（匹配的是最旧的一条），这正是 FIFO 的含义。
 
 **一个要记录下来的坑。** 现在的 `pending.text !== ''` 守卫不只是形状检查；
 它正是防止「空的待处理队列」去匹配一条文本同样为空的远端消息的东西。
@@ -237,8 +243,11 @@ function attachmentSignature(content: readonly unknown[]): string
 - 假设远端库保留其自身近期日志所引用的对象。被裁剪的对象降级为占位符而非错误（现有行为）。
 - 假设 `attachment.read` 返回的 base64 在 agent 响应上限之内。
 - 假设 `ImageAttachmentRef`/`FileAttachmentRef` 的 `attachmentId` 保持 `sha256:<64 hex>` 形状。
-- 假设 `tool/result.data.content` 是块数组。形状不同则退化为「找不到部分」，
-  这对该事件而言就是今天的现行为。
+- 假设三种承载事件各自把块放在 §6.1 那张表说的位置。**初稿在这里写错过**（把 `tool/result` 写成
+  `data.content`），而实现在本仓库锁定的 DSH 版本里是 `user/message → data.content`、
+  `assistant/message` 与 `tool/result → data.message.content`；按初稿去改，工具结果里的图片会**再次**
+  静默不同步，所以 §6.1 的表已按实测改正，代码按类型取值。形状不符时退化为「找不到部分」，
+  对该事件就是今天的现行为，并有专门的用例钉着两种拼写。
 
 ## 10. 验证
 
@@ -274,11 +283,12 @@ function attachmentSignature(content: readonly unknown[]): string
   针对的是 12 MiB 的**请求体**，不适用于响应。病态对象是远端库的问题。
 - **`assistant/message` 也被纳入承载集合**，尽管今天没有任何东西产出助手图片引用。
   代价是每个事件一次 `Array.isArray` 检查；替代方案是第三次静默遗漏。
-- **配对键落成两层，而 §6.2 只写了一层。** 先按「文本 + 签名」精确匹配；未命中且文本非空时，
-  退回只按文本匹配。原因：远端在接收时会重新归一化转发的图片，落盘引用里的 `mediaType`
-  （按 alpha 通道选 JPEG/WebP）或显示名可能与转发时不同，严格签名会把每一个「文本 + 图片」提示词
-  都变成重复气泡，也就是违反 R4。纯附件提示词没有这层退回，仍然必须匹配签名，所以 §6.2 担心的
-  「空队列认领第一条空消息」依旧被关住，并有专门的用例钉着。
+- **配对键落成两层，且签名只由种类与顺序构成（review 之后改的）。** 初稿把 `mediaType` 和显示名
+  放进签名，理由是「远端回显什么就比什么」。方向反了：远端入站时会重新编码图片、净化显示名，于是
+  回显的字段与转发的字段不同——有文本的提示词还能退回按文本配对（R4 保住），**纯附件提示词没有退路**，
+  落到追加路径，一张图两个气泡，正是 R3 要修的缺陷原样回来。现在签名是 `image` / `file` 按序连起来，
+  远端无论怎么改字节都对得上；「先精确签名、再退回文本」这两层仍然保留，只为覆盖「远端剥掉了某个部分」
+  这种签名无法预料的差异（§6.2）。「空队列认领第一条空消息」依旧被关住，并有专门用例钉着。
 - **只有图片做「已在本地」短路。** 文件对象按内容寻址，但它的可解析引用还多一层按名字的硬链接，
   名字是存储侧净化后的结果，只有存储自己知道——「对象在」不能证明「引用能解析」。所以重放一个
   文件引用仍要一次往返，`saveFile` 本身幂等，不会产生重复状态。R2 列出的每个场景都基于图片，均通过。

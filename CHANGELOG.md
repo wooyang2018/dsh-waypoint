@@ -16,8 +16,14 @@
   `subagents.prompt`/`interruptByUser`, `messageFeedback` writes and `session.fork` are refused with a
   `mirror/unsupported` error carrying a localizable reason, live tool results end their stream instead
   of waiting on a process that is not here, and pinning stays local on purpose. Reads that were already
-  correct — `goals.get`, todos, permission presets, plan mode, agent preset, model — are untouched, and
-  an agent that predates a route keeps the previous behaviour instead of half-forwarding.
+  correct — `goals.get`, todos, permission presets, plan mode, agent preset, model — are untouched. An
+  agent that predates a route is refused exactly like a disconnected host — a write reports that the
+  operation happened nowhere, a read reports the failure instead of an empty roster — because falling
+  back to the local implementation is the silent divergence this classification removes. The table is
+  per *operation* (`goals/create`, `job/kill`, `session/fork`, …), not per namespace: a namespace-level
+  `forward` would adopt every operation a later release adds, which is how a future `job/restart` would
+  start acting on another machine's processes. Anything unclassified is reported at startup rather than
+  guessed.
 
 - **Renaming a mirrored Session now renames its remote Session.** The rename only ever wrote
   `session/title` into the local projection, so the remote Web UI kept the old name and the new one
@@ -32,7 +38,10 @@
   is written for a local Agent's queue, so a mirrored Session depended on the stock method resolving
   the façade by accident — and on the flush continuing to re-read the array it edited. The mirror now
   answers the call itself with the native refusals and a single delivery path, and the `turn/end`
-  flush reads the queue as it sends, so the remote receives the message the user left queued.
+  flush reads the queue as it sends, so the remote receives the message the user left queued. A message
+  queued on a draft moves onto the Agent the flush reads when the first prompt materializes the Session;
+  a draft and its materialized counterpart are different objects with separate inboxes over the same
+  Session.
 
 - **A mirrored Session now shows the images its remote tool results carry, and an attachment-only
   prompt no longer becomes two bubbles.** Reverse attachment synchronization was gated on
@@ -44,9 +53,12 @@
   in; the live stream fetches before projecting for the first time; and an image already on disk
   short-circuits before any request, so replaying a log transfers nothing. Prompt pairing compared
   only text, so a prompt carrying just an image or just a file forwarded `text: ''`, never matched its
-  echo, and one attachment became two bubbles. The key is now text plus an `attachmentSignature`
-  (`type:mediaType:name` of each non-text part, in order) computed by the same function on both sides,
-  with text alone still deciding when it is present.
+  echo, and one attachment became two bubbles. The key is now text plus an `attachmentSignature` —
+  the *kinds* of the non-text parts, in order — computed by the same function on both sides, with text
+  alone still deciding when it is present. Kind and order rather than `mediaType`/name is deliberate:
+  admission re-encodes an image and sanitizes a display name, so an identity carrying them stops
+  matching exactly on the attachment-only prompts that have no text to fall back on — which would put
+  the duplicate bubble back.
 
 - **A mirrored Session's `@` menu now lists the remote project, and a remote path survives the
   prompt.** The browser's `@` source is answered by this Host's `fileReferences` provider,
@@ -59,11 +71,15 @@
 
   A failed read logs the host and falls back to the local list instead of answering empty, because an
   empty menu asserts the remote project has no files — a claim about workspace content that a failed
-  read does not support. A path chosen from the remote menu is POSIX-spelled, so the local `@` rewrite
-  now applies only to paths this machine's filesystem could hold (`C:\…` and `\\…` anywhere, `/…` only
-  off Windows); the accepted cost is that a Windows client can no longer `@` a local POSIX path, which
-  a staged attachment still covers. A blank mirror — a remote Session that does not exist yet — keeps
-  the local list rather than materializing one just to read a menu.
+  read does not support. A path chosen from the remote menu is POSIX-spelled, and on a POSIX client
+  that spelling is *also* a local absolute path, so the local `@` rewrite now decides by ownership
+  first: a reference inside the Session's own remote workspace belongs to the remote and travels as
+  text, and only what the workspace does not claim is read from this disk (`C:\…` and `\\…` anywhere,
+  `/…` off Windows). A spelling-only rule worked on Windows by accident and refused the remote
+  candidate as "not readable" everywhere else — the menu finally listed the remote project and the
+  message could not be sent. A blank mirror — a remote Session that does not exist yet — keeps the
+  local list rather than materializing one just to read a menu; a reference query needs a real Agent,
+  which a draft has not got.
 
 - **A mirrored Session's model seat no longer gets stuck on a model the remote cannot run.** The
   remote catalog advertised `agentDefaultModel` verbatim, and that value is composed independently of
