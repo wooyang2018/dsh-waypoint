@@ -135,6 +135,18 @@ export const REQUIRED_WORKING_DIRECTORY_METHODS = ['ensure', 'get', 'set'] as co
  */
 export const REQUIRED_FILE_REFERENCE_METHODS = ['list'] as const
 
+/**
+ * The `sessionController` method the mirrored queue seam replaces.
+ *
+ * `updateQueue` is the single Remote the browser's queue dock calls: editing,
+ * deleting and promoting-to-steer all arrive through it, addressed by Session and
+ * item. A Host that renames it must report "queue editing is inactive" rather
+ * than answer from the stock method, which is written for a local Agent's queue
+ * and reaches a mirrored Session's items only because the façade happens to be
+ * registered as an Agent — ownership this plugin should not inherit by accident.
+ */
+export const REQUIRED_SESSION_CONTROLLER_METHODS = ['updateQueue'] as const
+
 /** One expected method the service did not offer. */
 export interface MissingPatchMethod {
   readonly method: string

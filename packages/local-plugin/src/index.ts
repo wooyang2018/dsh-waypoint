@@ -20,11 +20,12 @@ import { installRemoteSandboxPolicy } from './remote/sandbox-policy.ts'
 import { installRemoteFileSystem } from './remote/fs.ts'
 import { installRemoteSubprocess } from './remote/subprocess.ts'
 import { installRemoteWorkspaceChanges, prefetchChangesSummary, RemoteChangesCache } from './remote/workspace-changes.ts'
-import { checkPatchContract, describePatchContract, REQUIRED_COMMAND_METHODS, REQUIRED_FILE_REFERENCE_METHODS, REQUIRED_SKILL_CATALOG_METHODS, REQUIRED_WORKING_DIRECTORY_METHODS } from './remote/patch-contract.ts'
+import { checkPatchContract, describePatchContract, REQUIRED_COMMAND_METHODS, REQUIRED_FILE_REFERENCE_METHODS, REQUIRED_SESSION_CONTROLLER_METHODS, REQUIRED_SKILL_CATALOG_METHODS, REQUIRED_WORKING_DIRECTORY_METHODS } from './remote/patch-contract.ts'
 import { installRemoteTerminalController } from './remote/terminal-controller.ts'
 import { installRemoteCatalog } from './remote/catalog.ts'
 import { installRemoteWorkingDirectory } from './remote/working-directory.ts'
 import { installRemoteFileReferences } from './remote/file-references.ts'
+import { installRemoteSessionQueue } from './remote/session-queue.ts'
 import { RemoteTerminals } from './remote/terminal.ts'
 import { RemoteHostsService } from './service.ts'
 import { installRemoteToolGuards, registerRemoteTools } from './tools.ts'
@@ -183,6 +184,26 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
       }
       return installRemoteFileReferences(child, mirrors, service)
     }, 'dsh-waypoint: remote file references')
+  })
+  // A follow-up queued while a mirrored turn runs waits in the façade's own inbox
+  // until `turn/end` flushes it. Editing or deleting it in the composer therefore
+  // has to reach that inbox, and the flush has to read the inbox as it sends: the
+  // pair is what makes the remote receive the message the user left queued. The
+  // mirror answers the call itself, so both halves belong to this plugin.
+  ctx.inject(['sessionController'], child => {
+    child.effect(() => {
+      const controller = child.get('sessionController') as unknown as object | undefined
+      const report = controller === undefined
+        ? { active: false, missing: [{ method: 'sessionController', reason: 'absent' as const }] }
+        : checkPatchContract(controller, REQUIRED_SESSION_CONTROLLER_METHODS)
+      if (!report.active) {
+        ctx.logger.warn(
+          'dsh-waypoint: mirrored queue editing is %s; a queued message is handled by the Host command instead of by the mirror',
+          describePatchContract(report),
+        )
+      }
+      return installRemoteSessionQueue(child, mirrors)
+    }, 'dsh-waypoint: remote queue mutations')
   })
   ctx.inject(['terminalController'], child => {
     const controller = child.get('terminalController')
