@@ -4,9 +4,14 @@
  * A path chosen from the remote `@` menu is spelled POSIX and absolute, and the
  * remote resolves it — that is the whole point of forwarding the menu. A path
  * picked on this machine is an absolute path this disk can hold, and its bytes
- * must cross instead, because the remote cannot open it. The two spellings are
- * indistinguishable in the composer, so the rule has to be the machine's own
- * filesystem: only a path this machine could hold is rewritten.
+ * must cross instead, because the remote cannot open it.
+ *
+ * The two spellings are indistinguishable in the composer, and on a POSIX client
+ * they are literally the same string. The discriminator is therefore ownership:
+ * a path inside the Session's own mirrored workspace came from the remote menu
+ * and travels as text. Only a path the mirror does not own is tested against
+ * *this* machine's filesystem, which is what a file picked from the fallback
+ * local list needs.
  *
  * The failure this pins is quiet in both directions. Rewriting a remote path
  * either fails the prompt ("local path is not readable") or, worse, uploads an
@@ -107,6 +112,58 @@ describe('a POSIX reference is shared by both `@` spellings', () => {
           'a POSIX client still treats it as a local path',
         )
       }
+    } finally {
+      await test.service.dispose(); await test.ctx.fiber.dispose()
+    }
+  })
+})
+
+describe('a path inside the Session workspace belongs to the remote menu', () => {
+  // The fixture mirrors `/srv/project` as the Session's workspace, so a mention
+  // under it is exactly what the remote `@` menu offers. On a POSIX client the
+  // same string is also a plausible local path, which is why the platform test
+  // alone made this case unforwardable there — the rule has to be ownership.
+  const IN_WORKSPACE = '@/srv/project/README.md'
+
+  it('is forwarded as text on every client, Windows or POSIX', async () => {
+    const test = await mounted()
+    try {
+      test.agent.send(userMessage(`${IN_WORKSPACE} summarise it`))
+      await settle()
+      assert.equal(test.prompts.length, 1, 'the prompt must reach the remote')
+      assert.equal(test.prompts[0]?.text, `${IN_WORKSPACE} summarise it`, 'the remote path survives verbatim')
+      assert.deepEqual(kinds(test.prompts[0]?.content), ['text'], 'nothing is read from this disk')
+    } finally {
+      await test.service.dispose(); await test.ctx.fiber.dispose()
+    }
+  })
+
+  it('survives quoting, which the composer uses for a path with spaces', async () => {
+    const test = await mounted()
+    const quoted = '@"/srv/project/my notes/a b.md" open it'
+    try {
+      test.agent.send(userMessage(quoted))
+      await settle()
+      assert.equal(test.prompts[0]?.text, quoted)
+      assert.deepEqual(kinds(test.prompts[0]?.content), ['text'])
+    } finally {
+      await test.service.dispose(); await test.ctx.fiber.dispose()
+    }
+  })
+
+  it('is not refused when the agent cannot carry attachments', async () => {
+    // The capability gate exists to refuse bytes that cannot cross. A menu
+    // mention carries no bytes, so it must not trip that refusal — that would
+    // remove the menu's output on an older agent for no reason.
+    const test = await mounted()
+    try {
+      // Everything a prompt needs except the attachment capability: the bytes
+      // cannot cross, which is what that gate refuses.
+      test.setCapabilities(['health', 'session.snapshot', 'session.prompt', 'session.follow'])
+      test.agent.send(userMessage(`${IN_WORKSPACE} summarise it`))
+      await settle()
+      assert.equal(test.prompts.length, 1, 'the mention is not refused')
+      assert.equal(test.prompts[0]?.text, `${IN_WORKSPACE} summarise it`)
     } finally {
       await test.service.dispose(); await test.ctx.fiber.dispose()
     }

@@ -24,7 +24,10 @@
   vanished as soon as the mirror was rebuilt — re-adding the workspace, pruning, or moving machines
   restored the remote's title. The rename is forwarded first and the projection follows the replayed
   event; a refusal leaves the old title and reports `session/title-invalid`. A draft mirror keeps its
-  local rename and hands that title over when its first prompt creates the remote Session.
+  local rename and hands that title over when its first prompt creates the remote Session — and when
+  that hand-off fails it now says so, because the rename is what *pins* the title on the remote: the
+  prompt still goes out (a refused title must not cost the message), and a toast explains that the
+  remote will replace the name with its own automatic title.
 
 - **Queue edits and deletes on a mirrored Session are answered by the mirror.** A follow-up typed while
   a turn runs waits in the mirror's own inbox until `turn/end`, and the composer's edit, delete and
@@ -32,7 +35,11 @@
   is written for a local Agent's queue, so a mirrored Session depended on the stock method resolving
   the façade by accident — and on the flush continuing to re-read the array it edited. The mirror now
   answers the call itself with the native refusals and a single delivery path, and the `turn/end`
-  flush reads the queue as it sends, so the remote receives the message the user left queued.
+  flush reads the queue as it sends, so the remote receives the message the user left queued. Deleting
+  an item also releases the staged uploads it bound (`fileUploads.retirePrompt`, keyed by the message's
+  `rpcId`), as the native command does: a removed message never becomes a `user/message`, so nothing
+  else would ever retire them, and every image or file it carried stayed staged for good. A promotion
+  to steer keeps them, because that message is about to be sent.
 
 - **A mirrored Session now shows the images its remote tool results carry, and an attachment-only
   prompt no longer becomes two bubbles.** Reverse attachment synchronization was gated on
@@ -46,7 +53,10 @@
   only text, so a prompt carrying just an image or just a file forwarded `text: ''`, never matched its
   echo, and one attachment became two bubbles. The key is now text plus an `attachmentSignature`
   (`type:mediaType:name` of each non-text part, in order) computed by the same function on both sides,
-  with text alone still deciding when it is present.
+  with text alone still deciding when it is present — and, for a prompt that carries no text, the
+  ordered part *kinds* as a third tier, because the remote re-encodes an image on admission (alpha
+  routing picks JPEG or WebP) and an exact signature alone would have duplicated every image whose
+  media type it changed.
 
 - **A mirrored Session's `@` menu now lists the remote project, and a remote path survives the
   prompt.** The browser's `@` source is answered by this Host's `fileReferences` provider,
@@ -59,11 +69,13 @@
 
   A failed read logs the host and falls back to the local list instead of answering empty, because an
   empty menu asserts the remote project has no files — a claim about workspace content that a failed
-  read does not support. A path chosen from the remote menu is POSIX-spelled, so the local `@` rewrite
-  now applies only to paths this machine's filesystem could hold (`C:\…` and `\\…` anywhere, `/…` only
-  off Windows); the accepted cost is that a Windows client can no longer `@` a local POSIX path, which
-  a staged attachment still covers. A blank mirror — a remote Session that does not exist yet — keeps
-  the local list rather than materializing one just to read a menu.
+  read does not support. A path chosen from the remote menu is POSIX-spelled, and on a POSIX client it
+  is the *same string* a local absolute path would be, so shape cannot decide which machine owns it:
+  a path inside the Session's own mirrored workspace is left as text for the remote to resolve, and
+  only a path the mirror does not own is tested against this machine's filesystem (`C:\…` and `\\…`
+  anywhere, `/…` only off Windows). The accepted cost is that a Windows client can no longer `@` a
+  local POSIX path, which a staged attachment still covers. A blank mirror — a remote Session that
+  does not exist yet — keeps the local list rather than materializing one just to read a menu.
 
 - **A mirrored Session's model seat no longer gets stuck on a model the remote cannot run.** The
   remote catalog advertised `agentDefaultModel` verbatim, and that value is composed independently of

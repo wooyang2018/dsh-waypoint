@@ -256,9 +256,12 @@ sessionController.updateQueue = (request) => {
   而「不新增运行时依赖」的约束把它排除在外；实现设置 `code`、`details` 与 `isDSHRemoteError: true`
   （`remoteErrorOf` 记录的结构契约），让状态码能穿过网关。若某个版本的网关只认真正的实例，
   这些拒绝会退回 `gateway/internal`，与今天 `remote-path.ts` 处的行为一致，没有回归。
-- **删除排队项不会顺带收回已暂存的上传。** 原生命令会调 `fileUploads.retirePrompt`；本 spec 的
-  §6.2 只列了 `inbox.remove(id)`，而 §2 禁止发明行为，所以暂存附件留到正常清理时才消失。
-  这是一处刻意的省略，而不是遗漏。
+- **删除排队项必须顺带收回已暂存的上传。** 原生命令在 `remove` 之后调
+  `fileUploads.retirePrompt(agent, source.rpcId)`；初稿的 §6.2 只列了 `inbox.remove(id)`，
+  实现照此落地后 review 指出这会让暂存附件永久留在本地上传表里——一条被删掉的消息永远不会变成
+  `user/message`，观察者也就不会退休据。现在镜像按原生顺序照做：拿掉队列项，然后按消息
+  `source.rpcId` 释放收据；`steer` 有意不释放，因为那条消息马上就要发出去。缺少 `fileUploads`
+  服务的组合跳过这一步，且不能因此让一次成功的删除失败。
 - **`runtimeForLocalSession` 也返回已停止的运行时。** 停止结束的是远端流，不是本地队列，而一次后续
   提示词会让运行时复活，所以那个 inbox 仍然是该队列项的归属。没有新增 `stopped` 过滤。
 

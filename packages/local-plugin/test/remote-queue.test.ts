@@ -213,6 +213,90 @@ describe('a queued message edited before the turn ends', () => {
   })
 })
 
+describe('a queued message removed before the turn ends', () => {
+  it('retires the staged uploads the removed item bound', async () => {
+    // The native command releases the receipts a removed occurrence bound, and
+    // this is the only moment it can: a deleted message never becomes
+    // `user/message`, so the observer that would otherwise retire them never
+    // runs. Without it every image or file the deleted prompt carried stays
+    // staged in the local upload table forever.
+    const view = await mountedRunning()
+    const retired: Array<{ sessionId: string; requestId: string }> = []
+    view.test.ctx.provide('fileUploads', {
+      retirePrompt(agent: { session?: { id?: string } }, requestId: string) {
+        retired.push({ sessionId: String(agent.session?.id), requestId })
+      },
+    } as never)
+    try {
+      view.agent.send({
+        id: 'item-staged',
+        role: 'user',
+        source: { kind: 'user', rpcId: 'rpc-1' },
+        content: [{ type: 'image', attachment: { attachmentId: 'sha256:abc', mediaType: 'image/png', bytes: 3 } }],
+      })
+
+      await view.controller.updateQueue({
+        sessionId: view.sessionId,
+        itemId: 'item-staged',
+        action: { kind: 'remove' },
+      })
+
+      assert.deepEqual(retired, [{ sessionId: view.sessionId, requestId: 'rpc-1' }], 'its receipts are released')
+      assert.equal(view.agent.inbox.nextTurn.length, 0, 'the queue is empty')
+    } finally {
+      await view.dispose()
+    }
+  })
+
+  it('keeps them for a steer, whose message is about to be sent', async () => {
+    const view = await mountedRunning()
+    const retired: string[] = []
+    view.test.ctx.provide('fileUploads', {
+      retirePrompt(_agent: unknown, requestId: string) { retired.push(requestId) },
+    } as never)
+    try {
+      view.agent.send({
+        id: 'item-steer-staged',
+        role: 'user',
+        source: { kind: 'user', rpcId: 'rpc-2' },
+        content: [{ type: 'image', attachment: { attachmentId: 'sha256:def', mediaType: 'image/png', bytes: 3 } }],
+      })
+
+      await view.controller.updateQueue({
+        sessionId: view.sessionId,
+        itemId: 'item-steer-staged',
+        action: { kind: 'steer' },
+      })
+
+      assert.deepEqual(retired, [], 'a steered message still needs its staged bytes')
+    } finally {
+      await view.dispose()
+    }
+  })
+
+  it('removes the item even when no upload service is mounted', async () => {
+    // A composition without `fileUploads` cannot have staged anything, and a
+    // missing service must not turn a successful removal into a failure.
+    const view = await mountedRunning()
+    try {
+      view.agent.send({
+        id: 'item-no-uploads',
+        role: 'user',
+        source: { kind: 'user', rpcId: 'rpc-3' },
+        content: [{ type: 'text', text: 'delete me' }],
+      })
+      await view.controller.updateQueue({
+        sessionId: view.sessionId,
+        itemId: 'item-no-uploads',
+        action: { kind: 'remove' },
+      })
+      assert.equal(view.agent.inbox.nextTurn.length, 0)
+    } finally {
+      await view.dispose()
+    }
+  })
+})
+
 describe('a queued message promoted to steer', () => {
   it('enters the running turn as a steer and leaves nothing queued', async () => {
     const view = await mountedRunning()

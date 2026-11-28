@@ -226,9 +226,24 @@ interface PendingUser {
    * message whatever it carried, which is worse than the duplicate.
    *
    * Derived from {@link attachmentSignature}, which both sides compute from the
-   * same parts, so the two agree by construction.
+   * same parts, so the two agree by construction — until the remote re-encodes
+   * the image on admission, which is exactly what {@link PendingUser.shape} is
+   * for.
    */
   signature: string
+  /**
+   * The ordered *kinds* of attachment parts, with no media type and no name.
+   *
+   * The exact signature above names the media type and display name, and the
+   * remote is entitled to change both: admission normalizes an image (alpha
+   * routing picks JPEG or WebP) and may sanitize a name. For a prompt that also
+   * carries text that drift is harmless, because text alone identifies it — but
+   * an attachment-only prompt has no text to fall back on, so a strict signature
+   * would duplicate every image the remote re-encoded. This tier survives that:
+   * a re-encode changes the media type, not the fact that the prompt carried one
+   * image.
+   */
+  shape: string
   localSeq: number
 }
 
@@ -2052,7 +2067,49 @@ export class RemoteMirrorService {
       return { accepted: true }
     }
     inbox.remove(request.itemId)
+    // The native command retires the receipts this occurrence bound, and only
+    // here: a removed message never becomes `user/message`, so the observer that
+    // would otherwise retire them never runs, and every image or file the
+    // deleted prompt carried stays staged forever. `steer` deliberately keeps
+    // its receipts — that message is about to be sent.
+    this.#retireStagedUploads(runtime, located.message)
     return { accepted: true }
+  }
+
+  /**
+   * Retire the staged uploads one removed queue occurrence bound.
+   *
+   * The receipts are keyed by the prompt identity a local message carries in
+   * `source.rpcId`, which is what `fileUploads.bindPrompt` bound when the
+   * composer submitted. Nothing else references them once the queue item is
+   * gone, so this is the only moment they can be released.
+   *
+   * Best effort by design: a missing `fileUploads` service (a composition that
+   * mounts none) or a throwing retire must not turn a successful queue removal
+   * into a failed one.
+   *
+   * @param runtime - mirror owning the queue item.
+   * @param message - the message that was removed.
+   */
+  #retireStagedUploads(runtime: MirrorRuntime, message: unknown): void {
+    if (typeof message !== 'object' || message === null) return
+    const source = (message as { source?: unknown }).source
+    if (typeof source !== 'object' || source === null) return
+    const { kind, rpcId } = source as { kind?: unknown; rpcId?: unknown }
+    if (kind !== 'user' || typeof rpcId !== 'string' || rpcId === '') return
+    const uploads = this.#ctx.get('fileUploads') as
+      | { retirePrompt(agent: unknown, requestId: string): void }
+      | undefined
+    if (uploads === undefined) return
+    try {
+      uploads.retirePrompt(runtime.agent, rpcId)
+    } catch (error) {
+      this.#ctx.logger.warn(
+        'dsh-waypoint: could not retire the staged uploads of a removed queue item (%s): %s',
+        rpcId,
+        String(error),
+      )
+    }
   }
 
   /** Route one prompt from the local Agent façade to the remote session. */
@@ -2068,7 +2125,7 @@ export class RemoteMirrorService {
   async #sendPrompt(runtime: MirrorRuntime, message: unknown, mode: PromptDeliveryMode): Promise<void> {
     if (this.#detached(runtime)) throw new Error('remote mirror is no longer active')
     if (promptParts(message).length === 0) throw new Error('prompt has no content')
-    const pending: PendingUser = { message, text: promptText(message), signature: '', localSeq: -1 }
+    const pending: PendingUser = { message, text: promptText(message), signature: '', shape: '', localSeq: -1 }
     runtime.pendingUsers.push(pending)
     if (!runtime.running) {
       runtime.awaitingTurn = runtime.latestTurn + 1
@@ -2101,6 +2158,7 @@ export class RemoteMirrorService {
       // attachment-only prompt is still identifiable when it comes back.
       pending.text = text
       pending.signature = attachmentSignature(content)
+      pending.shape = attachmentShape(content)
       let candidate = selection
       // Skip a selection the remote catalog does not offer, so the common case
       // costs no failed round trip at all. The rejection fallback below stays as
@@ -2340,12 +2398,15 @@ export class RemoteMirrorService {
    * remote `@` menu is the *remote* absolute path, which the remote provider
    * spells POSIX, and it must travel as text for the remote to resolve. A path
    * typed or picked locally is an absolute path this machine can hold, and it
-   * must become bytes because the remote cannot open it. On a Windows client the
-   * two cannot be told apart by shape, so the rule is the machine's own
-   * capability: only a path in a spelling this filesystem could hold is
-   * rewritten ({@link isLocalAbsolutePath}). A Windows client therefore leaves
-   * every `/…` reference alone — the accepted cost of keeping remote paths
-   * intact, with staged attachments covering the local case.
+   * must become bytes because the remote cannot open it.
+   *
+   * On a Windows client the two cannot be told apart by shape, and on a POSIX
+   * client they are literally the same string — `/data/home/u/proj/README.md`.
+   * The discriminator is therefore ownership, not spelling: a path inside the
+   * Session's own mirrored workspace came from the remote menu and is left as
+   * text ({@link #isRemoteMenuPath}). Everything outside it keeps the local
+   * treatment, still gated by {@link isLocalAbsolutePath} so a Windows client
+   * never mistakes a POSIX path for one of its own.
    *
    * @param text - one text content part.
    * @param runtime - mirror forwarding the prompt.
@@ -2362,7 +2423,10 @@ export class RemoteMirrorService {
     if (!this.#hosts.supportsAgent(runtime.record.hostId, 'session.file-attachment')) {
       // Without the capability the bytes cannot cross, so a reference would be
       // sent as text the remote cannot read. Say so instead, naming the path.
-      const reference = localPathReferences(text)[0]
+      // A mention the remote menu produced is not this machine's file at all,
+      // so it must not reach this refusal either.
+      const reference = localPathReferences(text)
+        .find(item => !this.#isRemoteMenuPath(item.path, runtime))
       if (reference === undefined) return { text, files }
       throw new LocalError('agent/unavailable', 'the remote agent cannot forward file attachments', {
         retryable: false,
@@ -2371,6 +2435,10 @@ export class RemoteMirrorService {
     }
     let rewritten = text
     for (const reference of localPathReferences(text)) {
+      // A path the remote `@` menu offered is already spelled for the machine
+      // that owns it. Forwarding it as text is the whole point: the remote
+      // resolves it, and this side never has to be able to open it.
+      if (this.#isRemoteMenuPath(reference.path, runtime)) continue
       const resolved = await this.#readLocalFile(reference.path)
       if (resolved === undefined) {
         // The text mentioned an `@absolute-path` that is not a readable local
@@ -2402,6 +2470,35 @@ export class RemoteMirrorService {
       rewritten = rewritten.split(reference.token).join(`[${resolved.name}]`)
     }
     return { text: rewritten.trim(), files }
+  }
+
+  /**
+   * Whether an `@` path names a file on the Session's own host.
+   *
+   * The composer prints one `@` grammar for two machines, and on a POSIX client
+   * the two spellings are *identical*: `/data/home/u/proj/README.md` is a
+   * plausible local path and a real remote one. Shape alone therefore cannot
+   * decide it — which is why the earlier rule (rewrite everything this
+   * filesystem could hold) made a remote mention unforwardable on Linux and
+   * macOS, the very clients the feature exists for.
+   *
+   * Ownership decides instead: a path inside the Session's own mirrored
+   * workspace is one the remote `@` menu offered, because that menu is the only
+   * thing that produces such a path. It travels as text and the remote resolves
+   * it. Anything else keeps the local treatment, which is what a file picked
+   * from the fallback local list needs.
+   *
+   * The residual ambiguity — a local file that happens to sit at the same
+   * absolute path as the remote workspace — resolves toward the remote, because
+   * the Session's own workspace is the stronger claim and the alternative is
+   * uploading this machine's bytes under a remote name.
+   *
+   * @param path - the reference's absolute path, quotes already removed.
+   * @param runtime - mirror forwarding the prompt.
+   * @returns whether the path belongs to the Session's remote workspace.
+   */
+  #isRemoteMenuPath(path: string, runtime: MirrorRuntime): boolean {
+    return this.remoteContextForRemotePath(path, runtime.record.hostId) !== undefined
   }
 
   /**
@@ -2782,11 +2879,24 @@ export class RemoteMirrorService {
     try {
       await this.#hosts.renameSession(hostId, remoteSessionId, title)
     } catch (error) {
+      // The rename is how a draft's title gets *pinned*: the remote records it
+      // with a `user` source, which is what stops its automatic titler from
+      // naming the Session after the first message. Losing that is not
+      // cosmetic — the sidebar title the user typed will be replaced by the
+      // remote's own, on the remote's schedule — and the failure used to exist
+      // only in a log nobody reads.
       this.#ctx.logger.warn(
         'dsh-waypoint: could not apply the draft title to remote Session %s: %s',
         remoteSessionId,
         String(error),
       )
+      this.#queueNotice({
+        kind: 'mirrorRenameFailed',
+        localSessionId: String(session.id),
+        ui: error instanceof LocalError && error.ui !== undefined
+          ? error.ui
+          : { key: 'error.mirrorDraftTitleFailed' },
+      })
     }
   }
 
@@ -5647,7 +5757,8 @@ function appendRemoteEvent(
     if (source?.kind === 'user') {
       const text = promptTextFromRemote(event.data)
       const signature = promptSignatureFromRemote(event.data)
-      const index = pendingUserIndex(runtime.pendingUsers, text, signature)
+      const shape = promptShapeFromRemote(event.data)
+      const index = pendingUserIndex(runtime.pendingUsers, text, signature, shape)
       if (index >= 0) {
         const [pending] = runtime.pendingUsers.splice(index, 1)
         if (pending !== undefined && pending.localSeq >= 0) return pending.localSeq
@@ -5846,6 +5957,33 @@ function promptText(message: unknown): string {
 }
 
 /**
+ * Ordered kinds of one prompt's non-text parts, without media type or name.
+ *
+ * The tier below {@link attachmentSignature}, and the reason it exists: the
+ * remote re-normalizes an image on admission, so the media type it echoes can
+ * differ from the one that was forwarded (alpha routing picks JPEG or WebP) and
+ * a display name may be sanitized. A prompt that also carries text does not care,
+ * because the text identifies it. One that carries *only* an attachment does,
+ * and this is what survives the drift: a re-encode changes a media type, not the
+ * fact that the prompt carried one image.
+ *
+ * A content part counts by its `type` alone; anything unrecognised is skipped, so
+ * an added text part cannot shift the shape.
+ *
+ * @param content - ordered content parts, forwarded or echoed.
+ * @returns the shape; empty when the prompt carries no attachment part.
+ */
+function attachmentShape(content: readonly unknown[]): string {
+  const kinds: string[] = []
+  for (const part of content) {
+    if (typeof part !== 'object' || part === null) continue
+    const type = (part as { type?: unknown }).type
+    if (type === 'image' || type === 'file') kinds.push(type)
+  }
+  return kinds.join('\n')
+}
+
+/**
  * Stable signature of one prompt's non-text parts, in order.
  *
  * Each part is described as `type:mediaType:name` with empty fields when the
@@ -5893,36 +6031,53 @@ function promptSignatureFromRemote(data: unknown): string {
   return Array.isArray(content) ? attachmentSignature(content) : ''
 }
 
+/** Attachment shape of the parts a replayed `user/message` echoes. */
+function promptShapeFromRemote(data: unknown): string {
+  const content = typeof data === 'object' && data !== null
+    ? (data as { content?: unknown }).content
+    : undefined
+  return Array.isArray(content) ? attachmentShape(content) : ''
+}
+
 /**
  * Where in the pending queue a replayed `user/message` belongs.
  *
- * Text and attachment signature together, in that order of emphasis:
+ * Text and attachment signature together, in that order of emphasis, with a
+ * shallow third tier for the prompts that have neither:
  *
- * - A prompt that carries text is identified by that text, exactly as before.
- *   The signature is tried first and is the better answer when it matches, but
- *   the remote is allowed to re-encode an image (normalization picks the media
- *   type) or sanitize a display name, and one drifted part must not turn an
- *   ordinary `text + image` prompt into the duplicate bubble this matching
- *   exists to remove. Falling back to text keeps that case where it has always
- *   been.
- * - A prompt with no text — one image, one file — has no such fallback and
- *   needs the signature, or the replayed message cannot bind to anything. That
- *   is the defect: with the text comparison alone, `text === ''` never matched,
- *   so the echo was appended as a second node.
- * - An entry with neither text nor a matching signature is left alone: the
- *   remote message is appended as history. That is the safe direction, and it
- *   is what keeps an empty queue from claiming the first attachment the remote
- *   sends whatever it carries.
+ * - An entry with text is identified by that text. The signature is tried first
+ *   and is the better answer when it matches, but the remote is allowed to
+ *   re-encode an image (normalization picks the media type) or sanitize a
+ *   display name, and one drifted part must not turn an ordinary `text + image`
+ *   prompt into the duplicate bubble this matching exists to remove. Falling
+ *   back to text keeps that case where it has always been.
+ * - A prompt with no text — one image, one file — has no text fallback, so it
+ *   matches on the exact signature and then on {@link attachmentShape}. The
+ *   second tier is what closes the re-encode case: the remote's normalization
+ *   changes a media type, not the ordered kinds, so the echo still binds.
+ * - An entry with neither text nor a matching shape is left alone: the remote
+ *   message is appended as history. That is the safe direction, and it is what
+ *   keeps an empty queue from claiming the first attachment the remote sends
+ *   whatever it carries — the shape tier still requires the same ordered kinds,
+ *   so an image never claims a file.
  *
  * @param pending - the queue, oldest first.
  * @param text - flattened text of the replayed message.
  * @param signature - attachment signature of the replayed message.
+ * @param shape - attachment kinds of the replayed message.
  * @returns the index to consume, or -1 when nothing matches.
  */
-function pendingUserIndex(pending: readonly PendingUser[], text: string, signature: string): number {
+function pendingUserIndex(
+  pending: readonly PendingUser[],
+  text: string,
+  signature: string,
+  shape: string,
+): number {
   const exact = pending.findIndex(entry => entry.text === text && entry.signature === signature)
   if (exact >= 0) return exact
-  if (text === '') return -1
+  if (text === '') {
+    return shape === '' ? -1 : pending.findIndex(entry => entry.text === '' && entry.shape === shape)
+  }
   return pending.findIndex(entry => entry.text === text)
 }
 
@@ -5954,17 +6109,14 @@ interface LocalPathReference {
 /**
  * Whether a path is absolute in a spelling this machine's filesystem could hold.
  *
- * The composer uses one `@` grammar for two different things: a file the user
- * picked on *this* machine, and a file the remote `@` menu offered from the
- * Session's remote directory. The second is POSIX-spelled absolute, and sending
- * it as bytes would read the wrong disk — or, where the spelling happens to
- * exist locally, upload an unrelated file under a remote name.
- *
- * The discriminator is therefore this machine, not the text: a drive-letter or
- * UNC path is a Windows path whatever platform reads it, while `/…` is absolute
- * only where the local filesystem is POSIX. A Windows client consequently never
- * rewrites a `/…` reference, which is what keeps a remote path intact for the
- * remote to resolve.
+ * This is the *fallback* test, applied only to a candidate the mirror does not
+ * own (see `RemoteMirrorService#isRemoteMenuPath`). A path inside the Session's
+ * own remote workspace is decided there; this one answers for everything else,
+ * and it answers about the machine rather than the text: a drive-letter or UNC
+ * path is a Windows path whatever platform reads it, while `/…` is absolute only
+ * where the local filesystem is POSIX. A Windows client therefore never rewrites
+ * a `/…` reference, which keeps a remote path outside its workspace intact for
+ * the remote to resolve.
  *
  * @param path - the candidate path, with quotes already removed.
  * @returns whether this machine could hold that path.

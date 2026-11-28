@@ -140,6 +140,41 @@ describe('mirrored Session rename', () => {
     }
   })
 
+  it('tells the user when a draft title never reached the remote', async () => {
+    // A draft's rename is local until the first prompt creates the remote
+    // Session; the hand-off is best effort so a refused title cannot cost the
+    // message. That makes the failure invisible unless it is reported: the title
+    // is not *pinned* on the remote, so the remote's own titler will overwrite it
+    // once the first turn ends.
+    const f = await mounted()
+    try {
+      const localWorkspaceId = f.service.localWorkspaceIds()[0]
+      assert.ok(localWorkspaceId !== undefined)
+      const blank = await f.service.startBlankSession('host-test', { localWorkspaceId })
+      const lazy = f.liveAgents.get(blank.localSessionId) as unknown as {
+        send(message: unknown, target?: unknown, wakeup?: boolean): void
+      }
+      await f.controller.rename({ sessionId: blank.localSessionId, title: 'Draft name' })
+      f.service.takeNotices()
+
+      f.setFailRename(new Error('remote refused the title'))
+      lazy.send({ id: 'message-1', role: 'user', content: [{ type: 'text', text: 'hello' }] }, undefined, true)
+      await until(() => f.prompts.length > 0, 'the first prompt to be forwarded')
+
+      const notices = f.service.takeNotices()
+      const failure = notices.find(notice => notice.kind === 'mirrorRenameFailed')
+      assert.ok(failure !== undefined, 'the failed title hand-off is reported, not just logged')
+      assert.equal(failure.localSessionId, blank.localSessionId)
+      assert.equal(failure.ui.key, 'error.mirrorDraftTitleFailed')
+      // The prompt still went out: a refused title must not cost the message.
+      assert.equal(f.prompts.length, 1)
+    } finally {
+      f.restore()
+      await f.service.dispose()
+      await f.ctx.fiber.dispose()
+    }
+  })
+
   it('refuses a blank title before any remote call', async () => {
     const f = await mounted()
     try {

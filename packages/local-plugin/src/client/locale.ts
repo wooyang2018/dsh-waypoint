@@ -71,6 +71,7 @@ export const zh = {
   'error.mirrorLocalPathIsDirectory':
     '这个路径在本地是目录（{path}），远端会话无法读取它的内容。请改为指定目录里的具体文件，或放进远端工作区。',
   'error.mirrorPromptFailed': '这条消息没能转发到远端会话，远端没有收到它。请检查远端连接后重试。',
+  'error.mirrorDraftTitleFailed': '这个草稿的标题没能同步到远端，远端会用自己的自动标题覆盖它。会话已经创建，可以稍后重新命名。',
   'error.mirrorUnsupported': '这个操作在镜像会话上不可用：它属于远端进程，本地不会假装成功。',
   'error.mirrorJobKillUnsupported':
     '后台任务由运行它的远端进程控制，这个版本还不能从镜像会话终止它；请到远端 DSH 网页里停止该任务。',
@@ -267,6 +268,8 @@ export const en: Record<CopyKey, string> = {
     'This path is a local directory ({path}), so the remote Session cannot read its contents. Name a file inside it, or place the directory in the remote workspace.',
   'error.mirrorPromptFailed':
     'This message could not be forwarded to the remote Session, so the remote never received it. Check the remote connection and try again.',
+  'error.mirrorDraftTitleFailed':
+    'The title of this draft did not reach the remote, so the remote will replace it with its own automatic title. The Session exists; rename it again when convenient.',
   'error.mirrorUnsupported':
     'This action is not available on a mirrored Session: it belongs to the remote process, and this side will not pretend it succeeded.',
   'error.mirrorJobKillUnsupported':

@@ -67,6 +67,7 @@ export const UI_TEXT_KEYS = [
   'error.mirrorLocalPathUnavailable',
   'error.mirrorLocalPathIsDirectory',
   'error.mirrorPromptFailed',
+  'error.mirrorDraftTitleFailed',
   'error.mirrorUnsupported',
   'error.mirrorJobKillUnsupported',
   'error.mirrorSubagentControlUnsupported',

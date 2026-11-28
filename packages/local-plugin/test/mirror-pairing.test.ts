@@ -190,6 +190,69 @@ describe('pairing a replayed prompt with its optimistic bubble', () => {
     } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
   })
 
+  it('still pairs an image the remote re-encoded', async () => {
+    // Admission normalizes an image: alpha routing can turn a forwarded PNG into
+    // a JPEG, so the echoed media type differs from the one that was sent. An
+    // attachment-only prompt has no text to fall back on, so the matcher's
+    // shallow tier (ordered part kinds) is what keeps this one bubble.
+    const log: RawEvent[] = [start(0, 1), end(1, 1)]
+    const test = await mounted(log)
+    try {
+      test.setLocalAttachment(imageRef, { data: Buffer.from([1, 2, 3]), mediaType: 'image/png' })
+      test.agent.send({ role: 'user', content: [{ type: 'image', attachment: imageRef }] })
+      await settle()
+
+      const reencoded = {
+        type: 'image',
+        attachment: { ...imageRef, mediaType: 'image/jpeg' },
+      }
+      log.push(start(2, 2), echo(3, [reencoded]), end(4, 2))
+      await replay(test, log)
+
+      assert.equal(userMessages(test.local).length, 1, 'a re-encode must not add a second bubble')
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+
+  it('still pairs a file whose name the remote sanitized', async () => {
+    const log: RawEvent[] = [start(0, 1), end(1, 1)]
+    const test = await mounted(log)
+    try {
+      test.setLocalAttachment(fileRef, { data: Buffer.from('data'), name: 'a.pdf' })
+      test.agent.send({ role: 'user', content: [{ type: 'file', attachment: fileRef }] })
+      await settle()
+
+      const renamed = { type: 'file', attachment: { ...fileRef, name: 'a-1.pdf' } }
+      log.push(start(2, 2), echo(3, [renamed]), end(4, 2))
+      await replay(test, log)
+
+      assert.equal(userMessages(test.local).length, 1, 'a renamed echo must not add a second bubble')
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+
+  it('does not pair an image echo with a pending file prompt', async () => {
+    // The shallow tier compares kinds, not just "has an attachment": a file is
+    // not an image, so an unmatched image echo must be appended as history and
+    // leave the file's bubble alone.
+    const log: RawEvent[] = [start(0, 1), end(1, 1)]
+    const test = await mounted(log)
+    try {
+      test.setLocalAttachment(fileRef, { data: Buffer.from('data'), name: 'a.pdf' })
+      test.agent.send({ role: 'user', content: [{ type: 'file', attachment: fileRef }] })
+      await settle()
+
+      log.push(start(2, 2), echo(3, [imageEcho]), end(4, 2))
+      await replay(test, log)
+
+      const nodes = userMessages(test.local)
+      assert.equal(nodes.length, 2, 'the image is history; the file keeps its bubble')
+      assert.deepEqual(
+        (nodes[1]?.data as { content?: unknown }).content,
+        [imageEcho],
+        'the unmatched image echo is appended, not spliced into the file node',
+      )
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+
   it('does not let an empty pending entry claim a message that carries nothing', async () => {
     // The reason the old `text !== ''` guard could not simply be deleted: with
     // it gone, the first empty-text remote message would consume the pending

@@ -84,7 +84,7 @@ export interface MirroredWorkspace {
  * against the wrong transcript would read as a failure of what they are looking
  * at now.
  */
-export type HostNotice = RemoteArchiveFailedNotice | MirrorPromptFailedNotice
+export type HostNotice = RemoteArchiveFailedNotice | MirrorPromptFailedNotice | MirrorRenameFailedNotice
 
 /** The remote half of an archive failed while the local half stood. */
 export interface RemoteArchiveFailedNotice {
@@ -105,6 +105,25 @@ export interface RemoteArchiveFailedNotice {
  */
 export interface MirrorPromptFailedNotice {
   readonly kind: 'mirrorPromptFailed'
+  readonly localSessionId: string
+  /** Stable localizable reference, rendered by `formatUiText`. */
+  readonly ui: UiText
+}
+
+/**
+ * A draft's title could not be written to the remote Session it created.
+ *
+ * The rename is what pins the title on the remote: it records the text with a
+ * `user` source, which is what stops the remote's automatic titler from naming
+ * the Session after the first message. A failure therefore does not lose the
+ * rename — the local projection keeps it — it loses the *pin*, and the sidebar
+ * title silently changes back once the remote replays its own. The prompt that
+ * created the Session has already been delivered at this point, so the failure
+ * cannot be raised to the sender without pretending the message failed; a notice
+ * is the honest channel.
+ */
+export interface MirrorRenameFailedNotice {
+  readonly kind: 'mirrorRenameFailed'
   readonly localSessionId: string
   /** Stable localizable reference, rendered by `formatUiText`. */
   readonly ui: UiText
