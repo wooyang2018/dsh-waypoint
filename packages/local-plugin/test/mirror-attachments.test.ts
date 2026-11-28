@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
 import { harness, parent, parentSnapshot } from './mirror-fixture.ts'
-import { publishVerbatim, syncRemoteAttachment } from '../src/remote/attachments.ts'
+import { publishVerbatim, readPublished, syncRemoteAttachment } from '../src/remote/attachments.ts'
 
 const roots: string[] = []
 
@@ -40,6 +40,27 @@ function imageRef() {
 
 function userMessage(content: readonly unknown[]) {
   return { role: 'user', content }
+}
+
+/** One raw remote event, as the fake host's log serves it. */
+function remoteEvent(seq: number, type: string, data: unknown) {
+  return { seq, type, data, time: '2026-11-27T00:00:00.000Z' }
+}
+
+/** A snapshot holding exactly `events`, caught up to their end. */
+function snapshotOf(events: ReturnType<typeof remoteEvent>[], live = false) {
+  return { cursor: (events.at(-1)?.seq ?? -1) + 1, live, truncated: false, events }
+}
+
+/** An image whose bytes hash to the reference that names them. */
+function storedImage(...bytes: number[]) {
+  const data = Buffer.from(bytes)
+  const attachmentId = `sha256:${createHash('sha256').update(data).digest('hex')}`
+  return {
+    data,
+    attachmentId,
+    ref: { attachmentId, mediaType: 'image/png', bytes: data.byteLength, width: 1, height: 1 },
+  }
 }
 
 async function mounted() {
@@ -175,27 +196,18 @@ describe('synchronizing a remote attachment into the local store', () => {
       const attachmentId = `sha256:${digest}`
       test.setRemoteAttachment(attachmentId, bytes)
 
-      // Point the plugin's attachment root at a scratch directory so the test
-      // never touches the developer's real store.
-      const root = await mkdtemp(join(tmpdir(), 'waypoint-sync-'))
-      roots.push(root)
-      const previous = process.env.DSH_HOME
-      process.env.DSH_HOME = root
-      try {
-        const outcome = await syncRemoteAttachment(
-          test.ctx,
-          test.hosts,
-          'host-test',
-          'file',
-          { attachmentId, name: 'remote.txt', bytes: bytes.byteLength },
-        )
-        assert.equal(outcome.kind, 'published', 'the bytes are copied in')
-        assert.equal(test.attachmentReads.length, 1, 'one read, addressed by the reference')
-        assert.equal(test.attachmentReads[0]?.kind, 'file')
-      } finally {
-        if (previous === undefined) delete process.env.DSH_HOME
-        else process.env.DSH_HOME = previous
-      }
+      // The fixture's store exposes its own root inside its temporary state
+      // directory, so this never touches the developer's real store.
+      const outcome = await syncRemoteAttachment(
+        test.ctx,
+        test.hosts,
+        'host-test',
+        'file',
+        { attachmentId, name: 'remote.txt', bytes: bytes.byteLength },
+      )
+      assert.equal(outcome.kind, 'published', 'the bytes are copied in')
+      assert.equal(test.attachmentReads.length, 1, 'one read, addressed by the reference')
+      assert.equal(test.attachmentReads[0]?.kind, 'file')
     } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
   })
 
@@ -218,23 +230,217 @@ describe('synchronizing a remote attachment into the local store', () => {
   it('reports a pruned object as missing rather than throwing', async () => {
     const test = await mounted()
     try {
-      const previous = process.env.DSH_HOME
-      const root = await mkdtemp(join(tmpdir(), 'waypoint-sync-'))
-      roots.push(root)
-      process.env.DSH_HOME = root
-      try {
-        const outcome = await syncRemoteAttachment(
-          test.ctx,
-          test.hosts,
-          'host-test',
-          'image',
-          { attachmentId: `sha256:${'d'.repeat(64)}` },
-        )
-        assert.equal(outcome.kind, 'missing', 'a gone object is an ordinary outcome')
-      } finally {
-        if (previous === undefined) delete process.env.DSH_HOME
-        else process.env.DSH_HOME = previous
-      }
+      const outcome = await syncRemoteAttachment(
+        test.ctx,
+        test.hosts,
+        'host-test',
+        'image',
+        { attachmentId: `sha256:${'d'.repeat(64)}` },
+      )
+      assert.equal(outcome.kind, 'missing', 'a gone object is an ordinary outcome')
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+
+  it('answers present without a request when the local store already holds the image', async () => {
+    // A replayed log names the same objects it named last launch. Asking the
+    // host again would re-download every image of a mirrored history on every
+    // restart, which is what the presence check exists to prevent.
+    const test = await mounted()
+    try {
+      const data = Buffer.from([1, 2, 3])
+      const digest = createHash('sha256').update(data).digest('hex')
+      const attachmentId = `sha256:${digest}`
+      assert.equal(await publishVerbatim(test.attachmentRoot, digest, data), true)
+
+      const outcome = await syncRemoteAttachment(
+        test.ctx,
+        test.hosts,
+        'host-test',
+        'image',
+        { attachmentId, mediaType: 'image/png', bytes: data.byteLength },
+      )
+      assert.equal(outcome.kind, 'present')
+      assert.equal(test.attachmentReads.length, 0, 'a byte already on disk costs no round trip')
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+})
+
+/**
+ * The reverse-sync gate used to ask "is this a `user/message`?", which was the
+ * one event type an attachment used to arrive in. A remote `read_image` puts its
+ * reference in a `tool/result`, so those bytes were never fetched and the card
+ * stayed blank — the same failure that made `remote/attachments.ts` exist for
+ * user images, reached through a second door.
+ */
+describe('synchronizing the attachments any arrival path carries', () => {
+  /**
+   * Mount one mirrored Session over exactly `events`.
+   * @param events - the remote log tail the fake host serves.
+   * @param prepare - runs before the mount, for remote objects the seed cites.
+   */
+  async function mountedOver(
+    events: ReturnType<typeof remoteEvent>[],
+    prepare?: (test: ReturnType<typeof harness>) => void,
+  ) {
+    const test = harness()
+    test.setRemote([parent])
+    prepare?.(test)
+    test.setSnapshot(parent.sessionId, snapshotOf(events))
+    await test.service.start()
+    const record = Object.values((await test.state()).sessions)
+      .find(entry => entry.remoteSessionId === parent.sessionId)
+    assert.ok(record !== undefined, 'the fixture must mirror the parent Session')
+    const local = test.sessions.get(record.localSessionId)
+    assert.ok(local !== undefined, 'the fixture must have a local Session')
+    return { ...test, record, local }
+  }
+
+  it('fetches the image a tool result carries, so its card can render', async () => {
+    const seeded = storedImage(1, 2, 3)
+    const replayed = storedImage(4, 5, 6)
+    const call = (seq: number, image: ReturnType<typeof storedImage>) => remoteEvent(seq, 'tool/result', {
+      turn: 1,
+      step: seq,
+      message: {
+        toolCallId: `call-${String(seq)}`,
+        content: [
+          { type: 'text', text: 'read the screenshot' },
+          { type: 'image', attachment: image.ref },
+        ],
+      },
+    })
+    const test = await mountedOver([call(0, seeded)], candidate => {
+      candidate.setRemoteAttachment(seeded.attachmentId, seeded.data)
+      candidate.setRemoteAttachment(replayed.attachmentId, replayed.data)
+    })
+    try {
+      assert.equal(test.attachmentReads.length, 1, 'one reference, one read')
+      assert.equal(test.attachmentReads[0]?.kind, 'image', 'an image is read from the image store')
+      assert.deepEqual(
+        await readPublished(test.ctx, seeded.attachmentId),
+        seeded.data,
+        'the object lands under the id the remote reference names',
+      )
+      assert.ok(
+        test.local.snapshotEvents().some(entry => entry.type === 'tool/result'),
+        'fetching must not cost the event its projection',
+      )
+
+      // The live half of the same gate: an event that arrives after the mount
+      // is projected through `#followStream`, which has no seed to lean on.
+      test.setSnapshot(parent.sessionId, snapshotOf([call(0, seeded), call(1, replayed)]))
+      await test.poll(parent.sessionId)
+      assert.equal(test.attachmentReads.length, 2, 'a newly replayed tool result is fetched too')
+      assert.deepEqual(await readPublished(test.ctx, replayed.attachmentId), replayed.data)
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+
+  it('fetches the image an event on the live stream carries', async () => {
+    // The third arrival path. `#followStream` projects an event and advances
+    // `lastSeq` without consulting the snapshot again, so a reference it does
+    // not fetch here is never fetched: the later replay skips that seq.
+    const image = storedImage(13, 14, 15)
+    const test = await mountedOver([remoteEvent(0, 'turn/start', { turn: 1 })], candidate => {
+      candidate.setRemoteAttachment(image.attachmentId, image.data)
+    })
+    try {
+      assert.equal(test.attachmentReads.length, 0, 'nothing to fetch in the seeded window')
+      test.pushEvent(parent.sessionId, remoteEvent(1, 'tool/result', {
+        turn: 1,
+        step: 1,
+        message: { toolCallId: 'call-live', content: [{ type: 'image', attachment: image.ref }] },
+      }))
+      await settle()
+
+      assert.equal(test.attachmentReads.length, 1, 'the live event fetches its image before it is projected')
+      assert.deepEqual(await readPublished(test.ctx, image.attachmentId), image.data)
+      assert.ok(
+        test.local.snapshotEvents().some(entry => entry.type === 'tool/result'),
+        'the live event is projected',
+      )
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+
+  it('reads a reference once even when two events cite it', async () => {
+    // The same image can appear in a user message and in the tool result that
+    // repeated it. The store is content-addressed, so the second reference is
+    // already answered — no second transfer.
+    const image = storedImage(7, 8, 9)
+    const test = await mountedOver([
+      remoteEvent(0, 'user/message', {
+        turn: 1,
+        source: { kind: 'user' },
+        content: [{ type: 'image', attachment: image.ref }],
+      }),
+      remoteEvent(1, 'tool/result', {
+        turn: 1,
+        step: 1,
+        message: { toolCallId: 'call-1', content: [{ type: 'image', attachment: image.ref }] },
+      }),
+    ], candidate => candidate.setRemoteAttachment(image.attachmentId, image.data))
+    try {
+      assert.equal(test.attachmentReads.length, 1, 'the present object short-circuits the second call')
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+
+  it('does not transfer again when a restarted mirror replays the same window', async () => {
+    const image = storedImage(10, 11, 12)
+    const test = await mountedOver([
+      remoteEvent(0, 'tool/result', {
+        turn: 1,
+        step: 1,
+        message: { toolCallId: 'call-1', content: [{ type: 'image', attachment: image.ref }] },
+      }),
+    ], candidate => candidate.setRemoteAttachment(image.attachmentId, image.data))
+    assert.equal(test.attachmentReads.length, 1, 'the first launch fetches the image')
+    await test.service.dispose()
+    const second = test.newService()
+    try {
+      await second.start()
+      assert.equal(test.attachmentReads.length, 1, 'a replayed window re-uses the stored object')
+      assert.deepEqual(await readPublished(test.ctx, image.attachmentId), image.data)
+    } finally { await second.dispose(); await test.ctx.fiber.dispose() }
+  })
+
+  it('still fetches a file a user message carries', async () => {
+    const seeded = Buffer.from('remote notes')
+    const replayed = Buffer.from('second notes')
+    const id = (data: Buffer) => `sha256:${createHash('sha256').update(data).digest('hex')}`
+    const carrier = (seq: number, data: Buffer, name: string) => remoteEvent(seq, 'user/message', {
+      turn: 1,
+      source: { kind: 'user' },
+      content: [{ type: 'file', attachment: { attachmentId: id(data), name, bytes: data.byteLength } }],
+    })
+    const test = await mountedOver([carrier(0, seeded, 'notes.txt')], candidate => {
+      candidate.setRemoteAttachment(id(seeded), seeded)
+      candidate.setRemoteAttachment(id(replayed), replayed)
+    })
+    try {
+      test.setSnapshot(
+        parent.sessionId,
+        snapshotOf([carrier(0, seeded, 'notes.txt'), carrier(1, replayed, 'second.txt')]),
+      )
+      await test.poll(parent.sessionId)
+      const files = test.attachmentReads.map(read => read.kind)
+      assert.deepEqual(files, ['file', 'file'], 'the seeded and the newly replayed file are both fetched')
+      assert.deepEqual(test.warnings, [], 'a file reference is not a failure')
+    } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
+  })
+
+  it('degrades instead of throwing when a bearing event has an unexpected shape', async () => {
+    // The set of bearing types and the field each keeps its blocks in have to
+    // agree. Where they do not, the answer must be "no parts", never an error:
+    // a shape disagreement may not cost an event its projection.
+    const test = await mountedOver([
+      remoteEvent(0, 'tool/result', { turn: 1, step: 1, content: 'not a block array' }),
+      remoteEvent(1, 'assistant/message', { turn: 1, step: 1, message: 'not a message' }),
+    ])
+    try {
+      assert.equal(test.attachmentReads.length, 0, 'nothing that looks like a reference is requested')
+      assert.deepEqual(test.warnings, [], 'an unrecognized payload is not a failure')
+      const projected = test.local.snapshotEvents().map(entry => entry.type)
+      assert.ok(projected.includes('tool/result'), 'the tool result is still projected')
+      assert.ok(projected.includes('assistant/message'), 'the assistant message is still projected')
     } finally { await test.service.dispose(); await test.ctx.fiber.dispose() }
   })
 })

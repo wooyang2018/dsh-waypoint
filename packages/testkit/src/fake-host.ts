@@ -25,6 +25,7 @@ import {
   type ApiFailure,
   type ApiSuccess,
   type ApprovalOutcome,
+  type AttachmentReadResult,
   type HostInfo,
   type RemoteApprovalRequest,
   type RemoteFileStat,
@@ -63,6 +64,32 @@ export interface FakeFile {
 export interface FakeRequest {
   readonly method: string
   readonly path: string
+}
+
+/**
+ * One durable attachment the fake host can serve for `attachment.read`.
+ *
+ * Split by `kind` because the two stores are genuinely separate on a real host:
+ * an image is addressed by its normalized object, a file verbatim by contract,
+ * and the same digest can name both without either reading the other's bytes.
+ */
+export interface FakeAttachment {
+  readonly kind: 'image' | 'file'
+  /**
+   * The durable reference the remote log carries: an `ImageAttachmentRef`
+   * (`{ attachmentId, mediaType, bytes, width, height }`) or a
+   * `FileAttachmentRef` (`{ attachmentId, name, bytes }`).
+   */
+  readonly ref: {
+    readonly attachmentId: string
+    readonly name?: string
+    readonly mediaType?: string
+    readonly bytes?: number
+    readonly width?: number
+    readonly height?: number
+  }
+  /** Exact stored bytes; the response reports their real length. */
+  readonly data: Uint8Array
 }
 
 /** Started fake host. */
@@ -106,6 +133,8 @@ export class FakeRemoteHost {
   readonly #holdStreamMs: number
   readonly #heartbeatMs: number
   readonly #files = new Map<string, RemoteFileStat>()
+  /** Durable attachment bytes, keyed by `kind:attachmentId`. */
+  readonly #attachments = new Map<string, Uint8Array>()
   readonly #sessions = new Map<string, FakeSession>()
   readonly #streams = new Map<string, ServerResponse[]>()
   readonly #approvals = new Map<string, RemoteApprovalRequest>()
@@ -147,6 +176,19 @@ export class FakeRemoteHost {
       // dropped rather than answered for a shape that cannot carry it.
       ...file.type === 'file' && file.bytes !== undefined ? { bytes: file.bytes } : {},
     })
+  }
+
+  /**
+   * Declare bytes this fake can serve for `attachment.read`.
+   *
+   * Keyed by kind and attachment id, exactly as the route addresses a durable
+   * reference. The bytes are served verbatim: a caller that publishes them
+   * under the digest they hash to must not be given a re-encoded variant.
+   *
+   * @param attachment - kind, durable reference and exact stored bytes.
+   */
+  setAttachment(attachment: FakeAttachment): void {
+    this.#attachments.set(`${attachment.kind}:${attachment.ref.attachmentId}`, attachment.data)
   }
 
   /** Start on an ephemeral loopback port. */
@@ -267,6 +309,42 @@ export class FakeRemoteHost {
             }
             this.#fixtures.workspaces.push(workspace)
             sendJson(res, workspace)
+            return
+          }
+          case 'attachment-read': {
+            // Mirrors `asAttachmentReadRequest` and `readAttachment` in
+            // packages/remote-agent: the two stores are selected by `kind`, the
+            // reference travels as JSON, the bytes come back base64 with their
+            // real length, and a reference whose object is gone is the ordinary
+            // `attachment/not-found`, not an internal fault.
+            const record = body as { kind?: unknown; ref?: unknown }
+            if (record.kind !== 'image' && record.kind !== 'file') {
+              throw new RemoteProtocolError({ code: 'request/invalid', message: 'kind must be image or file' })
+            }
+            if (typeof record.ref !== 'object' || record.ref === null || Array.isArray(record.ref)) {
+              throw new RemoteProtocolError({ code: 'request/invalid', message: 'ref must be an attachment reference object' })
+            }
+            const ref = record.ref as { attachmentId?: unknown; name?: unknown; mediaType?: unknown }
+            const stored = typeof ref.attachmentId === 'string'
+              ? this.#attachments.get(`${record.kind}:${ref.attachmentId}`)
+              : undefined
+            if (stored === undefined) {
+              throw new RemoteProtocolError({
+                code: 'attachment/not-found',
+                message: `attachment is not readable on this host: ${String(ref.attachmentId)}`,
+                details: { kind: record.kind },
+                httpStatus: 404,
+              })
+            }
+            sendJson(res, {
+              data: Buffer.from(stored).toString('base64'),
+              bytes: stored.byteLength,
+              // Only what the reference itself claims. A verbatim file has no
+              // media type, and inventing one would hide a caller that reads
+              // the image field for the wrong kind.
+              ...typeof ref.mediaType === 'string' ? { mediaType: ref.mediaType } : {},
+              ...typeof ref.name === 'string' ? { name: ref.name } : {},
+            } satisfies AttachmentReadResult)
             return
           }
           case 'sessions': {

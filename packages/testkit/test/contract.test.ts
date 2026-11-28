@@ -179,6 +179,51 @@ describe('remote agent wire contract', () => {
     })
   })
 
+  it('serves a durable attachment by reference, for both kinds', async () => {
+    // Reverse synchronization is the only caller: a mirrored Session replays
+    // attachment *references*, whose bytes live only on the host, so a fake
+    // that cannot answer this route leaves that path untested end to end.
+    const image = Buffer.from([1, 2, 3])
+    const file = Buffer.from('file bytes')
+    host.setAttachment({
+      kind: 'image',
+      ref: { attachmentId: `sha256:${'b'.repeat(64)}`, mediaType: 'image/png', bytes: image.byteLength, width: 1, height: 1 },
+      data: image,
+    })
+    host.setAttachment({
+      kind: 'file',
+      ref: { attachmentId: `sha256:${'a'.repeat(64)}`, name: 'notes.txt', bytes: file.byteLength },
+      data: file,
+    })
+
+    const imageRead = await client().readAttachment({
+      kind: 'image',
+      ref: { attachmentId: `sha256:${'b'.repeat(64)}`, mediaType: 'image/png', bytes: image.byteLength, width: 1, height: 1 },
+    })
+    assert.deepEqual(Buffer.from(imageRead.data, 'base64'), image, 'the exact bytes travel')
+    assert.equal(imageRead.bytes, image.byteLength, 'the length is the stored length')
+    assert.equal(imageRead.mediaType, 'image/png')
+
+    const fileRead = await client().readAttachment({
+      kind: 'file',
+      ref: { attachmentId: `sha256:${'a'.repeat(64)}`, name: 'notes.txt', bytes: file.byteLength },
+    })
+    assert.deepEqual(Buffer.from(fileRead.data, 'base64'), file)
+    assert.equal(fileRead.name, 'notes.txt')
+    // A file is verbatim and has no media type; inventing one would hide a
+    // caller reading the image field for the wrong kind.
+    assert.equal(fileRead.mediaType, undefined)
+
+    await assert.rejects(
+      client().readAttachment({ kind: 'image', ref: { attachmentId: `sha256:${'c'.repeat(64)}` } }),
+      (error: unknown) => {
+        assert.ok(error instanceof RemoteProtocolError)
+        assert.equal(error.code, 'attachment/not-found')
+        return true
+      },
+    )
+  })
+
   it('surfaces authentication and protocol failures', async () => {
     await assert.rejects(client('wrong').health(), (error: unknown) => {
       assert.ok(error instanceof RemoteProtocolError)

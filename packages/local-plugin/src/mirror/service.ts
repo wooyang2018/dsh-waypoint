@@ -66,6 +66,75 @@ const SURFACE_TYPES = new Set([
   'tool/result',
 ])
 
+/**
+ * Event types whose payload can carry an attachment reference.
+ *
+ * The gate asks "can this event type carry a reference?", not "is it the one
+ * type that happens to today". It was the latter, so a remote `read_image`
+ * result — whose `tool/result` payload carries an `ImageAttachmentRef` — never
+ * had its bytes fetched: the local tool card rendered from the reference, found
+ * nothing in the local store, and stayed blank for the life of the Session.
+ *
+ * `assistant/message` is listed although nothing produces an assistant image
+ * reference yet. The cost is one `Array.isArray` check per event; the
+ * alternative is a third silent omission the next time an event type gains a
+ * reference. The accessor table below is keyed by the same union, so a new
+ * member cannot arrive without its content entry.
+ */
+const ATTACHMENT_BEARING_EVENTS = new Set(['user/message', 'assistant/message', 'tool/result'])
+
+/** The event types {@link ATTACHMENT_BEARING_EVENTS} names. */
+type AttachmentBearingEvent = 'user/message' | 'assistant/message' | 'tool/result'
+
+/**
+ * Where each attachment-bearing event type keeps its content blocks.
+ *
+ * Reading the wrong field is indistinguishable from "this event has no
+ * attachments", which is why this is a table rather than a guess: a
+ * `user/message` *is* the message and keeps `content` on the payload, while an
+ * `assistant/message` and a `tool/result` wrap theirs in `message.content`
+ * (`SessionEventMap` in `@deepseek-ai/dsh-session`).
+ */
+const ATTACHMENT_CONTENT: Readonly<Record<AttachmentBearingEvent, (data: unknown) => unknown>> = {
+  'user/message': data => eventRecord(data)?.content,
+  'assistant/message': data => eventMessageContent(data),
+  'tool/result': data => eventMessageContent(data),
+}
+
+/** One event payload as a plain record, or undefined when it is not one. */
+function eventRecord(data: unknown): Record<string, unknown> | undefined {
+  return typeof data === 'object' && data !== null && !Array.isArray(data)
+    ? data as Record<string, unknown>
+    : undefined
+}
+
+/** `data.message.content` of an event that wraps its blocks in a message. */
+function eventMessageContent(data: unknown): unknown {
+  const message = eventRecord(eventRecord(data)?.message)
+  return message?.content
+}
+
+/**
+ * The content blocks one event carries, when its type can carry a reference.
+ *
+ * Shared by the live and seed paths, and by every member of
+ * {@link ATTACHMENT_BEARING_EVENTS}: a type whose payload does not look the way
+ * the table expects answers `undefined`, which the caller treats as "nothing to
+ * sync" rather than as an error. A shape disagreement must never cost an event
+ * its projection.
+ *
+ * @param type - remote event type.
+ * @param data - the event's payload.
+ * @returns the blocks, or undefined when this event cannot carry one.
+ */
+function attachmentEventContent(type: string, data: unknown): readonly unknown[] | undefined {
+  if (!ATTACHMENT_BEARING_EVENTS.has(type)) return undefined
+  const read = ATTACHMENT_CONTENT[type as AttachmentBearingEvent]
+  if (read === undefined) return undefined
+  const content = read(data)
+  return Array.isArray(content) ? content : undefined
+}
+
 interface MirrorRecord {
   readonly hostId: string
   readonly remoteSessionId: string
@@ -137,8 +206,25 @@ interface PendingUser {
    * file reference is replaced on the way out, and the remote echoes the
    * replacement. `#sendPrompt` settles this to the text it actually sent before
    * the request leaves, so the echo still pairs with this entry.
+   *
+   * It is empty for a prompt that carries only attachments, which is why
+   * {@link PendingUser.signature} exists.
    */
   text: string
+  /**
+   * Stable signature of the parts this prompt sent, so a prompt with no text
+   * still has an identity the echo can be matched against.
+   *
+   * A prompt carrying only an image has `text === ''`, so the text comparison
+   * cannot bind it and the replayed `user/message` used to be appended as a
+   * second node — one image, two bubbles. The empty-text guard cannot simply be
+   * dropped: an empty entry would then claim the first empty-text remote
+   * message whatever it carried, which is worse than the duplicate.
+   *
+   * Derived from {@link attachmentSignature}, which both sides compute from the
+   * same parts, so the two agree by construction.
+   */
+  signature: string
   localSeq: number
 }
 
@@ -1160,7 +1246,7 @@ export class RemoteMirrorService {
   }
 
   /**
-   * Pull a user message's remote attachments into the local store.
+   * Pull the remote attachments one event refers to into the local store.
    *
    * Prefetch, like {@link #prefetchChanges} and for a stronger reason: the
    * transcript's image loader is *not* retried. `HistoricalImageCache` drops a
@@ -1179,7 +1265,7 @@ export class RemoteMirrorService {
    * @param event - the event about to be projected.
    */
   async #prefetchAttachments(runtime: MirrorRuntime, event: RemoteSessionEvent): Promise<void> {
-    if (event.type !== 'user/message') return
+    if (!ATTACHMENT_BEARING_EVENTS.has(event.type)) return
     await this.#syncEventAttachments(runtime.record.hostId, event)
   }
 
@@ -1191,9 +1277,10 @@ export class RemoteMirrorService {
   /**
    * Sync every attachment one event references.
    *
-   * Shared by the live and seed paths so the two cannot drift: attachment
-   * references appear in `user/message` only, and both paths must reach the same
-   * local store before the event becomes visible.
+   * Shared by the live stream, the snapshot replay and the seed so the three
+   * cannot drift: whichever path makes an event visible must reach the same
+   * local store first. Which events are worth looking at is decided by
+   * {@link ATTACHMENT_BEARING_EVENTS}, not by a list of types hard-coded here.
    *
    * Never throws — an unreachable host or a pruned object degrades that one
    * attachment, and losing a whole event over it would be worse than a blank
@@ -1202,9 +1289,8 @@ export class RemoteMirrorService {
    * @param event - candidate event.
    */
   async #syncEventAttachments(hostId: string, event: RemoteSessionEvent): Promise<void> {
-    if (event.type !== 'user/message') return
-    const content = (event.data as { content?: unknown }).content
-    if (!Array.isArray(content)) return
+    const content = attachmentEventContent(event.type, event.data)
+    if (content === undefined) return
     for (const part of content) {
       if (typeof part !== 'object' || part === null) continue
       const type = (part as { type?: unknown }).type
@@ -1781,7 +1867,7 @@ export class RemoteMirrorService {
   async #sendPrompt(runtime: MirrorRuntime, message: unknown, mode: PromptDeliveryMode): Promise<void> {
     if (this.#detached(runtime)) throw new Error('remote mirror is no longer active')
     if (promptParts(message).length === 0) throw new Error('prompt has no content')
-    const pending: PendingUser = { message, text: promptText(message), localSeq: -1 }
+    const pending: PendingUser = { message, text: promptText(message), signature: '', localSeq: -1 }
     runtime.pendingUsers.push(pending)
     if (!runtime.running) {
       runtime.awaitingTurn = runtime.latestTurn + 1
@@ -1808,7 +1894,12 @@ export class RemoteMirrorService {
       // would leave this entry unmatched — the replayed `user/message` would then
       // be appended as history instead of reusing the bubble the user is looking
       // at. Assignment before the send is what keeps that pairing intact.
+      //
+      // The signature extends the same discipline to the parts that carry no
+      // text: it is computed from what is actually forwarded, so an
+      // attachment-only prompt is still identifiable when it comes back.
       pending.text = text
+      pending.signature = attachmentSignature(content)
       let candidate = selection
       // Skip a selection the remote catalog does not offer, so the common case
       // costs no failed round trip at all. The rejection fallback below stays as
@@ -3849,6 +3940,12 @@ export class RemoteMirrorService {
 
   #schedule(runtime: MirrorRuntime): void {
     if (runtime.stopped || this.#disposed) return
+    // One timer per runtime, not one per reason to wait. A prompt schedules a
+    // poll and so does the end of every poll; without this the earlier handle
+    // is orphaned — invisible while the process runs, but `dispose` clears only
+    // the last one, so an orphan outlives the mirror and keeps the process alive
+    // for a whole poll interval after the work is done.
+    if (runtime.timer !== undefined) clearTimeout(runtime.timer)
     runtime.timer = setTimeout(() => { void this.#poll(runtime) }, Math.max(500, this.#config.mirrorPollMs))
   }
 
@@ -4249,6 +4346,13 @@ export class RemoteMirrorService {
         const localBefore = runtime.session.seq
         try {
           await this.#prefetchChanges(runtime, event)
+          // The replay path has always fetched bytes before projecting; this
+          // path did not, so an attachment that arrived live — a user typing
+          // into the remote Session, or a remote `read_image` result — had its
+          // reference projected against a store that would never be filled:
+          // the stream advances `lastSeq`, so the later snapshot replay skips
+          // the same seq and the image stays blank for good.
+          await this.#prefetchAttachments(runtime, event)
           this.#appendEvent(runtime, event)
         } catch (error) {
           runtime.skippedRemoteSeqs.add(event.seq)
@@ -5057,14 +5161,16 @@ function appendRemoteEvent(
   // optimistic message instead so the client settles its pending submission,
   // and keep the remote event's position in the turn.
   //
-  // Match by text, never by position: a cancelled or rejected prompt leaves an
-  // entry behind, and shifting the queue would make that entry claim a message
-  // another client sent — silently replacing real remote content.
+  // Match by text and attachment identity, never by position: a cancelled or
+  // rejected prompt leaves an entry behind, and shifting the queue would make
+  // that entry claim a message another client sent — silently replacing real
+  // remote content.
   if (event.type === 'user/message' && runtime.pendingUsers.length > 0) {
     const source = (event.data as { source?: { kind?: unknown } }).source
     if (source?.kind === 'user') {
       const text = promptTextFromRemote(event.data)
-      const index = runtime.pendingUsers.findIndex(pending => pending.text !== '' && pending.text === text)
+      const signature = promptSignatureFromRemote(event.data)
+      const index = pendingUserIndex(runtime.pendingUsers, text, signature)
       if (index >= 0) {
         const [pending] = runtime.pendingUsers.splice(index, 1)
         if (pending !== undefined && pending.localSeq >= 0) return pending.localSeq
@@ -5211,10 +5317,10 @@ function isUserPromptMessage(message: unknown): boolean {
 /**
  * Flatten a prompt's text parts into one comparable string.
  *
- * Only text is compared: an image part has no stable identity a remote
- * `user/message` would echo back, and a prompt carrying one still has to pair
- * with something. Comparing text alone is enough to reject the wrong entry,
- * which is the failure to prevent.
+ * Only text is compared here. A part that carries an attachment has no id the
+ * remote echoes back — the id it echoes names bytes in *its* store — so
+ * {@link attachmentSignature} describes such a part by its kind, media type and
+ * display name instead, and {@link pendingUserIndex} combines the two.
  */
 function promptTextFromRemote(data: unknown): string {
   const content = typeof data === 'object' && data !== null
@@ -5238,6 +5344,87 @@ function promptText(message: unknown): string {
     .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
     .map(part => part.text.trim())
     .join('\n')
+}
+
+/**
+ * Stable signature of one prompt's non-text parts, in order.
+ *
+ * Each part is described as `type:mediaType:name` with empty fields when the
+ * part has none, so the description carries what the remote echoes back — the
+ * kind, the media type of an image, and the display name — and nothing that
+ * would differ between the two sides, such as a local attachment id or the
+ * bytes themselves. Parts are joined in order, because a prompt may carry
+ * several and "an image and a file" must not read the same as "a file and an
+ * image".
+ *
+ * Computed by the same function on both sides: the forward side passes what
+ * `#promptContent` returned, the echo side passes the replayed `user/message`
+ * content, so the two agree by construction. Both spellings of a part are read
+ * because they differ: a forwarded image carries `mediaType` and `name` on the
+ * part, while a persisted one keeps them inside its `attachment` reference.
+ *
+ * @param content - ordered content parts, forwarded or echoed.
+ * @returns the signature; empty when the prompt carries no attachment part.
+ */
+function attachmentSignature(content: readonly unknown[]): string {
+  const described: string[] = []
+  for (const part of content) {
+    if (typeof part !== 'object' || part === null) continue
+    const record = part as { type?: unknown; mediaType?: unknown; name?: unknown; attachment?: unknown }
+    if (record.type !== 'image' && record.type !== 'file') continue
+    const attachment = typeof record.attachment === 'object' && record.attachment !== null
+      ? record.attachment as { mediaType?: unknown; name?: unknown }
+      : undefined
+    const mediaType = typeof record.mediaType === 'string'
+      ? record.mediaType
+      : typeof attachment?.mediaType === 'string' ? attachment.mediaType : ''
+    const name = typeof record.name === 'string'
+      ? record.name
+      : typeof attachment?.name === 'string' ? attachment.name : ''
+    described.push(`${record.type}:${mediaType}:${name}`)
+  }
+  return described.join('\n')
+}
+
+/** Signature of the attachment parts a replayed `user/message` echoes. */
+function promptSignatureFromRemote(data: unknown): string {
+  const content = typeof data === 'object' && data !== null
+    ? (data as { content?: unknown }).content
+    : undefined
+  return Array.isArray(content) ? attachmentSignature(content) : ''
+}
+
+/**
+ * Where in the pending queue a replayed `user/message` belongs.
+ *
+ * Text and attachment signature together, in that order of emphasis:
+ *
+ * - A prompt that carries text is identified by that text, exactly as before.
+ *   The signature is tried first and is the better answer when it matches, but
+ *   the remote is allowed to re-encode an image (normalization picks the media
+ *   type) or sanitize a display name, and one drifted part must not turn an
+ *   ordinary `text + image` prompt into the duplicate bubble this matching
+ *   exists to remove. Falling back to text keeps that case where it has always
+ *   been.
+ * - A prompt with no text — one image, one file — has no such fallback and
+ *   needs the signature, or the replayed message cannot bind to anything. That
+ *   is the defect: with the text comparison alone, `text === ''` never matched,
+ *   so the echo was appended as a second node.
+ * - An entry with neither text nor a matching signature is left alone: the
+ *   remote message is appended as history. That is the safe direction, and it
+ *   is what keeps an empty queue from claiming the first attachment the remote
+ *   sends whatever it carries.
+ *
+ * @param pending - the queue, oldest first.
+ * @param text - flattened text of the replayed message.
+ * @param signature - attachment signature of the replayed message.
+ * @returns the index to consume, or -1 when nothing matches.
+ */
+function pendingUserIndex(pending: readonly PendingUser[], text: string, signature: string): number {
+  const exact = pending.findIndex(entry => entry.text === text && entry.signature === signature)
+  if (exact >= 0) return exact
+  if (text === '') return -1
+  return pending.findIndex(entry => entry.text === text)
 }
 
 /** One prompt part this mirror knows how to forward, in message order. */

@@ -133,6 +133,10 @@ export function createFixtures(hostId = 'fake-host'): Fixtures {
     'session.catalog',
     'session.command',
     'file.references',
+    // The fake serves `/attachments/read`, so it must advertise it: the mirror
+    // decides whether to ask from the capability, and a route that answers but
+    // is not advertised would look like an older agent to every caller.
+    'attachment.read',
   ]
   const hostInfo: HostInfo = {
     hostId,

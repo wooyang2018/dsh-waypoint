@@ -308,9 +308,16 @@ export function harness() {
    * Keyed by the object a prompt part carries, exactly as the real store is
    * keyed by its reference: the mirror only passes the reference through, so a
    * fixture that keyed by anything else would not prove the reference survived.
+   *
+   * `root` is the one member reverse synchronization writes through, and it
+   * lives inside the fixture's own temporary directory. Without it, a test that
+   * replays an image would publish into the developer's real `DSH_HOME` store —
+   * and a presence short-circuit would read that store instead of the fixture's.
    */
+  const attachmentRoot = join(stateDir, 'attachments', 'v1')
   const localAttachments = new Map<unknown, { data: Uint8Array; mediaType?: string; name?: string }>()
   ctx.provide('attachments', {
+    root: attachmentRoot,
     async readImage(ref: unknown) {
       const stored = localAttachments.get(ref)
       if (stored === undefined) throw new Error('attachment not found')
@@ -340,6 +347,10 @@ export function harness() {
   const workspace = { workspaceId: 'remote-workspace', path: '/srv/project', title: 'project' }
   let remote: Summary[] = []
   const snapshots = new Map<string, Snapshot>()
+  /** Events pushed to a live follower, keyed by remote Session id. */
+  const liveEvents = new Map<string, Array<{ seq: number; type: string; data?: unknown; time?: string }>>()
+  /** Pending wake-ups for `followSessionEvents` generators, per remote Session. */
+  const liveWaiters = new Map<string, Set<() => void>>()
   /**
    * Extra hosts and remote workspaces for a test that needs more than one.
    *
@@ -384,7 +395,36 @@ export function harness() {
       await aborted
     },
     async answerQuestion() { return { accepted: true } },
-    async *followSessionEvents() {},
+    async *followSessionEvents(_hostId: string, sessionId: string, cursor: number, signal: AbortSignal) {
+      // The live path is not the replay path: `#followStream` projects events
+      // above `cursor` and advances `lastSeq` itself, so anything it skips is
+      // skipped for good. A generator that ended immediately, as this one used
+      // to, left that path with no coverage at all — including the attachment
+      // prefetch it must perform before the event becomes visible.
+      let next = cursor
+      // Registered once: one listener per `await` would trip the abort-signal
+      // limit on a Session that receives a dozen pushed events.
+      const aborted = new Promise<void>(resolve => {
+        if (signal.aborted) resolve()
+        else signal.addEventListener('abort', () => { resolve() }, { once: true })
+      })
+      while (!signal.aborted) {
+        for (const event of liveEvents.get(sessionId) ?? []) {
+          if (event.seq < next) continue
+          next = event.seq + 1
+          yield { type: 'event' as const, cursor: next, event }
+        }
+        if (signal.aborted) return
+        await Promise.race([
+          aborted,
+          new Promise<void>(resolve => {
+            const waiters = liveWaiters.get(sessionId) ?? new Set<() => void>()
+            waiters.add(resolve)
+            liveWaiters.set(sessionId, waiters)
+          }),
+        ])
+      }
+    },
     async *followAssistantFrames() {},
     async setSandboxMode() {},
     /**
@@ -505,6 +545,8 @@ export function harness() {
     setCapabilities(next: string[]) { capabilities = next },
     /** Publish bytes the fake remote will serve for one attachment id. */
     setRemoteAttachment(attachmentId: string, data: Buffer) { remoteAttachments.set(attachmentId, data) },
+    /** Root of the fixture's local attachment store, for object assertions. */
+    attachmentRoot,
     /** Register local attachment bytes under the object a prompt part carries. */
     setLocalAttachment(ref: unknown, value: { data: Uint8Array; mediaType?: string; name?: string }) {
       localAttachments.set(ref, value)
@@ -523,6 +565,24 @@ export function harness() {
      */
     setRemoteCatalog(next: NonNullable<typeof catalogExtra>) { catalogExtra = next },
     setSnapshot(id: string, snapshot: Snapshot) { snapshots.set(id, snapshot) },
+    /**
+     * Hand one event to a follower connected to that Session's live stream.
+     *
+     * The snapshot is untouched on purpose: a live event must reach the mirror
+     * through `#followStream`, which is the path under test here, and putting it
+     * in the snapshot would let the replay path answer for it instead.
+     * @param sessionId - remote Session the event belongs to.
+     * @param event - event the mirror has not seen yet.
+     */
+    pushEvent(sessionId: string, event: { seq: number; type: string; data?: unknown }): void {
+      const log = liveEvents.get(sessionId) ?? []
+      log.push({ ...event, time: '2026-11-27T00:00:00.000Z' })
+      liveEvents.set(sessionId, log)
+      const waiters = liveWaiters.get(sessionId)
+      if (waiters === undefined) return
+      for (const resolve of [...waiters]) resolve()
+      waiters.clear()
+    },
     /**
      * Run exactly one poll for a mirrored Session and wait for it to settle.
      *
