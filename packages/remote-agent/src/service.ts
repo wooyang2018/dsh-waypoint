@@ -52,6 +52,7 @@ import {
   type RemoteQuestionItem,
   type RemoteQuestionOutcome,
   type RemoteQuestionRequest,
+  type RenameSessionResult,
   type SelectModelRequest,
   type ListWorkspacesResult,
   type RemoteSessionSummary,
@@ -306,6 +307,10 @@ export class RemoteAgentService {
         'session.cancel',
         'session.archive',
         'session.unarchive',
+        // Renaming is advertised on its own rather than paired with anything,
+        // because an agent without it degrades to the pre-fix behaviour — the
+        // local projection keeps the title — instead of refusing the action.
+        'session.rename',
         'approval.follow',
         'approval.answer',
         'question.follow',
@@ -509,6 +514,22 @@ export class RemoteAgentService {
       })
     }
     return { accepted: true }
+  }
+
+  /**
+   * Rename one remote Session through this host's own title service.
+   *
+   * The remote writes `session/title` itself. That event is what the local
+   * mirror replays, so a title set here is the one the remote Web UI shows and
+   * the one that survives the mirror being rebuilt — which is the whole reason
+   * the route exists. See {@link renameForwardedSession} for the error mapping.
+   *
+   * @param sessionId - Session whose title to set.
+   * @param request - the proposed title, already framed by the HTTP layer.
+   * @returns the title this host accepted, after its own normalization.
+   */
+  async renameSession(sessionId: string, request: { readonly title: string }): Promise<RenameSessionResult> {
+    return renameForwardedSession(this.ctx, sessionId, request.title)
   }
 
   /** Select and install the model/reasoning effort for one remote session. */
@@ -1383,6 +1404,77 @@ function translateModelSelectionError(error: unknown, request: SelectModelReques
       model: typeof details.model === 'string' ? details.model : request.model,
     },
   })
+}
+
+/**
+ * Rename a Session on this host, translating the title service's refusal.
+ *
+ * The local plugin forwards a rename instead of writing its own projection, so
+ * this function is where "the remote owns the title" becomes true: it goes
+ * through `sessionController.rename`, which resumes a cold Session first and
+ * then hands the text to `sessionTitle.rename` — the only writer of
+ * `session/title`. Resuming matters: a mirror can be adopted from persistence
+ * and be cold here, and a title service call on a Session that is not resident
+ * would fail with "not live in this store" for a Session that plainly exists.
+ *
+ * Separated from {@link RemoteAgentService.renameSession} so the forwarding and
+ * its two translations can be exercised without booting Cordis.
+ *
+ * @param ctx - host context carrying `sessionController`.
+ * @param sessionId - Session to rename.
+ * @param title - proposed title, unmodified.
+ * @returns the title this host accepted.
+ * @throws RemoteProtocolError for a rejected title or an unknown Session.
+ */
+export async function renameForwardedSession(
+  ctx: Context,
+  sessionId: string,
+  title: string,
+): Promise<RenameSessionResult> {
+  try {
+    const accepted = await ctx.sessionController.rename({ sessionId: sessionId as SessionId, title })
+    return { title: accepted.title }
+  } catch (error) {
+    throw translateRenameError(error, sessionId)
+  }
+}
+
+/**
+ * Translate the controller's rename rejections into protocol codes.
+ *
+ * `sessionController.rename` answers two codes a caller can act on:
+ * `session/title-invalid` when the title service refuses the text, and
+ * `session/not-found` when persistence cannot produce the Session. Both are
+ * reported as themselves, because the local side distinguishes them: the first
+ * is the user's to fix, the second means the mirror is stale. Everything else is
+ * returned untouched so a genuine fault keeps its own reporting path rather than
+ * being mislabelled as a bad title.
+ */
+function translateRenameError(error: unknown, sessionId: string): unknown {
+  const code = remoteErrorCode(error)
+  const message = error instanceof Error && error.message !== ''
+    ? error.message
+    : `failed to rename session "${sessionId}"`
+  if (code === 'session/title-invalid') {
+    return new RemoteProtocolError({ code: 'session/title-invalid', message, details: { sessionId } })
+  }
+  if (code === 'session/not-found') {
+    return new RemoteProtocolError({ code: 'session/not-found', message, details: { sessionId } })
+  }
+  return error
+}
+
+/**
+ * Read the stable `code` off a DSH `RemoteError`.
+ *
+ * The class is not this package's to import: `dsh-typert-protocol` is a peer of
+ * whatever profile composes the controller, and matching on the code is the
+ * same contract `translateModelSelectionError` above relies on.
+ */
+function remoteErrorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined
+  const code = (error as { code?: unknown }).code
+  return typeof code === 'string' ? code : undefined
 }
 
 /**

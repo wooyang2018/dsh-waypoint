@@ -167,6 +167,9 @@ export async function handleAgentRequest(
         case 'session-unarchive':
           sendJson(res, await service.unarchiveSession(route.sessionId))
           return
+        case 'session-rename':
+          sendJson(res, await service.renameSession(route.sessionId, asRenameRequest(body)))
+          return
         case 'approval-answer':
           sendJson(res, asApprovalAnswer(body, service))
           return
@@ -320,6 +323,7 @@ export async function handleAgentRequest(
       case 'session-cancel':
       case 'session-archive':
       case 'session-unarchive':
+      case 'session-rename':
       case 'attachment-read':
       case 'catalog-commands':
       case 'catalog-skills':
@@ -632,6 +636,30 @@ function asSandboxModeRequest(value: unknown): 'read-only' | 'workspace-write' |
     throw new RemoteProtocolError({ code: 'request/invalid', message: 'mode is invalid' })
   }
   return mode
+}
+
+/**
+ * Validate one rename request.
+ *
+ * Only the framing is checked here: the title must be a string with a visible
+ * character. Whether the text is *acceptable* is `sessionTitle`'s decision, and
+ * duplicating its rules would make this agent reject titles its own host would
+ * have stored. A blank title is different — it is not a title at all, and
+ * answering `request/invalid` keeps a caller from blaming the title service for
+ * a request that never had a subject.
+ *
+ * @param value - parsed JSON body.
+ * @returns the proposed title, verbatim.
+ */
+function asRenameRequest(value: unknown): { title: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'body must be a JSON object' })
+  }
+  const title = (value as Record<string, unknown>).title
+  if (typeof title !== 'string' || title.trim() === '') {
+    throw new RemoteProtocolError({ code: 'request/invalid', message: 'title must be a non-empty string' })
+  }
+  return { title }
 }
 
 function asSelectModelRequest(value: unknown): { provider: string; model: string; reasoningEffort?: string } {
