@@ -83,11 +83,13 @@ return { title: accepted.title, seq: accepted.eventSeq }
 `rename` 是 `sessionController` 上的 Remote，由网关按调用解析，所以插桩点就是该实例：
 
 ```ts
-REQUIRED_SESSION_CONTROLLER_METHODS = ['rename'] as const   // 与队列 spec 共用该列表
+REQUIRED_SESSION_CONTROLLER_RENAME_METHODS = ['rename'] as const   // 与队列清单各一份
 ```
 
-（若 `docs/specs/2026-11-27-mirror-queue-mutation.md` 先落地，本 spec 扩展那个列表，
-而不是另起一个平行的。）
+队列 spec 的 `REQUIRED_SESSION_CONTROLLER_QUEUE_METHODS` 是另一份清单。**刻意不合并**：
+每个 installer 只替换一个方法，合并后任一 installer 会因「另一个方法被重命名」而拒绝运行——
+那是一个无症状的绕过，正是 `patch-contract.ts` 要防的。初稿写的是共用一份，实现时改了，
+理由记在 `patch-contract.ts` 的注释里。
 
 ### 6.2 顺序与失败（R1、R2、R3）
 
@@ -245,7 +247,7 @@ sessionController.rename = async (request) => {
 | 0 | 本文档 | 文档自检 |
 | 1 | 协议：`session.rename` 能力、`POST /sessions/:id/rename`、守卫 | `pnpm -F @dsh-waypoint/protocol test` |
 | 2 | 远端 agent：路由 → `ctx.sessionTitle.rename`，错误映射 | `packages/remote-agent/test/agent.test.ts` |
-| 3 | 本地插件：插桩 `rename`，扩展 `REQUIRED_SESSION_CONTROLLER_METHODS` | `remote-rename.test.ts` |
+| 3 | 本地插件：插桩 `rename`，扩展 `REQUIRED_SESSION_CONTROLLER_RENAME_METHODS` | `remote-rename.test.ts` |
 | 4 | 镜像：`#materializeBlankOnce` 中应用草稿标题 | `remote-rename.test.ts` 的草稿用例 |
 | 5 | 文档：`docs/protocol.md` 路由/能力表、`docs/remote-workspace-mechanism.md` §5.7、CHANGELOG 的 Unreleased 条目 | 文档自检 |
 

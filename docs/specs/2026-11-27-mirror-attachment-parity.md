@@ -149,61 +149,75 @@ await this.#syncEventAttachments(runtime.record.hostId, event)   // 在投影之
 
 ### 6.2 配对身份（R3、R4、R5）
 
-配对键变成「远端会回显的文本」**加上**一个附件签名，让两种情形互补而不是互相竞争：
+配对键是「远端会回显的文本」**加上**一个附件签名，外加一层只比种类的退让。签名与种类都从
+`#promptContent` 实际转发出去的内容导出，无需二次读取字节：
+
+- **签名**：非文本部分按序的 `type:mediaType:name`，用于精确识别。
+- **种类**：非文本部分按序的 `type`（`image`/`file`），不含 mediaType 与名字。
 
 ```ts
 interface PendingUser {
   readonly message: unknown
   /** 远端回显回来的文本；纯附件提示词为空。 */
   text: string
-  /**
-   * 已发送部分的稳定签名，好让两条都没有文本的提示词（两张图、两个文件）
-   * 仍然按顺序配对，而不是永远配不上。
-   */
+  /** 已发送部分的稳定签名（type:mediaType:name 按序）。 */
   signature: string
+  /** 已发送部分的种类（image/file 按序），用于签名被重编码打散后的退让。 */
+  shape: string
   localSeq: number
 }
 ```
 
-`signature` 由 `#promptContent` 实际转发出去的内容导出——即其非文本部分按序的
-`type:mediaType:name`，这个信息无需二次读取字节即可获得。示例：
+示例：
 
-| 提示词 | `text` | `signature` |
-|---|---|---|
-| `"hi"` | `hi` | ``（空） |
-| 一张 PNG | `` | `image:image/png:` |
-| 一张名为 `a.png` 的 PNG | `` | `image:image/png:a.png` |
-| `[a.pdf]`（被改写的 `@`） | `[a.pdf]` | `file::a.pdf` |
+| 提示词 | `text` | `signature` | `shape` |
+|---|---|---|---|
+| `"hi"` | `hi` | ``（空） | `` |
+| 一张 PNG | `` | `image:image/png:` | `image` |
+| 一张名为 `a.png` 的 PNG | `` | `image:image/png:a.png` | `image` |
+| `[a.pdf]`（被改写的 `@`） | `[a.pdf]` | `file::a.pdf` | `file` |
 
-匹配变成：
+匹配按三层退让：
+
+1. **文本 + 签名**精确匹配。
+2. 未命中且**文本非空**时，只按文本匹配。
+3. 文本为空时，只按**种类**匹配，且种类必须完全相同（`shape` 为空则不与任何条目匹配）。
 
 ```ts
-const index = runtime.pendingUsers.findIndex(pending =>
-  pending.text === text && pending.signature === signatureOfRemote(data))
+const text = promptTextFromRemote(event.data)
+const signature = promptSignatureFromRemote(event.data)
+const shape = promptShapeFromRemote(event.data)
+const index = pendingUserIndex(runtime.pendingUsers, text, signature, shape)
 ```
 
-远端无需改动：签名是从**回显**的 `user/message` 内容算出的，用的是与转发侧同一个函数，
-所以二者按构造一致。若远端剥离或重命名了某个部分，签名随之不同，该条目便不匹配，
-自然落到今天的追加路径——这是安全的方向（多一个气泡胜过吞掉一条消息）。
+第三层存在的理由是远端在接收时会重新归一化图片，落盘引用里的 mediaType（按 alpha 通道选
+JPEG/WebP）或显示名可能与转发时不同；严格签名会把每个「文本 + 图片」变成重复气泡（违反 R4），
+而纯附件提示词没有文本可退，两层在这里仍会把一张图变成两个气泡。只比种类、且要求种类完全相同，
+所以下面那条「空文本守卫不能简单删掉」的坑依旧被关住（图片不会认领文件）。
+
+远端无需改动：签名与种类都是按**回显**的 `user/message` 内容算出的，用的是与转发侧同一组函数，
+所以二者按构造一致。若远端剥离或重命名了某个部分，三层都没中时自然落到今天的追加路径——
+这是安全的方向（多一个气泡胜过吞掉一条消息）。
 
 **一个要记录下来的坑。** 现在的 `pending.text !== ''` 守卫不只是形状检查；
 它正是防止「空的待处理队列」去匹配一条文本同样为空的远端消息的东西。
-在不引入签名的前提下删掉它，会让每个纯附件消息都匹配到第一个空条目，
+在不引入签名与种类退让的前提下删掉它，会让每个纯附件消息都匹配到第一个空条目，
 不管它携带的是什么——比它要修的重复更糟。§11 记录这一点。
 
-### 6.3 签名在哪里计算
+### 6.3 签名与种类在哪里计算
 
-一个函数，用两次：
+两个函数（签名与种类），各自用两次：
 
 ```ts
 function attachmentSignature(content: readonly unknown[]): string
+function attachmentShape(content: readonly unknown[]): string
 ```
 
 - 转发侧：作用于 `#promptContent` 返回的 `content`（改写之后，因而与回显一致）。
 - 回显侧：作用于远端 `user/message` 的 `(event.data as { content?: unknown }).content`。
 
 由于 `#resolveTextReferences` 会把 `@<path>` 改写成 `[<name>]`，而 `pending.text` 在发送前
-被重新赋值为**转发出去的**文本（`service.ts`），两侧在文本上已经一致；签名把同样的纪律
+被重新赋值为**转发出去的**文本（`service.ts`），两侧在文本上已经一致；签名与种类把同样的纪律
 延伸到各个部分上。
 
 ### 6.4 与「取消」或「被拒」提示词的交互
@@ -237,7 +251,7 @@ function attachmentSignature(content: readonly unknown[]): string
 - 假设远端库保留其自身近期日志所引用的对象。被裁剪的对象降级为占位符而非错误（现有行为）。
 - 假设 `attachment.read` 返回的 base64 在 agent 响应上限之内。
 - 假设 `ImageAttachmentRef`/`FileAttachmentRef` 的 `attachmentId` 保持 `sha256:<64 hex>` 形状。
-- 假设 `tool/result.data.content` 是块数组。形状不同则退化为「找不到部分」，
+- 假设 `tool/result.data.message.content` 是块数组。形状不同则退化为「找不到部分」，
   这对该事件而言就是今天的现行为。
 
 ## 10. 验证
@@ -274,13 +288,13 @@ function attachmentSignature(content: readonly unknown[]): string
   针对的是 12 MiB 的**请求体**，不适用于响应。病态对象是远端库的问题。
 - **`assistant/message` 也被纳入承载集合**，尽管今天没有任何东西产出助手图片引用。
   代价是每个事件一次 `Array.isArray` 检查；替代方案是第三次静默遗漏。
-- **配对键落成三层，而 §6.2 只写了一层。** 先按「文本 + 签名」精确匹配；未命中且文本非空时，
-  退回只按文本匹配；文本为空时退回只按**部件的有序种类**（`image`/`file`，不含 mediaType 与名字）
-  匹配。原因：远端在接收时会重新归一化转发的图片，落盘引用里的 `mediaType`（按 alpha 通道选
-  JPEG/WebP）或显示名可能与转发时不同，严格签名会把每一个「文本 + 图片」提示词都变成重复气泡
-  （违反 R4）——而纯附件提示词受同一个重编码影响，却没有文本可退，初稿的两层在这里仍会把一张图
-  变成两个气泡。第三层只比种类、且要求种类完全相同，所以 §6.2 担心的「空队列认领第一条空消息」
-  依旧被关住（图片不会认领文件），两类情形都有用例钉着。
+- **配对键是三层退让，初稿只写了一层。** §6.2 记录三层：先按「文本 + 签名」精确匹配；未命中且
+  文本非空时，退回只按文本匹配；文本为空时退回只按**部件的有序种类**（`image`/`file`，不含
+  mediaType 与名字）匹配。原因：远端在接收时会重新归一化转发的图片，落盘引用里的 `mediaType`
+  （按 alpha 通道选 JPEG/WebP）或显示名可能与转发时不同，严格签名会把每一个「文本 + 图片」
+  提示词都变成重复气泡（违反 R4）——而纯附件提示词受同一个重编码影响，却没有文本可退。
+  第三层只比种类、且要求种类完全相同，所以 §6.2 担心的「空队列认领第一条空消息」依旧被关住
+  （图片不会认领文件），两类情形都有用例钉着。
 - **只有图片做「已在本地」短路。** 文件对象按内容寻址，但它的可解析引用还多一层按名字的硬链接，
   名字是存储侧净化后的结果，只有存储自己知道——「对象在」不能证明「引用能解析」。所以重放一个
   文件引用仍要一次往返，`saveFile` 本身幂等，不会产生重复状态。R2 列出的每个场景都基于图片，均通过。

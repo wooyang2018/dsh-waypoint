@@ -95,7 +95,8 @@ export class SessionFileReferences extends TypertRemoteService {
 
 验收以 Given/When/Then 形式列在 §10。
 
-- **R1** 镜像会话里的 `@` 返回来自远端 cwd 的候选项。
+- **R1** **已落地**的镜像会话（已有远端会话）里的 `@` 返回来自远端 cwd 的候选项；草稿镜像与失败路径
+  按 §7/§11 委托本地列表。
 - **R2** 每个候选项保持远端 provider 的 `kind`（`file`/`directory`）与路径拼写。
 - **R3** 查询文本原样透传；不增加任何本地排序、过滤或截断。
 - **R4** 结果上限由远端自己的 `maxResults` 决定，不引入新的本地上限。

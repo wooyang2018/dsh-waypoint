@@ -136,7 +136,7 @@ followup(message) {
 所以插桩点就是该实例，沿用 `remote/files.ts` 与 `remote/terminal-controller.ts` 的模式。
 
 ```ts
-REQUIRED_SESSION_CONTROLLER_METHODS = ['updateQueue'] as const   // patch-contract.ts
+REQUIRED_SESSION_CONTROLLER_QUEUE_METHODS = ['updateQueue'] as const   // patch-contract.ts
 ```
 
 ### 6.2 路由与变更
@@ -281,7 +281,7 @@ sessionController.updateQueue = (request) => {
 |---|---|---|
 | 0 | 本文档 | 文档自检 |
 | 1 | 镜像：`runtimeForLocalSession` 访问器 + `applyMirrorQueueMutation`，复用既有投递路径 | `remote-queue.test.ts` |
-| 2 | 本地插件：在 `sessionController` 上插桩 `updateQueue`、`REQUIRED_SESSION_CONTROLLER_METHODS`、`ctx.inject` 块 | `remote-queue.test.ts` |
+| 2 | 本地插件：在 `sessionController` 上插桩 `updateQueue`、`REQUIRED_SESSION_CONTROLLER_QUEUE_METHODS`、`ctx.inject` 块 | `remote-queue.test.ts` |
 | 3 | Testkit：暴露 `updateQueue` 的 `sessionController` 替身 | 既有测试套件转绿 |
 | 4 | 文档：`docs/remote-workspace-mechanism.md` §5.3（门面表格增加一行）、CHANGELOG 的 Unreleased 条目 | 文档自检 |
 

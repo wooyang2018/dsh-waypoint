@@ -32,7 +32,7 @@ import { replaceMethods } from './install.ts'
  *
  * Declared structurally, like every other adapter in this directory: this is an
  * instance patch, so the plugin compiles without the Session-controller
- * package's nominal types, and `REQUIRED_SESSION_CONTROLLER_METHODS` is what
+ * package's nominal types, and `REQUIRED_SESSION_CONTROLLER_QUEUE_METHODS` is what
  * keeps the name honest.
  */
 interface SessionControllerLike {
