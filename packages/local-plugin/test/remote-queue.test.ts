@@ -363,6 +363,31 @@ describe('an edit the native command would refuse', () => {
   })
 })
 
+describe('a queue mutation this build does not know', () => {
+  it('refuses an unknown action kind without touching the queue', async () => {
+    // The contract has three kinds. A newer client could send a fourth; falling
+    // through to the removal branch would silently delete the item instead.
+    const view = await mountedRunning()
+    try {
+      view.agent.send(queuedMessage('item-unknown', 'keep me'))
+      await assert.rejects(
+        view.controller.updateQueue({
+          sessionId: view.sessionId,
+          itemId: 'item-unknown',
+          action: { kind: 'reorder' } as never,
+        }),
+        (error: unknown) => {
+          assert.equal((error as { code?: unknown }).code, 'gateway/bad-request')
+          return true
+        },
+      )
+      assert.equal(view.agent.inbox.nextTurn.length, 1, 'the item is still queued')
+    } finally {
+      await view.dispose()
+    }
+  })
+})
+
 describe('a queue item the flush already took', () => {
   it('answers not-found rather than editing anything', async () => {
     const view = await mountedRunning()

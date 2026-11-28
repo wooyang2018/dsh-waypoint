@@ -2149,6 +2149,13 @@ export class RemoteMirrorService {
     request: MirrorQueueMutationRequest,
   ): MirrorQueueMutationValue {
     const { action } = request
+    // The contract defines three kinds. A caller that sends another one is
+    // refused here rather than falling through to the removal branch below,
+    // where a future variant would silently delete the user's queued message.
+    const kind = (action as { readonly kind?: unknown }).kind
+    if (kind !== 'edit' && kind !== 'remove' && kind !== 'steer') {
+      throw queueMutationError('gateway/bad-request', `queue action ${String(kind)} is not supported`, {})
+    }
     // Both native refusals run before the inbox is touched, so a refused edit
     // leaves the queue exactly as the user found it.
     if (action.kind === 'edit') {
@@ -2198,6 +2205,7 @@ export class RemoteMirrorService {
       })
       return { accepted: true }
     }
+    // The kind guard at the top leaves exactly `remove` here.
     inbox.remove(request.itemId)
     // The native command retires the receipts this occurrence bound, and only
     // here: a removed message never becomes `user/message`, so the observer that
