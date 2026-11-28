@@ -14,6 +14,7 @@ import { Config, resolveConfig, type Config as LocalConfig } from './config.ts'
 import { registerHostApi } from './host-api/handler.ts'
 import { RemoteMirrorService } from './mirror/service.ts'
 import { installRemoteSessionArchive, checkArchiveContract } from './remote/archive.ts'
+import { installRemoteSessionRename, checkRenameContract } from './remote/rename.ts'
 import { installRemoteWorkspaceFiles } from './remote/files.ts'
 import { installRemoteConfine } from './remote/sandbox.ts'
 import { installRemoteSandboxPolicy } from './remote/sandbox-policy.ts'
@@ -246,6 +247,23 @@ export async function apply(ctx: Context, config: LocalConfig = {}): Promise<voi
     }
     return installRemoteSessionArchive(ctx, mirrors)
   }, 'dsh-waypoint: remote session archive')
+
+  // Renaming a mirrored Session must reach the Session that owns the title. The
+  // interposer replaces the controller's own `rename`, because that is the method
+  // the sidebar's rename action resolves through and no client adapter can see
+  // that resolution. The order — remote first, local never — is the archive
+  // interposer's mirror image, and its header says why.
+  ctx.inject(['sessionController'], child => {
+    child.effect(() => {
+      const controller = child.get('sessionController')
+      if (controller !== undefined && !checkRenameContract(controller).active) {
+        ctx.logger.warn(
+          'dsh-waypoint: mirrored Session renaming is inactive; local renames will not reach the remote host',
+        )
+      }
+      return installRemoteSessionRename(child, mirrors)
+    }, 'dsh-waypoint: remote session rename')
+  })
 
   ctx.logger.info(
     'dsh-waypoint: %d host(s), state in %s',

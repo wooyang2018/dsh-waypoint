@@ -157,6 +157,60 @@ function session(id: string, meta: Record<string, unknown>, seed: Snapshot['even
 }
 
 export const pollMs = 40
+
+/**
+ * Supply a `sessionController` whose `rename` behaves like the Host's own.
+ *
+ * Kept out of {@link harness} so a suite opts in: the controller is the service
+ * the rename interposer replaces, and providing one for every suite would make
+ * the interposer installed by `apply()` patch a double nothing asked for.
+ *
+ * The body copies the shipped controller's contract — normalize, refuse an empty
+ * title with a `session/title-invalid` Remote failure, append `session/title`,
+ * return the accepted title and the event's seq — because the point of these
+ * cases is that the rename reaches this seam and stops there when the Session is
+ * a mirror. Matching the real failure by `code` and `isDSHRemoteError` rather
+ * than by class mirrors how the Gateway identifies one across realms.
+ *
+ * @param ctx - context the fake controller is provided on.
+ * @returns the controller the interposer patches, and the calls the *stock*
+ * implementation received so a case can prove it did not fall through.
+ */
+export function provideSessionController(ctx: Context) {
+  /** Renames that reached the stock implementation. */
+  const calls: Array<{ readonly sessionId: string; readonly title: string }> = []
+  const store = ctx.get('sessions') as unknown as {
+    get(id: string): { seq: number; append(type: string, data: unknown): number } | undefined
+  }
+  const controller = {
+    async rename(request: { sessionId: string; title: string }) {
+      calls.push({ sessionId: request.sessionId, title: request.title })
+      const title = request.title.replace(/\s+/gu, ' ').trim()
+      if (title === '') {
+        throw Object.assign(new Error('session title must contain visible characters'), {
+          name: 'RemoteError',
+          isDSHRemoteError: true as const,
+          code: 'session/title-invalid',
+          details: { sessionId: request.sessionId },
+        })
+      }
+      const session = store.get(request.sessionId)
+      if (session === undefined) {
+        throw Object.assign(new Error(`session "${request.sessionId}" is not live in this store`), {
+          name: 'RemoteError',
+          isDSHRemoteError: true as const,
+          code: 'session/not-found',
+          details: { sessionId: request.sessionId },
+        })
+      }
+      const seq = session.append('session/title', { title, messageSeqs: [], source: { kind: 'user' } })
+      return { title, seq }
+    },
+  }
+  ctx.provide('sessionController', controller as never)
+  return { controller, calls }
+}
+
 export function harness() {
   const stateDir = mkdtempSync(join(tmpdir(), 'dsh-waypoint-mirror-subagents-'))
   tempDirs.push(stateDir)
@@ -190,7 +244,7 @@ export function harness() {
    */
   let capabilities: string[] = [
     'health', 'host.info', 'session.list', 'session.snapshot', 'session.follow',
-    'session.prompt', 'session.cancel', 'session.archive', 'file.read',
+    'session.prompt', 'session.cancel', 'session.archive', 'session.rename', 'file.read',
     'llm.catalog', 'session.file-attachment', 'attachment.read',
     // The question bridge is optional, so the mirror only starts its stream
     // behind this check; a fixture that answered `false` would silently skip the
@@ -229,6 +283,24 @@ export function harness() {
   const cancelled: string[] = []
   const remoteArchived: string[] = []
   const warnings: string[] = []
+  /**
+   * Remote renames the plugin forwarded, in order.
+   *
+   * Recorded separately from `capabilities` so a case can prove both that a
+   * rename reached the host and that the text it carried is the text the user
+   * typed rather than one this side normalized.
+   */
+  const renames: Array<{ hostId: string; sessionId: string; title: string }> = []
+  /**
+   * Interleaved plugin activity, so ordering between calls is observable.
+   *
+   * The draft case depends on the title being applied after the remote Session
+   * exists and before the first prompt is forwarded; two independent recorders
+   * could not tell that order.
+   */
+  const order: string[] = []
+  /** When set, a forwarded rename fails so the remote-first path is observable. */
+  let failRename: Error | undefined
   let workspaceSeq = 0
 
   const store = {
@@ -422,6 +494,19 @@ export function harness() {
       return { sessionId: id, ...preset === undefined ? {} : { agentPreset: preset } }
     },
     async archiveSession(_host: string, sessionId: string) { remoteArchived.push(sessionId) },
+    /**
+     * Forward one rename to the fake remote Session.
+     *
+     * Returns the text with its surrounding whitespace trimmed, standing in for
+     * the remote title service's normalization: a caller that echoed its own
+     * request instead of this value would be observable as a mismatch.
+     */
+    async renameSession(_host: string, sessionId: string, title: string) {
+      if (failRename !== undefined) throw failRename
+      renames.push({ hostId: host.id, sessionId, title })
+      order.push(`rename:${sessionId}`)
+      return { title: title.trim() }
+    },
     async modelCatalog(_host: string) {
       catalogCalls += 1
       if (catalogDisabled) return { default: { provider: 'remote-provider', model: 'remote-model' }, routableProviders: [], groups: [], failures: [] }
@@ -460,6 +545,7 @@ export function harness() {
         ...selection === undefined ? {} : { selection },
         ...content === undefined ? {} : { content },
       })
+      order.push(`prompt:${sessionId}`)
       return { accepted: true }
     },
   } as unknown as RemoteHostsService
@@ -491,8 +577,11 @@ export function harness() {
     archivedSessionIds,
     cancelled,
     remoteArchived,
+    renames,
+    order,
     warnings,
     debugLines,
+    setFailRename(value: Error | undefined) { failRename = value },
     setRemote(next: Summary[]) { remote = next },
     setFailPrompt(value: boolean) { failPrompt = value },
     setRejectSelection(value: { provider: string; model: string } | undefined) { rejectSelection = value },

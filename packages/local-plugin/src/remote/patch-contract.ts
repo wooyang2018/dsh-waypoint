@@ -135,6 +135,17 @@ export const REQUIRED_WORKING_DIRECTORY_METHODS = ['ensure', 'get', 'set'] as co
  */
 export const REQUIRED_FILE_REFERENCE_METHODS = ['list'] as const
 
+/**
+ * The `sessionController` methods the rename interposer replaces.
+ *
+ * `rename` is the sidebar's rename seam: the action resolves through the
+ * controller, so replacing the instance method is what lets a mirrored Session
+ * write its title where the Session actually lives. A Host that renames this
+ * method must leave the plugin renaming locally only, rather than failing the
+ * action or writing half a round trip.
+ */
+export const REQUIRED_SESSION_CONTROLLER_METHODS = ['rename'] as const
+
 /** One expected method the service did not offer. */
 export interface MissingPatchMethod {
   readonly method: string
