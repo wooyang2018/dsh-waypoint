@@ -32,8 +32,14 @@
   `subagents.prompt`/`interruptByUser`, `messageFeedback` writes and `session.fork` are refused with a
   `mirror/unsupported` error carrying a localizable reason, live tool results end their stream instead
   of waiting on a process that is not here, and pinning stays local on purpose. Reads that were already
-  correct — `goals.get`, todos, permission presets, plan mode, agent preset, model — are untouched, and
-  an agent that predates a route keeps the previous behaviour instead of half-forwarding.
+  correct — `goals.get`, todos, permission presets, plan mode, agent preset, model — are untouched. An
+  agent that predates a route is refused exactly like a disconnected host — a write reports that the
+  operation happened nowhere, a read reports the failure instead of an empty roster — because falling
+  back to the local implementation is the silent divergence this classification exists to remove. The
+  table is per *operation* (`goals/create`, `job/kill`, `session/fork`, …), not per namespace: a
+  namespace-level `forward` would adopt every operation a later release adds, which is how a future
+  `job/restart` would start acting on another machine's processes. Anything unclassified is reported
+  at startup rather than guessed.
 
 - **Renaming a mirrored Session now renames its remote Session.** The rename only ever wrote
   `session/title` into the local projection, so the remote Web UI kept the old name and the new one
@@ -55,7 +61,9 @@
   an item also releases the staged uploads it bound (`fileUploads.retirePrompt`, keyed by the message's
   `rpcId`), as the native command does: a removed message never becomes a `user/message`, so nothing
   else would ever retire them, and every image or file it carried stayed staged for good. A promotion
-  to steer keeps them, because that message is about to be sent.
+  to steer keeps them, because that message is about to be sent. A message queued on a draft moves onto
+  the Agent the `turn/end` flush reads when the first prompt materializes the Session: the draft and its
+  materialized counterpart are different objects with separate inboxes over the same Session.
 
 - **A mirrored Session now shows the images its remote tool results carry, and an attachment-only
   prompt no longer becomes two bubbles.** Reverse attachment synchronization was gated on

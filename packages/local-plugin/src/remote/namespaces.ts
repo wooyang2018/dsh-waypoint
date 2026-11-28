@@ -33,7 +33,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { RemoteMirrorService } from '../mirror/service.ts'
 import { replaceMethods } from './install.ts'
-import { mirrorRefusal, remoteNamespaceInventory, unclassifiedNamespaces } from './namespace-policy.ts'
+import { mirrorRefusal, remoteNamespaceInventory, unclassifiedNamespaces, uncoveredEndpoints } from './namespace-policy.ts'
 import {
   checkPatchContract,
   REQUIRED_AGENT_TEAM_METHODS,
@@ -147,9 +147,9 @@ export function installMirroredGoals(ctx: Context, mirrors: RemoteMirrorService)
   /**
    * Forward one mutation, or run the stock implementation.
    *
-   * `undefined` from the mirror means "not a mirror, or an agent too old to serve
-   * the route", which is the only case that delegates. A disconnected host and a
-   * remote refusal both throw, so nothing is written here on the way out.
+   * `undefined` from the mirror means "not a mirror", which is the only case that
+   * delegates. A disconnected host, a remote refusal and an agent too old to serve
+   * the route all throw, so nothing is written here on the way out.
    */
   const forward = async (
     agent: unknown,
@@ -509,10 +509,25 @@ export function reportUnclassifiedNamespaces(ctx: Context): void {
   const descriptors = typert?.local?.list?.()
   if (descriptors === undefined) return
   const names = unclassifiedNamespaces(remoteNamespaceInventory(descriptors, { agentAddressed: true }))
-  if (names.length === 0) return
-  ctx.logger.warn(
-    'dsh-waypoint: these Agent-addressed Remote namespaces have no mirrored-Session policy, so a '
-      + 'mirrored Session keeps using the local implementation for them: %s',
-    names.join(', '),
-  )
+  if (names.length > 0) {
+    ctx.logger.warn(
+      'dsh-waypoint: these Agent-addressed Remote namespaces have no mirrored-Session policy, so a '
+        + 'mirrored Session keeps using the local implementation for them: %s',
+      names.join(', '),
+    )
+  }
+  // The second half of the coverage check, and the one a namespace-level default
+  // could not express: an operation added to a namespace this plugin *adapts* has
+  // no policy at all. It is reported rather than guessed, because inheriting the
+  // namespace's forward is exactly how a future `job/restart` would start acting
+  // on another machine's processes.
+  const uncovered = uncoveredEndpoints(remoteNamespaceInventory(descriptors))
+  if (uncovered.length > 0) {
+    ctx.logger.warn(
+      'dsh-waypoint: these Remote operations on namespaces this plugin adapts have no '
+        + 'mirrored-Session policy; a mirrored Session falls through to the local implementation for '
+        + 'them: %s',
+      uncovered.join(', '),
+    )
+  }
 }

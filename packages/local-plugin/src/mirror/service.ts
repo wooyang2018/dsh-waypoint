@@ -47,6 +47,7 @@ import type {
 import { resolveDshHome, type ResolvedConfig } from '../config.ts'
 import { LocalError } from '../errors.ts'
 import { syncRemoteAttachment } from '../remote/attachments.ts'
+import { outdatedAgent } from '../remote/namespace-policy.ts'
 import { singleFlight } from './inflight.ts'
 import { isTestHidden, loadTestVisibility, type TestVisibility } from './test-visibility.ts'
 import { abandonedTurnEnd } from './recovery.ts'
@@ -594,6 +595,27 @@ function queueMutationError(code: string, message: string, details: Record<strin
     details,
     isDSHRemoteError: true as const,
   })
+}
+
+/**
+ * Move one mirror's queued messages onto another Agent's queue.
+ *
+ * A draft mirror and its materialized counterpart are different Agent objects with
+ * separate `MirrorInbox` instances over the same Session, so a message queued
+ * before the first prompt lives in the one the flush will never read. Moving the
+ * items across — in order, oldest first, through the inbox API so the splice is
+ * announced — is what keeps "edit a queued message" true across materialization.
+ *
+ * @param from - the draft Agent's inbox, drained.
+ * @param to - the runtime Agent's inbox, which the flush reads.
+ */
+function migrateMirrorInbox(from: MirrorInbox, to: MirrorInbox): void {
+  const nextTurn = [...from.nextTurn]
+  const nextStep = [...from.nextStep]
+  if (nextTurn.length === 0 && nextStep.length === 0) return
+  from.clear()
+  if (nextTurn.length > 0) to.splice('next-turn', to.nextTurn.length, 0, nextTurn)
+  if (nextStep.length > 0) to.splice('next-step', to.nextStep.length, 0, nextStep)
 }
 
 function createMirrorInbox(session: Session): MirrorInbox {
@@ -2951,6 +2973,12 @@ export class RemoteMirrorService {
     const runtime = this.#runtimes.get(record.localSessionId)
     if (runtime === undefined) throw new Error('remote mirror Agent is unavailable')
     this.#pendingBlanks.delete(pending.localSessionId)
+    // A draft's queue belongs to the Agent the Host has registered for it — the
+    // lazy façade — while the `turn/end` flush reads the *runtime's* Agent, which
+    // only exists from here on. Anything queued (or edited) before the first
+    // prompt therefore has to move with the Session, or the flush would look at an
+    // empty queue and the message the user left would never be sent.
+    migrateMirrorInbox(pending.agent.inbox, runtime.agent.inbox)
     // The draft may have been renamed before the remote Session existed, which
     // the interposer correctly wrote locally. The remote Session exists now and
     // the first prompt is about to be forwarded, so this is the one moment the
@@ -3602,29 +3630,28 @@ export class RemoteMirrorService {
    * projection — so `goals.get` keeps working unchanged.
    *
    * Three answers, deliberately distinct:
-   * - `undefined` — this is not a mirrored Session, or its agent predates the
-   *   route. The caller keeps today's local behaviour (the design's R6), which is
-   *   wrong but visible, and an upgrade fixes it.
+   * - `undefined` — this is not a mirrored Session, so there is nothing remote to
+   *   reach and the caller's own implementation is the correct one.
    * - a result — the remote committed the change; the value is the remote's own
    *   view.
-   * - a throw — the host is not connected, or the remote refused. Nothing was
-   *   written locally, and the operation reports failure. There is deliberately no
-   *   fallback to a local write, because that is exactly the silent divergence
-   *   this exists to remove.
+   * - a throw — the host is not connected, its agent predates the route, or the
+   *   remote refused. Nothing was written locally, and the operation reports
+   *   failure. An older agent is *not* a delegation case: the local write it used
+   *   to fall back to is the banner-that-never-left the design exists to remove,
+   *   so it gets the same answer a disconnected host does.
    * @param localSessionId - the mirrored Session the operation was addressed to.
    * @param request - operation and its fields.
-   * @returns the remote's answer, or undefined when the caller should delegate.
+   * @returns the remote's answer, or undefined for a Session that is not mirrored.
    */
   async forwardGoal(localSessionId: string, request: RemoteGoalRequest): Promise<RemoteGoalResult | undefined> {
     const mirror = this.mirrorFor(localSessionId)
     if (mirror === undefined) return undefined
     const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
     if (!this.#hosts.supportsAgent(hostId, 'session.goals')) {
-      this.#ctx.logger.debug(
-        'dsh-waypoint: agent for %s cannot forward goal operations; keeping the local goal',
-        hostId,
-      )
-      return undefined
+      // An older agent is not an invitation to write the goal here: the local
+      // banner would be exactly the divergence this method exists to end. The
+      // operation did not happen, and that is what it reports.
+      throw outdatedAgent('goal operation', hostId, localSessionId)
     }
     // A draft has no remote Session until something is sent. Creating it here is
     // the same act as the draft's first prompt — the user's `/goal` is equally a
@@ -3655,18 +3682,16 @@ export class RemoteMirrorService {
    * previous state, which is the worst possible pair.
    * @param localSessionId - the mirrored Session the toggle was used on.
    * @param enabled - requested mode.
-   * @returns the applied mode, or undefined when the caller should delegate.
+   * @returns the applied mode, or undefined for a Session that is not mirrored.
    */
   async forwardTeamMode(localSessionId: string, enabled: boolean): Promise<boolean | undefined> {
     const mirror = this.mirrorFor(localSessionId)
     if (mirror === undefined) return undefined
     const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
     if (!this.#hosts.supportsAgent(hostId, 'session.team')) {
-      this.#ctx.logger.debug(
-        'dsh-waypoint: agent for %s cannot forward Team mode; keeping the local selection',
-        hostId,
-      )
-      return undefined
+      // Same rule as goals: toggling the banner locally would leave the remote's
+      // own Team machinery on its previous setting, which is the worst pair.
+      throw outdatedAgent('Team mode', hostId, localSessionId)
     }
     const remoteSessionId = mirror.remoteSessionId === ''
       ? await this.remoteSessionForCommand(localSessionId)
@@ -3683,7 +3708,7 @@ export class RemoteMirrorService {
    * watching a long build is exactly the one who looks.
    * @param localSessionId - the mirrored Session whose jobs to list.
    * @param signal - consumer cancellation, forwarded to the remote stream.
-   * @returns the remote frames, or undefined when the caller should delegate.
+   * @returns the remote frames, or undefined for a Session that is not mirrored.
    */
   forwardJobs(localSessionId: string, signal: AbortSignal): AsyncIterable<RemoteJobListFrame> | undefined {
     const mirror = this.mirrorFor(localSessionId)
@@ -3692,11 +3717,12 @@ export class RemoteMirrorService {
     if (mirror === undefined || mirror.remoteSessionId === '') return undefined
     const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
     if (!this.#hosts.supportsAgent(hostId, 'session.jobs')) {
-      this.#ctx.logger.debug(
-        'dsh-waypoint: agent for %s cannot forward the job roster; the local list stays empty',
-        hostId,
-      )
-      return undefined
+      // A local roster would be empty, and an empty roster asserts "nothing is
+      // running on this machine" — a false statement about the remote that the
+      // person watching a long build is most likely to act on. The failure is
+      // delivered through the stream because that is how this method reports:
+      // returning it as a rejected *iteration* keeps the wire shape unchanged.
+      return this.#failingStream(outdatedAgent('job roster', hostId, localSessionId))
     }
     const remoteSessionId = mirror.remoteSessionId
     return this.#followRemoteJobs(hostId, remoteSessionId, signal)
@@ -3711,7 +3737,7 @@ export class RemoteMirrorService {
    * @param jobId - remote registry id, as the forwarded roster reported it.
    * @param from - absolute byte offset to resume from.
    * @param signal - consumer cancellation.
-   * @returns the remote frames, or undefined when the caller should delegate.
+   * @returns the remote frames, or undefined for a Session that is not mirrored.
    */
   forwardJobOutput(
     localSessionId: string,
@@ -3722,9 +3748,24 @@ export class RemoteMirrorService {
     const mirror = this.mirrorFor(localSessionId)
     if (mirror === undefined || mirror.remoteSessionId === '') return undefined
     const hostId = this.#requireConnectedHost(localSessionId, mirror.hostId)
-    if (!this.#hosts.supportsAgent(hostId, 'session.jobs')) return undefined
+    if (!this.#hosts.supportsAgent(hostId, 'session.jobs')) {
+      return this.#failingStream(outdatedAgent('job output', hostId, localSessionId))
+    }
     const remoteSessionId = mirror.remoteSessionId
     return this.#followRemoteJobOutput(hostId, remoteSessionId, jobId, from, signal)
+  }
+
+  /**
+   * A stream whose only outcome is a failure.
+   *
+   * The two job reads are Remote *stream* methods, so they cannot report by
+   * throwing: the caller receives an iterable and learns what happened when it
+   * starts consuming. Throwing on the first `next()` is therefore the same
+   * failure a broken SSE stream produces, and it keeps the wire shape intact.
+   * @param error - the failure to raise when the consumer asks for a frame.
+   */
+  async *#failingStream<T>(error: Error): AsyncGenerator<T> {
+    throw error
   }
 
   /** One host's roster stream, as the async iterable a Remote stream method returns. */

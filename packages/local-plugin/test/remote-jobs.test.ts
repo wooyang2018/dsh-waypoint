@@ -10,8 +10,10 @@ import { mirroredNamespaceFixture, REMOTE_JOB_VIEW } from './mirrored-namespace-
  * This is the read where a refusal is clearly worse than forwarding: an empty
  * roster and "nothing is running" are the same picture, and the person watching a
  * long build is exactly the one who opens it. The cases below therefore separate
- * three answers that used to be one: the remote's roster, a visible failure, and
- * (only for an agent that predates the route) the old local list.
+ * the two answers a roster can have: the remote's own, and a visible failure. An
+ * agent that predates the route gets the failure, never the old local list — a
+ * local roster is empty, and empty asserts "nothing is running" about a machine
+ * this side has not asked.
  */
 
 /** Consume a stream to its end. */
@@ -122,13 +124,24 @@ describe('mirrored Session jobs', () => {
     }
   })
 
-  it('keeps the empty local roster for an agent that predates the route', async () => {
+  it('fails instead of answering an old agent with an empty roster', async () => {
+    // An empty roster and "nothing is running" are the same picture. For a Session
+    // that is a mirror, the local registry has never heard of the remote's jobs, so
+    // its list is not a fallback — it is a false statement, and the person watching
+    // a long build is exactly who would act on it.
     const f = await mirroredNamespaceFixture()
     f.setForwardingEnabled(false)
     try {
-      await drain(f.services.jobs.list({ sessionId: f.localSessionId }, new AbortController().signal))
+      await assert.rejects(
+        () => drain(f.services.jobs.list({ sessionId: f.localSessionId }, new AbortController().signal)),
+        (error: unknown) => {
+          assert.equal((error as { code?: string }).code, 'mirror/unsupported')
+          assert.match((error as Error).message, /predates this route/)
+          return true
+        },
+      )
       assert.deepEqual(f.calls.jobs, [], 'an old agent is not asked')
-      assert.equal(f.services.jobs.listCalls, 1, 'the local registry answers, which is the previous behaviour')
+      assert.equal(f.services.jobs.listCalls, 0, 'and the local registry is not asked either')
     } finally {
       await f.teardown()
     }
