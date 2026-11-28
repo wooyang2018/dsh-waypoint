@@ -336,6 +336,12 @@ stock behaviour, which is what makes a new namespace an omission rather than a d
 | `workspace/pinSession`, `workspace/unpinSession` | local view | Pin order is a sidebar preference of the machine the user sits at; the remote user keeps their own set (§6.7) |
 | `session` (except `fork`) | delegate | The mirror's own transport: prompts, cancel, and rename already have their paths |
 | `terminal`, `workspaceFiles`, `fileReferences`, `skills`, `directoryPicker` | delegate | Adapted elsewhere (§6.1, §6.2, §6.6) or local by nature |
+| `commands` | delegate | Forwarded by `remote/catalog.ts`, which replaces `list` and `execute` itself |
+| `fileUploads` | delegate | The mirror forwards a prompt's *bytes* and lets the remote mint its own receipt, so a local upload is the right local answer |
+| `userQuestions` | delegate | Questions reach the local card through the mirror's own host-API route; a local `answer` would resolve a wait this process does not hold |
+| `actionCards` | delegate | A card action dispatches into the Agent that produced the card; the façade has no handler, so a click fails loudly |
+| `agentPresets` | delegate | Known gap: on a draft it chooses the preset the remote Session is created with, so it must stay local; on a materialized mirror it changes this side only |
+| `dynamicCordisRunner`, `sessionReferenceResolver`, `pluginRecommendations` | delegate | Agent-scoped reads and inspector actions on *this* Host's own composition; none of them carries Session state |
 | `schedule` | delegate | Deliberately not adapted: `remote.schedule.*` is host-global rather than Session-addressed (§6.5) |
 
 Two properties of this table are load-bearing and both are tested:
@@ -352,9 +358,12 @@ Two properties of this table are load-bearing and both are tested:
   classification exists to remove.
 
 The runtime half of the classification is a warn line: `reportUnclassifiedNamespaces` reads this Host's
-live `typert` registry and names any Remote namespace the table has never seen, so a DSH upgrade that
-grows the surface announces itself instead of defaulting to "local". The test half pins the release's
-inventory (`HOST_REMOTE_NAMESPACES`) and fails when a name appears there without a policy.
+live `typert` registry, keeps the descriptors whose receiver is an Agent, and names any namespace the
+table has never seen — so an Agent-addressed surface that appears in a later release announces itself
+instead of defaulting to "local". Session-addressed and Client-only namespaces are not reported: they
+cannot reach a mirror through the façade, and listing them would bury the one line that matters. The
+test half pins the release's Agent-addressed inventory (`HOST_REMOTE_NAMESPACES`, derived from
+`scope.context === 'agent'`) and fails when a name appears there without a policy.
 
 ### 5.4 Downward: prompts, model, cancel
 
@@ -1389,6 +1398,7 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | Live tool values are unavailable in a mirrored Session's inspector | They exist only in the memory of the process that ran the tool; the stream ends rather than waiting on something it cannot fill (5.3) |
 | `schedule` is not mirrored | `remote.schedule.*` is one host-global registry, not Session state; mirroring the catalog and its `schedule/changed` stream is a feature of its own (5.3, 6.5) |
 | A remote job's `spillPaths` name files on the remote host | The roster frame is the remote's own projection, forwarded unchanged; a local reader cannot open those paths (5.3) |
+| A preset selected on a materialized mirrored Session applies locally only | The remote's preset was fixed when its Session was created, and on a draft the local selection is what the remote is created with, so this one stays local by design (5.3) |
 
 ## 10. Where to start when you want to change something
 
