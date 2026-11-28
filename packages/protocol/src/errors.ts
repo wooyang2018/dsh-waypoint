@@ -23,6 +23,16 @@ export const PROTOCOL_ERROR_CODES = [
   'session/not-found',
   'session/not-live',
   'session/model-unavailable',
+  /**
+   * The remote refused a title.
+   *
+   * Its own code rather than `request/invalid` because the two are not the same
+   * failure: a malformed body is this plugin's bug, while a rejected title is
+   * DSH's own rule (`session-title`'s normalization) answering a human's input.
+   * A caller that collapsed them would tell the user their rename was malformed
+   * when the host simply will not store that text.
+   */
+  'session/title-invalid',
   'agent/not-ready',
   'workspace-file/not-found',
   'workspace-file/not-regular-file',
@@ -62,6 +72,7 @@ export function httpStatusForCode(code: ProtocolErrorCode): number {
       return 403
     case 'request/invalid':
     case 'session/model-unavailable':
+    case 'session/title-invalid':
     case 'git/rejected':
       return 400
     case 'request/too-large':

@@ -26,6 +26,18 @@ export type AgentCapability =
   | 'session.cancel'
   | 'session.archive'
   | 'session.unarchive'
+  /**
+   * The agent serves `/sessions/:id/rename`, which writes the remote
+   * `session/title`.
+   *
+   * Its own capability, and not part of a pair like archive/unarchive, because
+   * the fallback is the pre-fix behaviour rather than a refusal: an agent that
+   * predates this keeps renaming the local projection only. That is a smaller
+   * harm than failing the rename outright, and it is not the archive trap — a
+   * one-way archive can strand a Session, while a title that stays local is
+   * merely forgotten when the mirror is rebuilt.
+   */
+  | 'session.rename'
   | 'approval.follow'
   | 'approval.answer'
   | 'question.follow'
@@ -509,6 +521,24 @@ export interface PromptSessionRequest {
 /** Accepted prompt/cancel receipt. */
 export interface AcceptedResult {
   readonly accepted: true
+}
+
+/**
+ * Title one remote Session accepted for a rename.
+ *
+ * Carries the title as the *remote* normalized it, because that is the text the
+ * remote logs and therefore the text the mirror will replay. Returning it lets a
+ * caller show the accepted label immediately instead of waiting a poll interval
+ * for the event — and without inventing a title the remote never stored, which
+ * is what returning the caller's own string would do as soon as the two differ
+ * (a whitespace-collapsed or truncated title).
+ *
+ * The durable event position is deliberately absent: the remote's seq numbers a
+ * different log, so the caller reports its own head instead.
+ */
+export interface RenameSessionResult {
+  /** Accepted title, normalized by the remote Session's title service. */
+  readonly title: string
 }
 
 /** Options accepted by `session.snapshot`. */

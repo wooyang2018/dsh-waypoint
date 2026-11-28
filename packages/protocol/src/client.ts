@@ -17,6 +17,7 @@ import {
   sessionArchivePath,
   sessionEventsPath,
   sessionModelPath,
+  sessionRenamePath,
   sessionSandboxModePath,
   sessionPath,
   sessionPromptPath,
@@ -60,6 +61,7 @@ import type {
   SelectModelRequest,
   SetSandboxModeRequest,
   RemoteWorkspace,
+  RenameSessionResult,
   SessionSnapshot,
   SessionSnapshotOptions,
   SessionStreamFrame,
@@ -96,6 +98,7 @@ import {
   isAcceptedResult,
   isRemoteApprovalFrame,
   isRemoteQuestionFrame,
+  isRenameSessionResult,
   isApiFailure,
   isCreateSessionResult,
   isHostInfoValue,
@@ -287,6 +290,33 @@ export class RemoteAgentClient {
     await this.#request(sessionUnarchivePath(sessionId), isAcceptedResult, {
       method: 'POST',
       body: {},
+    })
+  }
+
+  /**
+   * Rename a remote Session, which writes its `session/title`.
+   *
+   * A blank title is refused here rather than at the far end. The remote would
+   * reject it too, but only after a round trip, and a caller that forks the
+   * request per keystroke would pay that cost on input the remote can never
+   * accept. DSH's own title service owns the substantive rules — it normalizes
+   * whitespace and truncates to its byte budget — so this is a framing check,
+   * not a second copy of them.
+   *
+   * @param sessionId - remote Session to rename.
+   * @param title - proposed title; must contain a non-whitespace character.
+   * @returns the title the remote accepted, after its own normalization.
+   */
+  async renameSession(sessionId: string, title: string): Promise<RenameSessionResult> {
+    if (title.trim() === '') {
+      throw new RemoteProtocolError({
+        code: 'request/invalid',
+        message: 'title must contain a non-whitespace character',
+      })
+    }
+    return this.#request(sessionRenamePath(sessionId), isRenameSessionResult, {
+      method: 'POST',
+      body: { title },
     })
   }
 
