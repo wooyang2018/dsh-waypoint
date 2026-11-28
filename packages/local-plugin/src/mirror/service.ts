@@ -3929,6 +3929,12 @@ export class RemoteMirrorService {
 
   #schedule(runtime: MirrorRuntime): void {
     if (runtime.stopped || this.#disposed) return
+    // One timer per runtime, not one per reason to wait. A prompt schedules a
+    // poll and so does the end of every poll; without this the earlier handle
+    // is orphaned — invisible while the process runs, but `dispose` clears only
+    // the last one, so an orphan outlives the mirror and keeps the process alive
+    // for a whole poll interval after the work is done.
+    if (runtime.timer !== undefined) clearTimeout(runtime.timer)
     runtime.timer = setTimeout(() => { void this.#poll(runtime) }, Math.max(500, this.#config.mirrorPollMs))
   }
 
