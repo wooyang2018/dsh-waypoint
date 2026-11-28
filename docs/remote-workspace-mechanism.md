@@ -302,6 +302,60 @@ joins an `agentPresets` generation. Everything the Web surface mounts per Agent 
 `command-compact`, `plan-mode`, `skill-filesystem` — is therefore registered into scoped layers this
 Agent's scope chain does not reach, which is what §6.6 exists to fill.
 
+#### Which Remote namespaces a mirrored Session may use
+
+Registering the façade in the local `agents` registry has a consequence that is easy to miss: **every
+`Agent`-addressed Remote service in this Host accepts it**, and `agents.get(id) === agent` is true, so
+each service's own `assertLive`-style guard passes. The service then reads and writes *this* machine's
+state for a conversation that runs elsewhere. There are three possible outcomes, and only the first is
+tolerable:
+
+- the read is right, because the fact arrived in the replayed event log (todos, permission presets,
+  plan mode, agent preset, model selection, `goals.get`);
+- the read is wrong or empty, because the fact exists only in the remote process (the job roster, Team
+  state, Schedule);
+- the write **succeeds locally and never reaches the remote** — a data-loss trap, because the local
+  state is not merely lost at the next rebuild, it is wrong right now and drives behaviour (goal
+  mutations, Team mode, subagent control, message feedback, a fork of the replay).
+
+`packages/local-plugin/src/remote/namespace-policy.ts` is the classification, as data: one entry per
+Remote namespace, plus an entry per operation whose policy differs from its namespace's default.
+`packages/local-plugin/src/remote/namespaces.ts` is the enforcement. Anything not listed keeps its
+stock behaviour, which is what makes a new namespace an omission rather than a decision.
+
+| Namespace (`namespace/method` for an override) | Policy | What that means |
+|---|---|---|
+| `goals` | forward | `POST /sessions/:id/goals` runs the operation on the owning host, which appends `goal/change`; the replay updates the local banner. `goals.get` stays a projection read |
+| `job` | forward | `GET /sessions/:id/jobs` streams the owning host's own roster (`list`), and `GET /sessions/:id/jobs/:jobId` its output (`follow`) |
+| `job/kill` | refuse | Stopping a job needs the registry that owns it; carried ids are the remote's, and this version has no remote-id route for task control |
+| `agentTeams` | forward | `POST /sessions/:id/team` appends `team/mode` on the owning host |
+| `subagents/prompt`, `subagents/interruptByUser` | refuse | Child-Session control acts on live remote process state; a local prompt would fill this process's inbox for a conversation the remote drives |
+| `messageFeedback/put`, `messageFeedback/delete` | refuse | Feedback is written into the Session log, whose owner is the other machine. A local record would exist nowhere else |
+| `toolResults/watch` | refuse (empty stream) | Live tool values are held in the memory of the process that ran the tool. The stream ends without a frame, which is the contract's way of saying "no more live values" |
+| `session/fork` | refuse | A fork cuts a child out of the local replay's sequence numbers: no remote Session, no remote preset composition, and this machine's anchor as its cwd |
+| `workspace/pinSession`, `workspace/unpinSession` | local view | Pin order is a sidebar preference of the machine the user sits at; the remote user keeps their own set (§6.7) |
+| `session` (except `fork`) | delegate | The mirror's own transport: prompts, cancel, and rename already have their paths |
+| `terminal`, `workspaceFiles`, `fileReferences`, `skills`, `directoryPicker` | delegate | Adapted elsewhere (§6.1, §6.2, §6.6) or local by nature |
+| `schedule` | delegate | Deliberately not adapted: `remote.schedule.*` is host-global rather than Session-addressed (§6.5) |
+
+Two properties of this table are load-bearing and both are tested:
+
+- **A refusal is a named error.** Each one is a `LocalError` with the code `mirror/unsupported`,
+  `retryable: false`, and its own `ui` key from `messages.ts`, so the text names the operation and says
+  where to do it instead. A refusal a user cannot act on would be no better than the silent write it
+  replaces. (DSH's gateway carries only an error's `message` across the Remote boundary, so the visible
+  rejection today is that message; the `ui` key is what a client-side formatter localizes.)
+- **An older agent degrades, a disconnect fails.** When the agent predates a forwarding route the
+  adapter calls the stock implementation and logs at debug — that is the previous release's behaviour,
+  which is wrong but visible the moment the agent is upgraded. When the host is simply not connected the
+  operation **rejects**: falling back to a local write would reintroduce the divergence this whole
+  classification exists to remove.
+
+The runtime half of the classification is a warn line: `reportUnclassifiedNamespaces` reads this Host's
+live `typert` registry and names any Remote namespace the table has never seen, so a DSH upgrade that
+grows the surface announces itself instead of defaulting to "local". The test half pins the release's
+inventory (`HOST_REMOTE_NAMESPACES`) and fails when a name appears there without a policy.
+
 ### 5.4 Downward: prompts, model, cancel
 
 `#sendPrompt` is the single exit that carries local input to the remote (`#sendPrompt` in `service.ts`):
@@ -1330,6 +1384,11 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | A mirrored Session's `@` menu falls back to this machine's files when the remote read fails | An empty menu would assert the remote project has no files, so the failure is logged and the local answer kept (6.1) |
 | A Windows client cannot `@`-reference a local POSIX path | The rewrite applies only to paths this filesystem could hold, which is what keeps a remote POSIX path intact; a staged attachment covers the local case (6.1) |
 | A remote host with no `fileReferences` provider is indistinguishable from an empty project | The capability is a property of the agent build, not a runtime probe; the delegated fallback and its warning are what stay visible (6.1) |
+| A mirrored Session's goal, Team-mode, and job-roster routing needs a current remote agent | Each route is negotiated by capability (`session.goals`, `session.team`, `session.jobs`); an older agent keeps the previous local behaviour and a debug line (5.3) |
+| A mirrored Session refuses `jobs.kill`, subagent prompt/interrupt, message feedback, and `session.fork` | Each writes state the remote process owns: task control and child-Session control need routes this version does not have, feedback and a fork would land in a log nobody reconciles (5.3) |
+| Live tool values are unavailable in a mirrored Session's inspector | They exist only in the memory of the process that ran the tool; the stream ends rather than waiting on something it cannot fill (5.3) |
+| `schedule` is not mirrored | `remote.schedule.*` is one host-global registry, not Session state; mirroring the catalog and its `schedule/changed` stream is a feature of its own (5.3, 6.5) |
+| A remote job's `spillPaths` name files on the remote host | The roster frame is the remote's own projection, forwarded unchanged; a local reader cannot open those paths (5.3) |
 
 ## 10. Where to start when you want to change something
 
@@ -1345,6 +1404,7 @@ patch layer replaces the row, a proxied host no longer offers providers configur
 | A mirrored Session's working directory | `src/remote/working-directory.ts` (6.1) |
 | The `/` menu and command execution in a mirror | `src/remote/catalog.ts`, `packages/remote-agent/src/catalog.ts`, `catalogAddressFor` in `src/mirror/service.ts` (6.6) |
 | The `@` menu in a mirror | `src/remote/file-references.ts`, `packages/remote-agent/src/file-references.ts`, and `localPathReferences` in `src/mirror/service.ts` (6.1) |
+| Whether a goal, Team mode, or job read is forwarded or refused in a mirror | `src/remote/namespace-policy.ts` (the classification) and `src/remote/namespaces.ts` (the adapters), plus `forwardGoal`/`forwardTeamMode`/`forwardJobs` in `src/mirror/service.ts` (5.3) |
 | Whether a mirrored command row shows a compaction card | `isCompactionCheckpoint` / `localSpan` in `src/mirror/service.ts`; the order matters — the `surfaceOp` remap comes first (5.8) |
 | Remote dev-server ports | `src/client/link-forwarding.ts` (the click), `src/client/loopback-url.ts` (which addresses count), `publishPort` in `src/service.ts`, `host/ports/publish` in `src/host-api/` |
 | Settings page behaviour | `src/client/RemoteDevelopmentPanel.tsx` + `src/host-api/handler.ts` |
