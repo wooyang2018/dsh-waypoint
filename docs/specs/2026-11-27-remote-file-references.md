@@ -1,17 +1,16 @@
-# The `@` file reference menu must list the remote project
+# `@` 文件引用菜单必须列出远端工程
 
-Status: approved design. Implementation follows the slices in §12.
+状态：设计已定稿。实现按 §12 的切片推进。
 
-Depends on: `docs/specs/2026-11-27-remote-directory-type.md` (slice 4 there supplies the
-`workingDirectory` adapter this design builds on).
+依赖：`docs/specs/2026-11-27-remote-directory-type.md`（该文档的切片 4 提供本设计所依赖的
+`workingDirectory` 适配器）。
 
-## 1. Background and goal
+## 1. 背景与目标
 
-Typing `@` in a mirrored Session lists files from the **local** machine, never the remote project.
-Two independent causes, and both have to be addressed.
+在镜像会话里输入 `@`，列出的是**本地**机器的文件，永远不是远端工程。有两个互相独立的原因，
+必须都处理。
 
-**Cause 1 — the provider searches a directory it obtained locally.** The composed provider is
-`dsh-file-reference-local`:
+**原因 1 —— provider 在本地取得的目录里检索。** 组合进来的 provider 是 `dsh-file-reference-local`：
 
 ```ts
 // dsh-file-reference-local/src/index.ts
@@ -27,13 +26,12 @@ override async list(agent: Agent, query: string, signal: AbortSignal): Promise<F
 }
 ```
 
-`WorkspaceFileSearch` walks the tree with `node:fs` directly. Nothing in this repository intercepts
-`fileReferences` — `grep fileReferences` over `packages/local-plugin/src` returns nothing — so even
-with a correct cwd (spec A) the search would read the **local** disk at a path that means something
-only on the remote host.
+`WorkspaceFileSearch` 直接用 `node:fs` 遍历目录树。本仓库没有任何地方拦截
+`fileReferences`——在 `packages/local-plugin/src` 上 grep `fileReferences` 一无所获——
+所以即便 cwd 已经正确（spec A），检索仍然会去读**本地**那块磁盘，
+而那个路径只在远端主机上才有意义。
 
-**Cause 2 — the menu is answered on the Host the browser talks to.** The client reaches the provider
-through a Remote namespace owned by the local Host:
+**原因 2 —— 菜单是由浏览器所连的那台主机作答的。** 客户端经本地主机拥有的 Remote 命名空间访问 provider：
 
 ```ts
 // dsh-api-session-controller/src/file-references.ts
@@ -46,112 +44,100 @@ export class SessionFileReferences extends TypertRemoteService {
 }
 ```
 
-`agent` is resolved from the wire `sessionId` through the registry lookup
-(`@deepseek-ai/dsh-agent`'s `typert.lookups.register('agent', …)`), which finds the **mirror façade**
-`RemoteMirrorAgent`. That object's `session.header.cwd` is the empty local anchor.
+`agent` 由线上 `sessionId` 经注册表查找解析（`@deepseek-ai/dsh-agent` 的
+`typert.lookups.register('agent', …)`），拿到的是**镜像门面** `RemoteMirrorAgent`。
+该对象的 `session.header.cwd` 是空的本地锚点。
 
-Goal: `@` in a mirrored Session lists the remote project's files, with the same `file`/`directory`
-classification the stock search gives, and choosing a candidate still produces a prompt the remote can
-use.
+目标：镜像会话里的 `@` 列出远端工程的文件，`file`/`directory` 分类与原生检索一致，
+并且选中候选项后产出的提示词远端能用。
 
-Success signals:
+成功信号：
 
-1. Typing `@` in a mirrored Session lists the remote cwd's tree.
-2. Selecting a candidate inserts a reference that resolves to the remote file in the prompt path.
-3. A directory candidate keeps the menu open (the client's `kind: 'directory'` rule).
-4. A non-mirrored Session is unaffected.
+1. 在镜像会话输入 `@`，列出远端 cwd 下的目录树。
+2. 选中候选项插入的引用，在提示词路径上能解析到远端文件。
+3. 目录候选项保持菜单展开（客户端的 `kind: 'directory'` 规则）。
+4. 非镜像会话不受影响。
 
-## 2. Scope and non-goals
+## 2. 范围与非目标
 
-In scope: a `fileReferences` adapter on the Host, a remote search route or reuse of an existing one,
-the candidate mapping, and the refusals for a disabled host.
+范围内：主机侧的 `fileReferences` 适配器、一条远端检索路由（或复用既有路由）、候选项映射，
+以及主机被禁用时的拒绝。
 
-Out of scope:
+范围外：
 
-- A streaming/live-updating menu. The client polls per query; the adapter answers per query.
-- Fuzzy-match semantics. The remote runs the same `dsh-file-reference-local` provider against its own
-  tree, so ranking, ignore rules, and the result cap stay the remote's — nothing is re-implemented
-  here.
-- Changing `dsh-client-ui-reference`. Its request/response shapes do not change.
-- `sessionReferenceResolver.candidates` (a different namespace, listed separately by the same client
-  plugin). See §7.
+- 流式/实时刷新的菜单。客户端按查询轮询，适配器按查询作答。
+- 模糊匹配语义。远端用它自己的目录树跑同一个 `dsh-file-reference-local` provider，
+  所以排序、忽略规则、结果上限都保持远端的——这里不重新实现任何一项。
+- 改动 `dsh-client-ui-reference`。它的请求/响应形状不变。
+- `sessionReferenceResolver.candidates`（另一个命名空间，由同一个客户端插件另行列出）。见 §7。
 
-## 3. Users and journeys
+## 3. 用户与场景
 
-1. **Reference a remote file while writing a prompt.** A user types `@src/` in a mirrored Session and
-   expects the remote project's `src/` children.
-2. **Reference a remote directory to scope the agent.** A user picks a directory candidate and expects
-   the agent to work inside the remote path.
+1. **写提示词时引用一个远端文件。** 用户在镜像会话输入 `@src/`，期望看到远端工程的 `src/` 子项。
+2. **引用远端目录来限定 agent 的工作范围。** 用户选一个目录候选项，期望 agent 在远端路径内工作。
 
-## 4. Decision
+## 4. 决策
 
-**Adopt: forward the reference query to the host that owns the Session, and let that host run its own
-provider.**
+**采用：把引用查询转发给拥有该会话的主机，由那台主机跑它自己的 provider。**
 
-The adapter patches `sessionFileReferences.list` on the live instance — the same
-own-property interposition every other adapter in `src/remote/` uses, and for the same documented
-reason: the Typert Gateway resolves a Remote method per call, so a host-side replacement is what the
-browser observes.
+适配器替换活的 `sessionFileReferences` 实例上的 `list`——与 `src/remote/` 里其他适配器相同的
+自有属性插桩方式，理由也一样（已有文档记录）：Typert 网关按调用解析 Remote 方法，
+所以主机侧替换才是浏览器观察到的。
 
-| Rejected alternative | Why it fails |
+| 被否决的方案 | 为什么不行 |
 |---|---|
-| A. Have the local provider search a remote path via a new `ctx.fs` adapter | `WorkspaceFileSearch` uses `node:fs` directly, not `ctx.fs`, so there is nothing to intercept. Patching it would mean forking a package the profile may not even mount. |
-| B. Copy the remote tree locally on sync | Proportional to the repository size, stale immediately, and creates a second authority for bytes the remote owns — the exact argument `docs/remote-workspace-mechanism.md` §4 makes about the anchor. |
-| C. Answer from the remote log's file references | A log lists what *was* touched, not what exists. The menu exists to name things that have never been mentioned. |
-| D. Disable `@` for mirrored Sessions | Removing a working affordance from the one place a user expects parity, when the remote can answer it exactly. |
+| A. 用新的 `ctx.fs` 适配器让本地 provider 去检索远端路径 | `WorkspaceFileSearch` 直接用 `node:fs`，不走 `ctx.fs`，没有可拦截的点。要改它就得 fork 一个 profile 未必挂载的包。 |
+| B. 同步时把远端目录树拷到本地 | 与仓库体量成正比、立刻过期，并且给远端拥有的字节造出第二个权威——正是 `docs/remote-workspace-mechanism.md` §4 关于锚点所持的论断。 |
+| C. 从远端日志里的文件引用作答 | 日志列出的是**曾经**被碰过的东西，不是存在的东西。菜单存在的意义恰恰是命名那些从未被提到过的路径。 |
+| D. 对镜像会话禁用 `@` | 把一个可用的入口从用户最期待对等的地方拿掉，而远端完全能回答它。 |
 
-## 5. Requirements and acceptance
+## 5. 需求与验收
 
-Acceptance is stated as Given/When/Then in §10.
+验收以 Given/When/Then 形式列在 §10。
 
-- **R1** `@` in a mirrored Session returns candidates from the remote cwd.
-- **R2** Each candidate keeps the remote provider's `kind` (`file`/`directory`) and path spelling.
-- **R3** The query text is passed through unchanged; no local ranking, filtering, or truncation is
-  added.
-- **R4** The answer is capped by the remote's own `maxResults`, not by a new local cap.
-- **R5** A non-mirrored Session delegates and is byte-for-byte unchanged.
-- **R6** An agent without the capability reproduces today's behavior (local menu) without an error.
-- **R7** A Host whose remote call fails logs the failure and delegates, rather than showing an empty
-  menu as if the project had no files.
+- **R1** 镜像会话里的 `@` 返回来自远端 cwd 的候选项。
+- **R2** 每个候选项保持远端 provider 的 `kind`（`file`/`directory`）与路径拼写。
+- **R3** 查询文本原样透传；不增加任何本地排序、过滤或截断。
+- **R4** 结果上限由远端自己的 `maxResults` 决定，不引入新的本地上限。
+- **R5** 非镜像会话委托原实现，字节级不变。
+- **R6** 不支持该能力的 agent 复现今天的现行为（本地菜单），且不报错。
+- **R7** 远端调用失败的主机会记录失败并委托原实现，而不是显示一个空菜单、让人以为工程里没有文件。
 
-## 6. Design
+## 6. 设计
 
-### 6.1 Data flow
+### 6.1 数据流
 
 ```
-browser `@` source  (dsh-client-ui-reference inputTriggers.registerSource)
-  └─ ctx.remote.fileReferences.list(sessionId, query)      wire parameter `agent`
-     └─ Host: Reflect.get(ctx.get('sessionFileReferences'), 'list') → adapter
-        ├─ not a mirror / no capability → original
-        └─ mirror + capability → new agent route `POST /file-references`
+浏览器 `@` 源  (dsh-client-ui-reference inputTriggers.registerSource)
+  └─ ctx.remote.fileReferences.list(sessionId, query)      线上参数名 `agent`
+     └─ 主机: Reflect.get(ctx.get('sessionFileReferences'), 'list') → 适配器
+        ├─ 非镜像 / 无能力 → 原实现
+        └─ 镜像 + 能力 → 新 agent 路由 `POST /file-references`
              body: { sessionId, query }
-             └─ remote: ctx.fileReferences.list(remoteAgent, query, signal)
-                └─ dsh-file-reference-local → WorkspaceFileSearch(remote cwd)
+             └─ 远端: ctx.fileReferences.list(remoteAgent, query, signal)
+                └─ dsh-file-reference-local → WorkspaceFileSearch(远端 cwd)
 ```
 
-The remote side does **not** re-implement search. It calls the composed provider with its own live
-Agent, which is exactly what the remote Web UI does — so ranking, `.gitignore` handling, the entry
-budget and the deadline all stay the remote's (§9 records the assumption).
+远端**不**重新实现检索。它用自己活的 Agent 调用组合进来的 provider，这与远端 Web UI 的做法一致——
+于是排序、`.gitignore` 处理、条目预算与超时上限都保持远端的（§9 记录该假设）。
 
-### 6.2 Why a new route rather than reusing `files/search`
+### 6.2 为什么新增路由而不用 `files/search`
 
-`searchFiles` (`@dsh-waypoint/protocol`) answers the **file panel's** search: a bounded walk with
-`respectGitignore`/`includeHidden` flags and workspace-root anchoring. The reference provider has its
-own semantics — a prefix query, its own candidate cap, and `kind` classification per entry — and it is
-the *remote* provider that should decide them. Mapping one onto the other would mean translating
-query semantics in this repository, which is the maintenance surface the decision in §4 avoids.
+`searchFiles`（`@dsh-waypoint/protocol`）回答的是**文件面板**的检索：有界遍历，带
+`respectGitignore`/`includeHidden` 开关，以工作区根为锚点。引用 provider 有自己的语义——
+前缀查询、自己的候选项上限、逐条的 `kind` 分类——而这些应该由**远端** provider 决定。
+把前者映射到后者意味着在本仓库里翻译查询语义，正是 §4 决策要规避的维护面。
 
-The route is therefore thin: it carries a query and returns the provider's candidates.
+因此这条路由很薄：携带一个查询，返回 provider 的候选项。
 
-### 6.3 Capability and degradation (R6, R7)
+### 6.3 能力与降级（R6、R7）
 
-New `AgentCapability` `'file.references'`, advertised with the other file capabilities. Absent on an
-older agent → the adapter delegates (R6), which is today's behavior.
+新增 `AgentCapability` `'file.references'`，与其他文件类能力一起上报。
+旧 agent 没有它 → 适配器委托（R6），也就是今天的现行为。
 
-A present capability whose call throws is **not** a delegation. §7 explains why an empty menu would
-be the wrong answer.
+能力存在但调用抛错，**不**算委托。§7 解释了为什么空菜单会是错误答案。
 
-### 6.4 Candidate mapping
+### 6.4 候选项映射
 
 ```ts
 // dsh-file-reference/src/types.ts
@@ -161,119 +147,108 @@ export interface FileReferenceCandidate {
 }
 ```
 
-The shape is already host-agnostic and JSON-safe, so the wire can carry it unchanged; the adapter maps
-nothing. The path is the remote spelling, which is the right answer for the prompt path: the mirror
-already forwards a remote absolute path through the `file` part of `#promptContent`, and a plain
-`@<remote path>` in the text stays valid on the remote host — unlike the local path case that
-`#resolveTextReferences` exists to rewrite.
+该形状本就与主机无关且 JSON 安全，线上可以原样携带；适配器不做映射。路径是远端拼写，
+这对提示词路径来说正是对的：镜像已经通过 `#promptContent` 的 `file` 部分转发远端绝对路径，
+而文本里的 `@<远端路径>` 在远端主机上依然有效——与 `#resolveTextReferences` 存在的
+那个本地路径场景不同。
 
-**This is worth stating explicitly because the two look identical in the composer.** A path the user
-picks from the remote menu must **not** be rewritten by `#resolveTextReferences` (which resolves
-`@`-prefixed *local* absolute paths on the local disk). §7 pins the rule that keeps them apart.
+**值得明确写出来，是因为二者在输入框里看起来一模一样。** 用户从远端菜单选出的路径，
+**绝不能**被 `#resolveTextReferences` 改写（后者解析的是 `@` 前缀的**本地**绝对路径，读的是本地磁盘）。
+§7 钉住了区分二者的规则。
 
-## 7. Edges and failures
+## 7. 边界与失败
 
-| Case | Behavior |
+| 情况 | 行为 |
 |---|---|
-| Remote provider throws | Log a warning and **delegate to the original**. Rationale below. |
-| Agent lacks `file.references` | Delegate (R6). |
-| `mirrorRemoteCatalog`-style toggle | Not added: this is a document-navigation affordance, not a catalog whose absence would silently mislead. Recorded in §11. |
-| The remote cwd no longer exists | The remote provider returns an empty list or throws; both are the remote's own behavior, which is what parity means. |
-| A remote candidate path reaches `#resolveTextReferences` | Must not be treated as a local file request. See the rule below. |
-| Ambiguous host | Refuse (delegate), never guess. |
+| 远端 provider 抛错 | 记警告并**委托原实现**。理由见下文。 |
+| agent 没有 `file.references` | 委托（R6）。 |
+| `mirrorRemoteCatalog` 之类的开关 | 不新增：这是一个文档导航入口，不是那种「缺席就会静默误导」的目录。记录于 §11。 |
+| 远端 cwd 已不存在 | 远端 provider 返回空列表或抛错；两者都是远端自己的行为，而「对等」就是这个意思。 |
+| 远端候选项路径进入 `#resolveTextReferences` | 不得被当作本地文件请求。见下文规则。 |
+| 主机不确定 | 拒绝（委托），绝不猜。 |
 
-**Why a failure delegates rather than showing an empty menu.** §4's rejected alternative C makes the
-same point in the other direction: a menu is a claim about what exists. An empty list says "this
-project has no files", which is a false statement about the remote workspace and one the user is
-likely to act on. Delegating means the user sees the local list, which is wrong but visibly so — the
-paths do not exist in the transcript afterwards. This mirrors the reasoning `remote/catalog.ts`
-already records for the same class of failure, and the warning is what makes it diagnosable.
+**为什么失败要委托而不是显示空菜单。** §4 被否决方案 C 从反方向讲了同一件事：菜单是对「存在什么」的断言。
+空列表意味着「这个工程没有文件」，这是关于远端工作区的错误陈述，而用户很可能据此行动。
+委托意味着用户看到本地列表——错的，但错得可见：那些路径随后在会话记录里并不存在。
+这与 `remote/catalog.ts` 对同类失败已记录的理由一致，而警告是让问题可诊断的关键。
 
-**The two `@` spellings.** `#resolveTextReferences` today rewrites `@`-prefixed **local absolute**
-paths (`C:\…`, `\\server\…`, `/…`). A remote candidate is also an absolute path but a *POSIX* one, so
-on a Linux client the two are indistinguishable by shape alone. The rule to implement with this spec:
+**两种 `@` 拼写。** `#resolveTextReferences` 今天改写的是 `@` 前缀的**本地绝对**路径
+（`C:\…`、`\\server\…`、`/…`）。远端候选项也是绝对路径，但是 *POSIX* 的，
+所以在 Linux 客户端上，二者仅凭形状无法区分。本 spec 要实现的规则是：
 
-> A reference the user picked from the remote menu is forwarded as text and **not** resolved locally.
-> `#resolveTextReferences` therefore runs only for a client whose own filesystem could plausibly hold
-> the path, and a POSIX path on a Windows client is left alone; the remote resolves it.
+> 用户从远端菜单选出的引用，以文本形式转发，**不**在本地解析。
+> 因此 `#resolveTextReferences` 只对「本机文件系统有可能持有该路径」的客户端生效；
+> 在 Windows 客户端上，POSIX 路径保持原样，由远端去解析。
 
-Concretely: gate the rewrite on `isAbsolutePath` in the *local* syntax (`C:\`, `\\`, and `/` when
-`process.platform !== 'win32'`). A Windows client leaves every `/…` reference untouched, so a remote
-path survives verbatim. §11 records that a Windows client therefore cannot forward a local
-`/`-rooted path by `@` — an accepted limitation, and the same client can still pick the file as a
-staged attachment.
+具体做法：把改写条件收敛到**本地**语法的绝对路径判定（`C:\`、`\\`，以及仅当
+`process.platform !== 'win32'` 时的 `/`）。于是 Windows 客户端对任何 `/…` 引用都不做改写，
+远端路径得以原样存活。§11 记录：Windows 客户端因此无法用 `@` 转发本地 `/` 开头的路径——
+这是已接受的限制，且同一客户端仍可把该文件作为暂存附件选中。
 
-## 8. Quality attributes
+## 8. 质量属性
 
-- **Latency.** One round trip per query, plus the remote's own walk. The client already debounces and
-  cancels; the adapter passes `signal` through so a superseded query is cancelled remotely.
-- **Privacy.** The local filesystem is never listed for a mirrored Session, so a remote answer cannot
-  leak local paths into a remote transcript (the trap alternative A would have created).
-- **Blast radius.** One new route, one adapter method, one capability.
+- **延迟。** 每次查询一次往返，加上远端自己的遍历。客户端已经在防抖和取消；
+  适配器把 `signal` 透传下去，被取代的查询会在远端取消。
+- **隐私。** 镜像会话永远不会列出本地文件系统，所以远端的回答不会把本地路径泄漏进远端会话记录
+  （这正是方案 A 会造成的坑）。
+- **影响面。** 一条新路由、一个适配器方法、一个能力名。
 
-## 9. Dependencies and assumptions
+## 9. 依赖与假设
 
-- Assumes the remote composition mounts `dsh-file-reference` and a provider. `dsh-web-app`'s bundle
-  mounts `dsh-file-reference-local`; a host without a provider answers `undefined`/empty from the
-  service, which the capability gate cannot detect — see §11.
-- Assumes `FileReferenceCandidate` stays `{ path, kind }`.
-- Assumes the remote Agent is live. A cold Session has no Agent to pass, so §6.1's route takes the
-  Session id and lets the remote resolve (`ctx.agents.get`) — a cold remote answers the same way the
-  remote UI would, which is "no candidates".
-- Depends on spec A for a correct cwd on the *local* delegate path only; the remote path needs nothing
-  from it.
+- 假设远端组合挂载了 `dsh-file-reference` 与某个 provider。`dsh-web-app` 的 bundle 挂载
+  `dsh-file-reference-local`；没有 provider 的主机会由该服务返回 `undefined`/空，
+  而能力门禁检测不到这种情况——见 §11。
+- 假设 `FileReferenceCandidate` 保持 `{ path, kind }`。
+- 假设远端 Agent 活跃。冷会话没有 Agent 可传，所以 §6.1 的路由接受会话 id，由远端自行解析
+  （`ctx.agents.get`）——冷远端会像远端 UI 一样作答，也就是「没有候选项」。
+- 对 spec A 的依赖仅限于**本地**委托路径的 cwd 正确性；远端路径不需要它提供任何东西。
 
-## 10. Verification
+## 10. 验证
 
-**Unit and package tests**
+**单元与包级测试**
 
-- `packages/protocol/test/file-references.test.ts` — route matching, request/response guards,
-  a query containing `/`, `..`, and a drive letter passes through unchanged.
-- `packages/remote-agent/test/file-references.test.ts` — forwards to the composed provider with the
-  remote Agent; a `directory` candidate round-trips its `kind`; a cancelled signal cancels the walk.
-- `packages/local-plugin/test/remote-file-references.test.ts` — mirror forwards, non-mirror delegates,
-  missing capability delegates, a throwing remote logs and delegates (assert the **original** was
-  called, not an empty array), ambiguous host refuses.
-- `packages/local-plugin/test/mirror-prompt-*` — a POSIX reference produced by the remote menu is not
-  rewritten by `#resolveTextReferences` on a Windows client; a `C:\` reference still is.
-- `packages/testkit/src/fake-host.ts` — implement the new route.
+- `packages/protocol/test/file-references.test.ts` —— 路由匹配、请求/响应守卫；
+  含 `/`、`..`、盘符的查询原样透传。
+- `packages/remote-agent/test/file-references.test.ts` —— 用远端 Agent 转发到组合 provider；
+  `directory` 候选项的 `kind` 往返保持；取消信号能取消遍历。
+- `packages/local-plugin/test/remote-file-references.test.ts` —— 镜像转发、非镜像委托、
+  缺能力委托、远端抛错时记日志并委托（断言调用的是**原实现**，而不是返回空数组）、主机不确定时拒绝。
+- `packages/local-plugin/test/mirror-prompt-*` —— 远端菜单产出的 POSIX 引用在 Windows 客户端上
+  不被 `#resolveTextReferences` 改写；`C:\` 引用仍会被改写。
+- `packages/testkit/src/fake-host.ts` —— 实现新路由。
 
-**Acceptance**
+**验收**
 
-1. *Given* a mirrored Session on a Linux host with remote cwd `/data/home/u/proj`; *when* the user
-   types `@src/`; *then* the candidates are the remote `src/` children.
-2. *Given* the same Session; *when* the user picks a directory candidate; *then* the menu keeps
-   suggesting its children.
-3. *Given* the same Session; *when* the user picks `proj/README.md` and sends; *then* the remote
-   receives the reference and can open the file.
-4. *Given* a non-mirrored Session; *then* the menu is unchanged, including ranking.
-5. *Given* a remote agent without `file.references`; *then* the local list appears and the log carries
-   no error.
-6. *Given* a remote provider failure; *then* a warning names the host and the local list appears.
+1. *给定*一台 Linux 主机上的镜像会话，远端 cwd 为 `/data/home/u/proj`；*当*用户输入 `@src/`；
+   *则*候选项是远端 `src/` 的子项。
+2. *给定*同一会话；*当*用户选中一个目录候选项；*则*菜单继续提示其子项。
+3. *给定*同一会话；*当*用户选中 `proj/README.md` 并发送；*则*远端收到该引用且能打开文件。
+4. *给定*一个非镜像会话；*则*菜单不变，含排序。
+5. *给定*一个没有 `file.references` 的远端 agent；*则*出现本地列表，日志无错误。
+6. *给定*一次远端 provider 失败；*则*一条警告点名主机，并出现本地列表。
 
-## 11. Accepted judgement calls
+## 11. 已接受的取舍
 
-- **No toggle.** Every catalog-shaped feature in this repository has one because a stale catalog
-  silently misleads. A file menu that falls back to the local list is evidently local (the paths are
-  not in the remote project), and adding a fourth setting for it is not warranted.
-- **A failure delegates.** Recorded in §7.
-- **A Windows client cannot `@` a local POSIX path.** The rule in §7 buys remote-path fidelity at that
-  cost; a staged attachment covers the case.
-- **A host without a reference provider is indistinguishable from one with an empty project**, because
-  the capability is compile-time, not runtime. Narrowing that would need a runtime probe; not worth a
-  round trip per menu.
+- **不设开关。** 本仓库每个「目录状」特性都有开关，因为陈旧的目录会静默误导。
+  但一个回落到本地列表的文件菜单，「本地」是显而易见的（这些路径并不在远端工程里），
+  为此再加第四个设置项并不划算。
+- **失败即委托。** 记录于 §7。
+- **Windows 客户端无法 `@` 本地 POSIX 路径。** §7 的规则用这一点换来了远端路径的保真；
+  暂存附件能覆盖该场景。
+- **主机没有引用 provider 与工程为空无法区分**，因为能力是编译期的、不是运行期的。
+  要缩小这个差距需要在每次菜单查询时多一次往返探测，不值得。
 
-## 12. Implementation slices
+## 12. 实现切片
 
-| # | Content | Verification |
+| # | 内容 | 验证 |
 |---|---|---|
-| 0 | This specification | Document self-check |
-| 1 | Protocol: `file.references` capability, `POST /file-references` route, guards, client method | `pnpm -F @dsh-waypoint/protocol test` |
-| 2 | Remote agent: route wiring into `ctx.fileReferences.list` | `packages/remote-agent/test/file-references.test.ts` |
-| 3 | Local plugin: `remote/file-references.ts` adapter, `REQUIRED_FILE_REFERENCE_METHODS`, the `ctx.inject` block | `remote-file-references.test.ts` |
-| 4 | Mirror: the `#resolveTextReferences` platform gate | `mirror-prompt-*` additions |
-| 5 | Testkit + documentation: `docs/protocol.md` route table, `docs/remote-workspace-mechanism.md` §6.1, CHANGELOG under Unreleased | Document self-check |
+| 0 | 本文档 | 文档自检 |
+| 1 | 协议：`file.references` 能力、`POST /file-references` 路由、守卫、客户端方法 | `pnpm -F @dsh-waypoint/protocol test` |
+| 2 | 远端 agent：路由接入 `ctx.fileReferences.list` | `packages/remote-agent/test/file-references.test.ts` |
+| 3 | 本地插件：`remote/file-references.ts` 适配器、`REQUIRED_FILE_REFERENCE_METHODS`、`ctx.inject` 块 | `remote-file-references.test.ts` |
+| 4 | 镜像：`#resolveTextReferences` 的平台门禁 | `mirror-prompt-*` 补充用例 |
+| 5 | Testkit + 文档：`docs/protocol.md` 路由表、`docs/remote-workspace-mechanism.md` §6.1、CHANGELOG 的 Unreleased 条目 | 文档自检 |
 
-Slices 1 → 2 → 3 are ordered by dependency. Slice 4 is independent of 1–3 and can land first if the
-trap in §7 is being hit sooner. Each slice ends with `pnpm typecheck`; the finished change requires
-`pnpm install && pnpm typecheck && pnpm test && pnpm build`.
+切片 1 → 2 → 3 按依赖排序。切片 4 与 1–3 无关；若 §7 的坑已经在咬人，它可以先落地。
+每片以 `pnpm typecheck` 收尾；整体完成需要
+`pnpm install && pnpm typecheck && pnpm test && pnpm build`。

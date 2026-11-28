@@ -1,102 +1,99 @@
-# A mirrored Session must not silently accept writes it cannot forward
+# 镜像会话不得静默接受它无法转发的写入
 
-Status: approved design. Implementation follows the slices in §12.
+状态：设计已定稿。实现按 §12 的切片推进。
 
-## 1. Background and goal
+## 1. 背景与目标
 
-Several Host Remote namespaces are addressed by an `Agent`, and for a mirrored Session that Agent is
-the façade `RemoteMirrorAgent`. The façade is registered in the local `agents` registry (which is what
-makes the Session render at all), so `agents.get(id) === agent` **succeeds** and every `assertLive`
-guard passes. The service then reads or writes local state as if the Session were local.
+有若干主机侧 Remote 命名空间以 `Agent` 寻址，而对镜像会话来说那个 Agent 就是门面
+`RemoteMirrorAgent`。该门面注册在本地 `agents` 注册表里（这正是会话能渲染出来的原因），
+所以 `agents.get(id) === agent` **成立**，每一道 `assertLive` 守卫都能通过。
+服务随后就像会话是本地的一样，读写本地状态。
 
-That produces three different behaviors, and only one of them is tolerable:
+由此产生三种不同的行为，而其中只有一种是可容忍的：
 
-| Behavior | Example | Verdict |
+| 行为 | 例子 | 判定 |
 |---|---|---|
-| **Read is correct** because the fact arrives as a replayed event | `goals.get`, `todos`, `permission` chip, `plan` chip | Fine — leave alone |
-| **Read is wrong or empty** because the fact lives only in the remote process | `jobs.list`, `schedule.catalog`, `agentTeams` state | Misleading |
-| **Write silently succeeds locally and never reaches the remote** | `goals.create/edit/pause/resume/complete/clear`, `subagents.prompt/interruptByUser`, `messageFeedback.put/delete`, `jobs.kill` | A data-loss trap |
+| **读取正确**，因为事实以回放事件抵达 | `goals.get`、`todos`、权限 chip、计划 chip | 可以，不动 |
+| **读取错误或为空**，因为事实只存在于远端进程 | `jobs.list`、`schedule.catalog`、`agentTeams` 状态 | 误导 |
+| **写入在本地静默成功、永远到不了远端** | `goals.create/edit/pause/resume/complete/clear`、`subagents.prompt/interruptByUser`、`messageFeedback.put/delete`、`jobs.kill` | 数据丢失陷阱 |
 
-The third row is the serious one. A user sets a goal on a mirrored Session, the banner appears, the
-mirror's own round driver may even start continuing the local projection — and the remote agent, which
-is actually running the conversation, knows nothing. Nothing errors. The state is not merely lost at
-the next rebuild; it is *wrong* for as long as the Session lives, and it drives behavior.
+第三行是严重的那一类。用户在镜像会话上设了一个目标，横幅出现了，镜像自己的轮次驱动器
+甚至可能开始继续本地投影——而真正在跑这段对话的远端 agent 一无所知。没有任何报错。
+这份状态不只是会在下次重建时丢失，它在会话存活期间一直是**错的**，而且会驱动行为。
 
-Goal: a mirrored Session's Remote surface either forwards to the host that owns the state or refuses
-with a cause a user can act on. It never pretends a write succeeded.
+目标：镜像会话的 Remote 表面积要么把请求转发给拥有状态的主机，要么以用户可以据以行动的原因拒绝。
+它绝不能让一次写入假装成功。
 
-Success signals:
+成功信号：
 
-1. Writing a goal on a mirrored Session either changes the remote goal or reports why it cannot.
-2. `jobs`, `schedule`, and `agentTeams` never show a confidently empty or stale local list.
-3. Every refusal is a named error with a localizable message, not a generic failure.
-4. A local Session is unaffected.
+1. 在镜像会话上写目标，要么改变远端目标，要么说明为何做不到。
+2. `jobs`、`schedule`、`agentTeams` 绝不显示一个自信的空列表或陈旧列表。
+3. 每次拒绝都是带本地化消息的具名错误，而不是泛泛的失败。
+4. 本地会话不受影响。
 
-## 2. Scope and non-goals
+## 2. 范围与非目标
 
-In scope: the classification of every `Agent`-addressed Remote namespace against a mirrored Session,
-the forwarding or refusal for each, the pin/fork policy, and the one settings-shaped case.
+范围内：把每个以 `Agent` 寻址的 Remote 命名空间针对镜像会话做分类、逐项给出转发或拒绝、
+pin/fork 策略，以及一个「设置形状」的例外。
 
-Out of scope:
+范围外：
 
-- Implementing new remote capabilities wholesale. Two narrow ones are added (§6.3) because a read that
-  cannot be answered is worse than a refusal; the rest are refusals.
-- Mirroring the remote's background jobs process. A job belongs to the process that spawned it.
-- The scheduler. Schedules are host-global, not Session-scoped, and §6.5 explains why they stay local.
-- Changing any client plugin. All of these are Host-side adaptations.
+- 成体系地实现新的远端能力。只新增两个很窄的能力（§6.3），因为一个无法作答的读取比拒绝更糟；
+  其余一律拒绝。
+- 镜像远端的后台任务进程。任务属于孵化它的那个进程。
+- 调度器。计划是主机全局的、不是会话级的，§6.5 解释为何保持本地。
+- 改动任何客户端插件。以上全部是主机侧适配。
 
-## 3. Users and journeys
+## 3. 用户与场景
 
-1. **Set a goal on a mirrored Session.** A user types `/goal do X`. Today the goal appears locally and
-   the remote never sees it. After this change it reaches the remote.
-2. **Look at background jobs.** A user opens the jobs list on a mirrored Session. Today it is empty
-   regardless of what the remote is running; after this change it either shows the remote's jobs or
-   says it cannot.
-3. **Toggle team mode.** A user flips the team switch; it must not silently do nothing.
+1. **在镜像会话上设目标。** 用户输入 `/goal do X`。今天目标在本地出现，远端从未看见。
+   改动后会抵达远端。
+2. **查看后台任务。** 用户在镜像会话打开任务列表。今天无论远端在跑什么，它都是空的；
+   改动后要么显示远端的任务，要么说明拿不到。
+3. **切换团队模式。** 用户拨动团队开关；它不能静默地什么都不做。
 
-## 4. Decision
+## 4. 决策
 
-**Adopt: classify by "does a replayed event carry this fact?", forward where a route is cheap, refuse
-where it is not, and leave the correct reads alone.**
+**采用：按「是否有回放事件携带该事实」分类，路由成本低的就转发，成本高的就拒绝，
+读取本来就正确的一律不动。**
 
-The classification is the deliverable; it should live in code as one table so a new namespace is a
-deliberate decision rather than an omission.
+分类本身就是交付物；它应当以一张表的形式活在代码里，这样新增命名空间是一次**有意的决定**，
+而不是一次遗漏。
 
-| Namespace | Kind | Mirrored behavior | Route |
+| 命名空间 | 种类 | 镜像行为 | 路由 |
 |---|---|---|---|
-| `goals` | write | **forward** | `POST /sessions/:id/goals/:op` (§6.3) |
-| `jobs` | read | **forward** | `POST /sessions/:id/jobs` (§6.3) |
-| `jobs.kill` | write | refuse | §6.4 |
-| `schedule` | host-global | **not adapted** — §6.5 | — |
-| `agentTeams.setEnabled` | write | forward or refuse per §6.6 | `POST /sessions/:id/team` |
-| `subagents.prompt` | write | refuse | §6.4 |
-| `subagents.interruptByUser` | write | refuse | §6.4 |
-| `messageFeedback` | write | refuse | §6.4 |
-| `toolResults.watch` | live stream | refuse (empty stream) | §6.4 |
-| `workspace.pinSession` | local view | leave local, document | §6.7 |
-| `session.fork` | structural | refuse | §6.8 |
-| `todos`, `permissions`, `plan`, `agentPreset`, `model` | read | leave alone (already correct) | §6.2 |
-| `terminals` | mixed | already adapted by `remote/terminal-controller.ts` | — |
-| `workspaceFiles`, `fs`, `subprocess`, `sandbox`, `workspaceChanges` | mixed | already adapted | — |
+| `goals` | 写 | **转发** | `POST /sessions/:id/goals/:op`（§6.3） |
+| `jobs` | 读 | **转发** | `POST /sessions/:id/jobs`（§6.3） |
+| `jobs.kill` | 写 | 拒绝 | §6.4 |
+| `schedule` | 主机全局 | **不适配** —— §6.5 | — |
+| `agentTeams.setEnabled` | 写 | 按 §6.6 转发或拒绝 | `POST /sessions/:id/team` |
+| `subagents.prompt` | 写 | 拒绝 | §6.4 |
+| `subagents.interruptByUser` | 写 | 拒绝 | §6.4 |
+| `messageFeedback` | 写 | 拒绝 | §6.4 |
+| `toolResults.watch` | 实时流 | 拒绝（空流） | §6.4 |
+| `workspace.pinSession` | 本地视图 | 保持本地，写进文档 | §6.7 |
+| `session.fork` | 结构性 | 拒绝 | §6.8 |
+| `todos`、`permissions`、`plan`、`agentPreset`、`model` | 读 | 不动（本就正确） | §6.2 |
+| `terminals` | 混合 | 已由 `remote/terminal-controller.ts` 适配 | — |
+| `workspaceFiles`、`fs`、`subprocess`、`sandbox`、`workspaceChanges` | 混合 | 已适配 | — |
 
-## 5. Requirements and acceptance
+## 5. 需求与验收
 
-Acceptance is stated as Given/When/Then in §10.
+验收以 Given/When/Then 形式列在 §10。
 
-- **R1** No write on a mirrored Session reports success without reaching the remote (goal, team).
-- **R2** No read on a mirrored Session returns a local value that contradicts the remote (jobs).
-- **R3** Every refusal is a `LocalError` with a stable code and a `ui` key from `messages.ts`.
-- **R4** A local Session's behavior is byte-for-byte unchanged for every namespace above.
-- **R5** The classification is data, not scattered conditionals: one table names every adapted
-  namespace and its behavior, and a test asserts the table covers every `Agent`-addressed Remote the
-  Host exposes.
-- **R6** An older agent degrades to today's behavior for the forwarded cases.
+- **R1** 镜像会话上的任何写入都不得在未抵达远端的情况下报告成功（goal、team）。
+- **R2** 镜像会话上的任何读取都不得返回与远端矛盾的本地值（jobs）。
+- **R3** 每次拒绝都是带稳定 code 与 `messages.ts` 中 `ui` key 的 `LocalError`。
+- **R4** 本地会话在上述每个命名空间上的行为字节级不变。
+- **R5** 分类是数据而不是散落的条件分支：一张表列出每个被适配的命名空间及其行为，
+  并有一条测试断言该表覆盖了主机暴露的每个以 `Agent` 寻址的 Remote。
+- **R6** 旧 agent 在转发类用例上退化为今天的现行为。
 
-## 6. Design
+## 6. 设计
 
-### 6.1 One classification table (R5)
+### 6.1 一张分类表（R5）
 
-`packages/local-plugin/src/remote/namespace-policy.ts`:
+`packages/local-plugin/src/remote/namespace-policy.ts`：
 
 ```ts
 export type MirroredPolicy = 'delegate' | 'forward' | 'refuse' | 'local-view'
@@ -105,166 +102,150 @@ export const MIRRORED_NAMESPACE_POLICY = {
   goals: 'forward', jobs: 'forward', agentTeams: 'forward',
   subagents: 'refuse', messageFeedback: 'refuse', toolResults: 'refuse',
   workspace: 'local-view', session: 'delegate',
-  // ... every remaining adapted namespace
+  // ... 其余每个被适配的命名空间
 } as const satisfies Record<string, MirroredPolicy>
 ```
 
-The test in §12 cross-checks this against the Host's registered Remote namespaces, so adding a package
-that exposes one fails loudly instead of defaulting to "wrongly local".
+§12 的测试会把这张表与主机注册的 Remote 命名空间交叉核对，于是新增一个暴露 Remote 的包
+会立刻失败，而不是默认「错误地走本地」。
 
-### 6.2 Leave the correct reads alone (R4)
+### 6.2 读取本就正确的一律不动（R4）
 
-`todos`, the permission preset, plan mode, agent preset, and model selection all fold from events the
-mirror replays (`todo/write`, `permission/preset`, `plan/mode`, `agent-preset/selected`,
-`model/selection` are all in `KNOWN_SESSION_EVENT_TYPES` and none are in `isMirrorNoise`). Those
-surfaces are already right; touching them would be churn with regression risk. §12 pins them with
-"unchanged" assertions rather than new code.
+`todos`、权限预设、计划模式、agent 预设、模型选择都从镜像回放的事件里折叠而来
+（`todo/write`、`permission/preset`、`plan/mode`、`agent-preset/selected`、`model/selection`
+都在 `KNOWN_SESSION_EVENT_TYPES` 里，且都不在 `isMirrorNoise` 中）。
+这些界面已经是对的；动它们只有回归风险、没有收益。§12 用「保持不变」的断言钉住它们，而不是新增代码。
 
-### 6.3 Two forwarded namespaces
+### 6.3 两个被转发的命名空间
 
-**Goals.** The write path is `ctx.goals.<op>(agent, …)`, each committing a local `goal/change`. For a
-mirror, forward the operation and let the remote commit:
+**Goals。** 写路径是 `ctx.goals.<op>(agent, …)`，每个都会提交一条本地 `goal/change`。
+对镜像改为转发操作、由远端提交：
 
 ```ts
 POST /sessions/:id/goals   body: { op: 'create'|'edit'|'pause'|'resume'|'complete'|'clear', ...args }
 ```
 
-On the remote the agent is resolved from the Session id (`ctx.agents.get`), which is a real Agent there.
-The resulting `goal/change` replays into the local projection, so `goals.get` keeps working unchanged
-and the banner updates from the event — no second writer.
+在远端，Agent 由会话 id 解析（`ctx.agents.get`），在那里是真正的 Agent。
+由此产生的 `goal/change` 回放进本地投影，所以 `goals.get` 无需改动即可继续工作，
+横幅从事件更新——不需要第二个写入方。
 
-**Jobs.** `jobs.list` / `jobs.follow` are reads. Forward to a route that returns the remote's list for
-that Session. This is the one place where "refuse" would be noticeably worse than "forward", because an
-empty job list is indistinguishable from "nothing is running", and a user waiting on a long build is
-exactly who looks at it.
+**Jobs。** `jobs.list` / `jobs.follow` 是读取。转发到一条返回该会话远端列表的路由。
+这是唯一「拒绝会明显糟于转发」的地方：空任务列表与「什么都没在跑」无法区分，
+而盯着一个长构建的人恰恰最会去看它。
 
-### 6.4 Refusals
+### 6.4 拒绝
 
-Each refusal answers the same shape: a `LocalError` with `retryable: false` and a `ui` key.
+每次拒绝都是同一种形状：`retryable: false` 且带 `ui` key 的 `LocalError`。
 
-| Operation | Code | Why refuse rather than forward |
+| 操作 | code | 为什么拒绝而不是转发 |
 |---|---|---|
-| `jobs.kill` | `mirror/unsupported` | Killing needs the remote job id, which is not the local one; a wrong id could kill an unrelated process. A route that carries the id is future work, not a silent guess. |
-| `subagents.prompt` | `mirror/unsupported` | The child Session is mirrored, but its **control** is remote process state. Forwarding needs a child-address route; a local write would create a local child the remote never spawns. |
-| `subagents.interruptByUser` | `mirror/unsupported` | Same, and an interrupt that misses is worse than one that refuses. |
-| `messageFeedback.put/delete` | `mirror/unsupported` | Feedback is telemetry about the conversation the user is reading. Recording it locally is arguably right, but silently splitting it from the remote's is not; refuse and let a later change decide (§11). |
-| `toolResults.watch` | empty stream | The live tool-result stream is fed by the process executing the tool. A mirrored turn's stream is already carried by `assistant-events`; a second empty stream would make the trajectory view look broken rather than unavailable. |
+| `jobs.kill` | `mirror/unsupported` | 终止需要远端任务 id，而它与本地 id 不同；用错 id 可能杀掉无关进程。携带 id 的路由属于后续工作，不是静默猜测。 |
+| `subagents.prompt` | `mirror/unsupported` | 子会话已被镜像，但对它的**控制**属于远端进程状态。转发需要一条子会话寻址路由；本地写入会造出一个远端永远不会孵化的本地子会话。 |
+| `subagents.interruptByUser` | `mirror/unsupported` | 同上，而一次打偏的中断比一次拒绝更糟。 |
+| `messageFeedback.put/delete` | `mirror/unsupported` | 反馈是关于用户正在阅读的这段对话的遥测。记在本地或许也说得通，但让它与远端的静默分家则不然；拒绝，把决定留给后续改动（§11）。 |
+| `toolResults.watch` | 空流 | 实时工具结果流由执行工具的那个进程喂。镜像轮次的流已由 `assistant-events` 承载；再来一条空流会让轨迹视图显得坏掉，而不是不可用。 |
 
-For `toolResults.watch` the shape is "yield nothing and complete", because the consumer treats a
-completed stream as "no more live frames", which is true.
+对 `toolResults.watch` 而言形状是「不产出任何帧并完成」，因为消费方把已完成的流理解为
+「没有更多实时帧了」——而这正是事实。
 
-### 6.5 Schedules are host-global, not Session-scoped
+### 6.5 计划是主机全局的，不是会话级的
 
-`remote.schedule.*` is not addressed by an Agent; it is a host-global registry, and a mirrored Session's
-schedules live on the remote. Adapting it would mean mirroring the whole schedule catalog and its
-`schedule/changed` stream — a separate feature, not a gap in this one. It is **out of scope**, listed
-here so the omission is deliberate and discoverable.
+`remote.schedule.*` 不以 Agent 寻址；它是主机全局注册表，而镜像会话的计划在远端。
+适配它意味着镜像整套计划目录及其 `schedule/changed` 流——那是另一个特性，不是本特性的缺口。
+它**不在范围内**，在此列出是为了让这个省略是刻意的、可被发现的。
 
-### 6.6 Team mode
+### 6.6 团队模式
 
-`agentTeams.setEnabled(sessionId, enabled)` writes `team/mode` on the Session. For a mirror that is a
-local event the remote never sees, and the remote's own team machinery keeps its previous state — the
-worst combination. Forward it through the same route family as goals (`POST /sessions/:id/team`); the
-remote commits `team/mode` and the mirror replays it. If the route is not worth the work in the first
-slice, §12's slice 4 allows landing the refusal instead — but not the silent local write.
+`agentTeams.setEnabled(sessionId, enabled)` 在会话上写 `team/mode`。对镜像而言这是一个远端永远收不到的
+本地事件，而远端自己的团队机制保持原状态——最坏的组合。走与 goals 同一族的路由转发
+（`POST /sessions/:id/team`）；远端提交 `team/mode`，镜像回放它。
+如果第一轮切片不值得做这条路由，§12 的切片 4 允许先落地**拒绝**——但不能保留静默的本地写入。
 
-### 6.7 Pin is a local view preference (R5, documented)
+### 6.7 Pin 是本地视图偏好（R5，已写入文档）
 
-`workspace.pinSession` / `unpinSession` write the local workspace registry's `pinnedSessionIds`. A pin is
-a sidebar ordering preference for the machine the user is looking at, exactly like a window position; the
-remote Web UI has its own. This is **correct as-is** and the spec records it so it is not later "fixed"
-into a forwarded call that would surprise a user whose remote sidebar reorders itself.
+`workspace.pinSession` / `unpinSession` 写入本地工作区注册表的 `pinnedSessionIds`。
+置顶是用户所在机器上侧边栏的排序偏好，与窗口位置同类；远端 Web UI 有它自己的一份。
+这**本来就是对的**，本文档记录下来，免得日后被人「修」成转发调用，让用户的远端侧边栏莫名其妙地重排。
 
-### 6.8 Fork is structural and must be refused (R1, R3)
+### 6.8 Fork 是结构性的，必须拒绝（R1、R3）
 
-`session.fork` on a mirror would build a local child from the replayed log via
-`buildForkSeed(source.events, boundary)` — local seqs over a projection, and a child Session with no
-remote counterpart, no remote preset composition, and a cwd that is the local anchor. It would look
-like a working fork and be unusable. Refuse with a cause.
+镜像上的 `session.fork` 会用 `buildForkSeed(source.events, boundary)` 从回放日志构造本地子会话——
+那是投影上的本地序号，得到一个没有远端对应物、没有远端预设组合、
+cwd 还是本地锚点的子会话。它看起来像一次成功的 fork，实际不可用。以具名原因拒绝。
 
-### 6.9 Contract checks
+### 6.9 契约检查
 
-Extend `remote/patch-contract.ts` with the methods each adapted namespace exposes, following the
-existing literal-name pattern, so a DSH release that renames one produces a reported "routing is off"
-rather than a silently local write.
+按既有字面名模式扩展 `remote/patch-contract.ts`，加入每个被适配命名空间所暴露的方法，
+这样 DSH 版本重命名其中之一时，症状是被上报的「路由关闭」，而不是一次静默的本地写入。
 
-## 7. Edges and failures
+## 7. 边界与失败
 
-| Case | Behavior |
+| 情况 | 行为 |
 |---|---|
-| Agent older than the goal/job routes | Degrade to today's local behavior for that one operation, with a debug line (R6). |
-| Remote refuses a goal operation (its own validation) | The remote's error surfaces; no local `goal/change` is written. |
-| Host disconnected | The forward rejects; the operation reports the failure. It must not fall back to a local write. |
-| A refused operation on a local Session | Never reached: the policy delegates before any refusal. |
-| A new namespace appears in a DSH release | The §6.1 table test fails until it is classified. |
+| agent 早于 goal/job 路由 | 该操作退化为今天的本地行为，记一条 debug（R6）。 |
+| 远端拒绝某次目标操作（它自己的校验） | 远端的错误浮现；不写本地 `goal/change`。 |
+| 主机断开 | 转发 reject；操作上报失败。**不得**回落到本地写入。 |
+| 本地会话上的被拒操作 | 永远走不到：策略在任何拒绝之前就委托了。 |
+| DSH 版本中出现新命名空间 | §6.1 的表测试失败，直到它被分类。 |
 
-## 8. Quality attributes
+## 8. 质量属性
 
-- **Honesty.** No operation reports success without the state existing where it matters.
-- **Discoverability.** Every refusal carries a message the user can read and act on.
-- **Blast radius.** One new policy module, two narrow routes, table-driven refusals. No existing
-  adapter changes.
+- **诚实。** 没有任何操作会在状态并不存在于应在之处的情况下报告成功。
+- **可发现性。** 每次拒绝都带有用户可读、可据以行动的消息。
+- **影响面。** 一个新策略模块、两条窄路由、表驱动的拒绝。既有适配器不变。
 
-## 9. Dependencies and assumptions
+## 9. 依赖与假设
 
-- Assumes `ctx.goals`, `ctx.jobs`, `ctx.agentTeams` keep `Agent`-addressed signatures.
-- Assumes the mirror replays `goal/change`, `team/mode`, and `team/task` (it does; none are filtered).
-- Assumes the client renders a refusal through the notice path already used by
-  `mirrorPromptFailed`.
-- Assumes `session.fork` keeps taking `{ sessionId, atSeq? }`.
+- 假设 `ctx.goals`、`ctx.jobs`、`ctx.agentTeams` 保持以 `Agent` 寻址的签名。
+- 假设镜像回放 `goal/change`、`team/mode`、`team/task`（确实如此；它们都不被过滤）。
+- 假设客户端经 `mirrorPromptFailed` 已在用的通知路径渲染拒绝。
+- 假设 `session.fork` 仍接受 `{ sessionId, atSeq? }`。
 
-## 10. Verification
+## 10. 验证
 
-**Unit and package tests**
+**单元与包级测试**
 
-- `packages/local-plugin/test/namespace-policy.test.ts` (new) — the table covers every
-  `Agent`-addressed Remote namespace the Host exposes (enumerated from the live services, so a new one
-  fails); every `refuse` entry answers the documented code and `ui` key; every `delegate` entry calls the
-  original.
-- `packages/local-plugin/test/remote-goals.test.ts` — create/edit/pause/resume/complete/clear forward on
-  a mirror; the replayed `goal/change` updates `goals.get`; a remote refusal writes no local event; an
-  older agent degrades.
-- `packages/local-plugin/test/remote-jobs.test.ts` — `list` returns the remote list; a disconnected host
-  reports an error rather than an empty list; `kill` refuses.
-- `packages/local-plugin/test/remote-refusals.test.ts` — subagents, messageFeedback, toolResults, fork
-  each answer their documented code; `toolResults.watch` completes without frames.
-- `packages/local-plugin/test/pin-local.test.ts` — pin/unpin still write the local registry and make no
-  remote call (guards §6.7).
+- `packages/local-plugin/test/namespace-policy.test.ts`（新增）——该表覆盖主机暴露的每个
+  以 `Agent` 寻址的 Remote 命名空间（从活的服务上枚举，于是新增一个就会失败）；
+  每个 `refuse` 条目答出文档规定的 code 与 `ui` key；每个 `delegate` 条目调用原实现。
+- `packages/local-plugin/test/remote-goals.test.ts` —— create/edit/pause/resume/complete/clear
+  在镜像上转发；回放的 `goal/change` 更新 `goals.get`；远端拒绝时不写本地事件；旧 agent 降级。
+- `packages/local-plugin/test/remote-jobs.test.ts` —— `list` 返回远端列表；主机断开时报错而不是返回空列表；
+  `kill` 拒绝。
+- `packages/local-plugin/test/remote-refusals.test.ts` —— subagents、messageFeedback、toolResults、fork
+  各自答出文档规定的 code；`toolResults.watch` 无帧完成。
+- `packages/local-plugin/test/pin-local.test.ts` —— pin/unpin 仍写本地注册表且不发远端调用
+  （守住 §6.7）。
 
-**Acceptance**
+**验收**
 
-1. *Given* a mirrored Session; *when* the user runs `/goal do X`; *then* the remote goal exists and the
-   local banner shows it after the event replays.
-2. *Given* the same; *when* the remote is running a background job; *then* the jobs list shows it.
-3. *Given* the same; *when* the user tries to fork it; *then* a named refusal appears and no Session is
-   created.
-4. *Given* a local Session; *then* every one of these namespaces behaves exactly as before.
-5. *Given* a DSH release that adds a new `Agent`-addressed namespace; *then* the policy test fails until
-   it is classified.
+1. *给定*一个镜像会话；*当*用户执行 `/goal do X`；*则*远端的 goal 存在，本地横幅在事件回放后显示它。
+2. *给定*同上；*当*远端正在跑一个后台任务；*则*任务列表显示它。
+3. *给定*同上；*当*用户尝试 fork 它；*则*出现具名拒绝，且不创建任何会话。
+4. *给定*一个本地会话；*则*上述每个命名空间的行为与之前完全一致。
+5. *给定*一个新增了以 `Agent` 寻址命名空间的 DSH 版本；*则*策略测试失败，直到它被分类。
 
-## 11. Accepted judgement calls
+## 11. 已接受的取舍
 
-- **`messageFeedback` is refused rather than recorded locally.** Recording locally would be defensible
-  (the feedback is about what the user reads), but it would split the remote's telemetry from the
-  local's with no way to reconcile. Refusing is reversible; a wrong record is not.
-- **Job control is refused, not forwarded.** Needs a remote-id mapping this spec does not introduce.
-- **Scope of forwarding is deliberately two namespaces.** Every forwarded namespace is a protocol route
-  and a remote service call; the refusals cost a fraction and remove the trap. Later changes can promote
-  one refusal to a forward without changing this classification's shape.
-- **Schedules are a separate feature.** §6.5.
+- **`messageFeedback` 选择拒绝而不是记在本地。** 记在本地也说得通（反馈针对的是用户读到的东西），
+  但那会让远端的遥测与本地分家且无从对账。拒绝是可逆的；一条错误的记录不是。
+- **任务控制选择拒绝而不是转发。** 需要本 spec 未引入的远端 id 映射。
+- **转发范围刻意只有两个命名空间。** 每个被转发的命名空间都是一条协议路由加一次远端服务调用；
+  拒绝的成本只是零头，却消除了陷阱。后续改动可以把某个拒绝提升为转发，而不必改变这份分类的形状。
+- **计划是独立特性。** §6.5。
 
-## 12. Implementation slices
+## 12. 实现切片
 
-| # | Content | Verification |
+| # | 内容 | 验证 |
 |---|---|---|
-| 0 | This specification | Document self-check |
-| 1 | `remote/namespace-policy.ts` + the completeness test; wire the refusals for subagents, messageFeedback, toolResults, fork | `namespace-policy.test.ts`, `remote-refusals.test.ts` |
-| 2 | Goals: protocol route + agent handler + local forwarding | `remote-goals.test.ts` |
-| 3 | Jobs: protocol route + agent handler + local forwarding (`list`/`follow` only) | `remote-jobs.test.ts` |
-| 4 | Team mode: forward (§6.6), or land the refusal if slice 4 is deferred | `remote-goals.test.ts` team case |
-| 5 | Pin/fork documentation + the pin regression test | `pin-local.test.ts` |
-| 6 | Documentation: `docs/remote-workspace-mechanism.md` (a new table under §5.3 and a Known-limits row), `docs/protocol.md` routes/capabilities, CHANGELOG under Unreleased | Document self-check |
+| 0 | 本文档 | 文档自检 |
+| 1 | `remote/namespace-policy.ts` + 完备性测试；为 subagents、messageFeedback、toolResults、fork 接上拒绝 | `namespace-policy.test.ts`、`remote-refusals.test.ts` |
+| 2 | Goals：协议路由 + agent 处理器 + 本地转发 | `remote-goals.test.ts` |
+| 3 | Jobs：协议路由 + agent 处理器 + 本地转发（仅 `list`/`follow`） | `remote-jobs.test.ts` |
+| 4 | 团队模式：转发（§6.6），若切片 4 推迟则先落地拒绝 | `remote-goals.test.ts` 的 team 用例 |
+| 5 | Pin/fork 文档 + pin 防回归测试 | `pin-local.test.ts` |
+| 6 | 文档：`docs/remote-workspace-mechanism.md`（§5.3 下新增一张表、Known limits 增加一行）、`docs/protocol.md` 的路由/能力、CHANGELOG 的 Unreleased 条目 | 文档自检 |
 
-Slice 1 is independent and delivers most of the value (it removes every silent write). Slices 2 and 3
-are independent of each other. Each slice ends with `pnpm typecheck`; the finished change requires
-`pnpm install && pnpm typecheck && pnpm test && pnpm build`.
+切片 1 独立且交付了大部分价值（它消除了每一处静默写入）。切片 2 与 3 互相独立。
+每片以 `pnpm typecheck` 收尾；整体完成需要
+`pnpm install && pnpm typecheck && pnpm test && pnpm build`。

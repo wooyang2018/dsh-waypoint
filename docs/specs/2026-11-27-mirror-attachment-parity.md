@@ -1,14 +1,12 @@
-# Attachments must cross the mirror boundary in every direction, and attachment-only prompts must pair
+# 附件必须在镜像边界的每个方向上流通，纯附件提示词必须能配对
 
-Status: approved design. Implementation follows the slices in §12.
+状态：设计已定稿。实现按 §12 的切片推进。
 
-## 1. Background and goal
+## 1. 背景与目标
 
-Three defects share one root: the mirror treats an attachment as something that only appears in a
-`user/message` produced by the local composer.
+三个缺陷共享同一个根因：镜像把「附件」当成了只会出现在本地输入框产出的 `user/message` 里的东西。
 
-**Defect 1 — tool-result images are never synced.** Reverse attachment synchronization is gated on one
-event type:
+**缺陷 1 —— 工具结果里的图片从不同步。** 反向附件同步只按一种事件类型设门禁：
 
 ```ts
 // packages/local-plugin/src/mirror/service.ts
@@ -18,8 +16,7 @@ async #syncEventAttachments(hostId: string, event: RemoteSessionEvent): Promise<
 }
 ```
 
-A `read_image` tool call produces its picture in the **tool result**, not in a user message. The
-remote agent commits:
+`read_image` 工具调用产出的图片在**工具结果**里，不在用户消息里。远端 agent 提交的是：
 
 ```ts
 // dsh-tool-fs/src/read-image.ts
@@ -31,277 +28,253 @@ function imageReadContent(value: ImageReadValue): ContentBlock[] {
 }
 ```
 
-so a remote `tool/result` event carries an `ImageAttachmentRef` whose `attachmentId` is a
-`sha256:<64 hex>` digest of bytes that exist **only on the remote host**. The local transcript
-replays that event, the tool card extracts the reference from `block.content`
-(`dsh-client-ui-tool`, `imageCardModel` → `imageReferences`), and the image loader asks the **local**
-attachment store for those bytes. They are not there.
+于是远端的 `tool/result` 事件携带一个 `ImageAttachmentRef`，其 `attachmentId` 是
+**只存在于远端主机**的那些字节的 `sha256:<64 hex>` 摘要。本地会话记录回放该事件，
+工具卡片从 `block.content` 里取出引用（`dsh-client-ui-tool` 的 `imageCardModel` → `imageReferences`），
+然后图片加载器去**本地**附件库要这些字节。那里没有。
 
-The visible result is a permanently blank picture on every remote `read_image` card — the same failure
-the mirror already fixed for user-message images (`remote/attachments.ts` exists precisely because "an
-image *is* its bytes"), left open on the second path into the same store.
+可见结果就是：每张远端 `read_image` 卡片上都是一个永久空白的图片——
+这与镜像已经为「用户消息里的图片」修过的失败是同一个（`remote/attachments.ts` 的存在
+正是因为「图片**就是**它的字节」），只是进入同一个库的第二条路径被漏下了。
 
-**Defect 2 — attachment-only prompts never pair.** The optimistic-message pairing requires non-empty
-text:
+**缺陷 2 —— 纯附件提示词永远配不上对。** 乐观消息配对要求文本非空：
 
 ```ts
 // packages/local-plugin/src/mirror/service.ts
 const index = runtime.pendingUsers.findIndex(pending => pending.text !== '' && pending.text === text)
 ```
 
-A prompt carrying only an image or only a file has `text === ''`, so the entry can never match the
-replayed `user/message`. The mirror then appends the echo as a *second* node, and one sent picture
-becomes two bubbles.
+只带图片或只带文件的提示词 `text === ''`，所以该条目永远匹配不上回放的 `user/message`。
+镜像于是把这个回显当作**第二条**节点追加，一张图片变成两个气泡。
 
-This was masked while `promptParts` dropped `file` parts entirely; now that files forward correctly
-(1.1.4), an image-only or file-only prompt reliably reproduces it.
+这个问题在 `promptParts` 还是直接丢弃 `file` 部分时被掩盖了；1.1.4 之后文件能正确转发，
+于是纯图片或纯文件提示词可以稳定复现它。
 
-**Defect 3 — reverse sync covers only `user/message` assistant-visible references, not every event
-that can carry one.** The same omission class as Defect 1: today the gate is a single event type, and
-any future event that carries an attachment reference silently skips hydration.
+**缺陷 3 —— 反向同步只覆盖了「助手可见」的引用，而不是每个可能携带引用的事件。**
+与缺陷 1 同属一类遗漏：今天的门禁是单一事件类型，将来任何携带附件引用的事件都会静默跳过填充。
 
-Goal: every attachment reference that the local transcript can render resolves to local bytes, and an
-attachment-only prompt reuses its optimistic bubble.
+目标：本地会话记录能渲染的每个附件引用都解析到本地字节；纯附件提示词复用自己的乐观气泡。
 
-Success signals:
+成功信号：
 
-1. A remote `read_image` result renders its picture locally.
-2. Sending only an image (or only a file) produces exactly one bubble.
-3. Sending text + image still pairs correctly (no regression).
-4. An older agent without `attachment.read` degrades to the existing placeholder rather than an error.
+1. 远端 `read_image` 的结果在本地渲染出图片。
+2. 只发一张图片（或只发一个文件）只产生一个气泡。
+3. 文本 + 图片仍然正确配对（无回归）。
+4. 不支持 `attachment.read` 的旧 agent 退化为现有占位符，而不是报错。
 
-## 2. Scope and non-goals
+## 2. 范围与非目标
 
-In scope: the event gate for reverse sync, the pairing key, and the tests that pin both.
+范围内：反向同步的事件门禁、配对键，以及把二者钉住的测试。
 
-Out of scope:
+范围外：
 
-- Transferring bytes **to** the remote for tool results. Tools run on the remote; their inputs are the
-  remote's business.
-- A streaming sync. `syncRemoteAttachment` is per-reference and already idempotent (a present object
-  short-circuits before any traffic); batching is a separate concern.
-- Re-encoding or renormalizing any image. `publishVerbatim` deliberately writes the exact bytes under
-  the exact digest; changing that would break every existing reference.
-- Changing `attachment.read`'s wire shape.
+- 把工具结果的字节**送到**远端。工具跑在远端，其输入是远端自己的事。
+- 流式同步。`syncRemoteAttachment` 按引用处理且已幂等（对象存在时在任何流量之前就短路），
+  批处理是另一个议题。
+- 重新编码或重新归一化任何图片。`publishVerbatim` 刻意把精确字节写进精确摘要下；
+  改掉它会破坏所有既有引用。
+- 改动 `attachment.read` 的线上形状。
 
-## 3. Users and journeys
+## 3. 用户与场景
 
-1. **Ask the agent to look at a screenshot.** A user asks the remote agent to read a PNG; the card
-   must show the picture, not an empty frame.
-2. **Send a picture with no words.** A user drops an image into the composer and presses send; the
-   transcript must show one message.
-3. **Send a file with no words.** Same, for a document.
+1. **让 agent 看一张截图。** 用户让远端 agent 读一个 PNG；卡片必须显示图片，而不是空框。
+2. **不发文字只发图片。** 用户把一张图片拖进输入框直接发送；会话记录里必须只有一条消息。
+3. **不发文字只发文件。** 同上，对象是文档。
 
-## 4. Decision
+## 4. 决策
 
-**Adopt: gate reverse sync on "does this event carry an attachment reference", and pair on a prompt
-identity that survives an empty text body.**
+**采用：把反向同步的门禁改为「该事件是否携带附件引用」，并用一个在空文本下仍然成立的
+提示词身份来配对。**
 
-| Rejected alternative | Why it fails |
+| 被否决的方案 | 为什么不行 |
 |---|---|
-| A. Add `tool/result` to the existing `if` | Fixes Defect 1 and leaves Defect 3: the next event type that carries a reference is silently unsynced again. It also hard-codes "the two types that exist today" into a gate whose actual question is different. |
-| B. Pair on position (`pendingUsers[0]`) | Already tried and reverted in this codebase: a cancelled prompt leaves an entry behind and the queue shifts, so the entry claims a message another client sent. The comment above the current code records that history. |
-| C. Pair on the remote request id | The remote `user/message` does not echo the local request id; the mirror never sends one it could match. |
-| D. Dedupe by comparing content arrays | Deep-equality on replayed content is fragile (attachment refs are rewritten, base64 is not carried) and would silently pair two genuinely identical sends. |
-| E. Skip the optimistic append for attachment-only prompts | Removes the duplicate by removing the immediate feedback: a picture with no words would show nothing until the round trip completes. |
+| A. 在现有 `if` 里加上 `tool/result` | 修好缺陷 1，仍留下缺陷 3：下一个携带引用的事件类型又会静默失同步。它还把「今天存在的两种类型」硬编码进一道本该问别的问题的门禁里。 |
+| B. 按位置配对（`pendingUsers[0]`） | 本仓库已经试过并回退：被取消的提示词会留下残条目，队列会错位，于是该条目会认领另一个客户端发出的消息。现有代码上方的注释记录了这段历史。 |
+| C. 按远端 request id 配对 | 远端 `user/message` 不回显本地 request id；镜像从未发送过可供匹配的 id。 |
+| D. 比较内容数组去重 | 对回放内容做深相等很脆弱（附件引用被重写、base64 不携带），还会静默地把两次真正相同的发送并成一次。 |
+| E. 纯附件提示词干脆不做乐观追加 | 用去掉即时反馈来消除重复：一张不带文字的图片在往返完成前什么都不显示。 |
 
-## 5. Requirements and acceptance
+## 5. 需求与验收
 
-Acceptance is stated as Given/When/Then in §10.
+验收以 Given/When/Then 形式列在 §10。
 
-- **R1** An attachment reference in any replayed event whose content is renderable locally is synced.
-- **R2** Sync stays idempotent: a second pass over the same event performs no transfer.
-- **R3** A `user/message` carrying only attachments pairs with its optimistic entry.
-- **R4** A `user/message` carrying text pairs exactly as it does today.
-- **R5** Two consecutive identical prompts still pair in order (no collapse).
-- **R6** An agent without `attachment.read` leaves the existing "unsupported" behavior; no error
-  reaches the transcript.
-- **R7** Sync never blocks event projection: a failing transfer degrades that reference and leaves the
-  event in the log.
+- **R1** 任何回放事件中、内容可在本地渲染的附件引用都被同步。
+- **R2** 同步保持幂等：同一事件再次处理不产生第二次传输。
+- **R3** 只带附件的 `user/message` 与其乐观条目配对。
+- **R4** 带文本的 `user/message` 与今天完全一样地配对。
+- **R5** 连续两次完全相同的提示词仍然按顺序各自配对（不合并）。
+- **R6** 不支持 `attachment.read` 的 agent 保持现有「unsupported」行为；会话记录里不出现错误。
+- **R7** 同步绝不阻塞事件投影：一次失败的传输只让该引用降级，事件仍留在日志里。
 
-## 6. Design
+## 6. 设计
 
-### 6.1 Generalize the reverse-sync gate (R1, R2, R7)
+### 6.1 泛化反向同步门禁（R1、R2、R7）
 
-Replace the event-type gate with a content scan over the events that can carry a reference:
+把事件类型门禁换成对「可能携带引用的事件」做内容扫描：
 
 ```ts
-/** Event types whose `data.content` / `data.message.content` can carry an attachment reference. */
+/** `data.content` / `data.message.content` 可能携带附件引用的事件类型。 */
 const ATTACHMENT_BEARING_EVENTS = new Set(['user/message', 'assistant/message', 'tool/result'])
 ```
 
-and read the parts out of whichever field the event uses. `user/message` and `assistant/message` carry
-`data.message.content`; `tool/result` carries its content directly. The existing helper already walks
-a content array and checks `type === 'image' | 'file'`; it needs the right entry point per type, not a
-second implementation.
+并从各类型实际使用的字段里取出这些部分：`user/message` 与 `assistant/message` 在
+`data.message.content`，`tool/result` 直接在 `data.content`。现有辅助函数已经在遍历内容数组并判断
+`type === 'image' | 'file'`；需要补的是按类型取正确的入口，而不是写第二套实现。
 
-The `Set` is the honest expression of R1's question ("can this event carry one?") and is where a future
-event type is added — with the §12 test that fails when the list and the payload shapes disagree.
+这个 `Set` 是 R1 那个问题（「这个事件能不能携带引用？」）的诚实表达，也是将来新增事件类型的落点——
+§12 有一条测试会在该列表与载荷形状不一致时失败。
 
-**Ordering (R7).** The call site is the projection path, so a transfer must not delay an event beyond
-what the existing await already costs. Today:
+**顺序（R7）。** 调用点在投影路径上，所以一次传输不能让事件延迟超出既有 await 已经付出的代价。今天是：
 
 ```ts
-await this.#syncEventAttachments(runtime.record.hostId, event)   // before projection
+await this.#syncEventAttachments(runtime.record.hostId, event)   // 在投影之前
 ```
 
-That await is deliberate for images — the transcript must not render a reference whose bytes are still
-arriving — and it is bounded by one round trip per unresolved reference, with present objects
-short-circuiting. Keep it, and keep the `try/catch` that degrades a failure to a warning: an
-attachment nobody can display must not stop the turn.
+这个 await 对图片是刻意的——会话记录不能渲染一个字节还在路上的引用——并且它被
+「每个未解析引用一次往返」所界定，已存在的对象会短路。保留它，也保留把失败降级为警告的
+`try/catch`：一个谁也显示不了的附件不能把整轮停下来。
 
-**Sizing.** A `read_image` result is a normalized prompt image; the existing per-reference transfer has
-no cap beyond the agent's own response bound. §9 records that assumption rather than inventing a new
-limit here.
+**体积。** `read_image` 的结果是一张归一化过的提示词图片；现有按引用的传输除了 agent 自身的
+响应上限外没有额外上限。§9 记录该假设，而不是在这里发明一个新限制。
 
-### 6.2 Pairing identity (R3, R4, R5)
+### 6.2 配对身份（R3、R4、R5）
 
-The pairing key becomes "the text the remote will echo" **plus** an attachment signature, so the two
-cases compose instead of competing:
+配对键变成「远端会回显的文本」**加上**一个附件签名，让两种情形互补而不是互相竞争：
 
 ```ts
 interface PendingUser {
   readonly message: unknown
-  /** Text the remote echoes back; empty for an attachment-only prompt. */
+  /** 远端回显回来的文本；纯附件提示词为空。 */
   text: string
   /**
-   * Stable signature of the parts sent, so two prompts that are both text-less
-   * (two pictures, two files) still pair in order rather than never.
+   * 已发送部分的稳定签名，好让两条都没有文本的提示词（两张图、两个文件）
+   * 仍然按顺序配对，而不是永远配不上。
    */
   signature: string
   localSeq: number
 }
 ```
 
-`signature` is derived from what was actually forwarded in `#promptContent` — the ordered
-`type:mediaType:name` of its non-text parts, which is available without reading bytes twice. Examples:
+`signature` 由 `#promptContent` 实际转发出去的内容导出——即其非文本部分按序的
+`type:mediaType:name`，这个信息无需二次读取字节即可获得。示例：
 
-| Prompt | `text` | `signature` |
+| 提示词 | `text` | `signature` |
 |---|---|---|
-| `"hi"` | `hi` | `` (empty) |
-| one PNG | `` | `image:image/png:` |
-| one PNG named `a.png` | `` | `image:image/png:a.png` |
-| `[a.pdf]` (rewritten `@`) | `[a.pdf]` | `file::a.pdf` |
+| `"hi"` | `hi` | ``（空） |
+| 一张 PNG | `` | `image:image/png:` |
+| 一张名为 `a.png` 的 PNG | `` | `image:image/png:a.png` |
+| `[a.pdf]`（被改写的 `@`） | `[a.pdf]` | `file::a.pdf` |
 
-Matching becomes:
+匹配变成：
 
 ```ts
 const index = runtime.pendingUsers.findIndex(pending =>
   pending.text === text && pending.signature === signatureOfRemote(data))
 ```
 
-The remote side needs no change: the signature is computed from the **echoed** `user/message` content,
-using the same function the forwarding side uses, so the two agree by construction. When the remote
-strips or renames a part the signature differs and the entry simply does not match, which falls through
-to today's append — the safe direction (an extra bubble beats a swallowed message).
+远端无需改动：签名是从**回显**的 `user/message` 内容算出的，用的是与转发侧同一个函数，
+所以二者按构造一致。若远端剥离或重命名了某个部分，签名随之不同，该条目便不匹配，
+自然落到今天的追加路径——这是安全的方向（多一个气泡胜过吞掉一条消息）。
 
-**A trap to record.** The current guard `pending.text !== ''` is not merely a shape check; it is what
-keeps an *empty* pending list from matching a remote message that also has empty text. Removing it
-without the signature would make every attachment-only message match the first empty entry regardless
-of what it carried — worse than the duplicate it fixes. §11 records this.
+**一个要记录下来的坑。** 现在的 `pending.text !== ''` 守卫不只是形状检查；
+它正是防止「空的待处理队列」去匹配一条文本同样为空的远端消息的东西。
+在不引入签名的前提下删掉它，会让每个纯附件消息都匹配到第一个空条目，
+不管它携带的是什么——比它要修的重复更糟。§11 记录这一点。
 
-### 6.3 Where the signature is computed
+### 6.3 签名在哪里计算
 
-One function, used twice:
+一个函数，用两次：
 
 ```ts
 function attachmentSignature(content: readonly unknown[]): string
 ```
 
-- Forward path: over the `content` returned by `#promptContent` (post-rewrite, so it matches the echo).
-- Echo path: over `(event.data as { content?: unknown }).content` of the remote `user/message`.
+- 转发侧：作用于 `#promptContent` 返回的 `content`（改写之后，因而与回显一致）。
+- 回显侧：作用于远端 `user/message` 的 `(event.data as { content?: unknown }).content`。
 
-Because `#resolveTextReferences` rewrites `@<path>` to `[<name>]` and `pending.text` is reassigned to
-the **forwarded** text (`service.ts`, before the send), the two sides already agree on text; the
-signature extends the same discipline to the parts.
+由于 `#resolveTextReferences` 会把 `@<path>` 改写成 `[<name>]`，而 `pending.text` 在发送前
+被重新赋值为**转发出去的**文本（`service.ts`），两侧在文本上已经一致；签名把同样的纪律
+延伸到各个部分上。
 
-### 6.4 Interaction with a cancelled or rejected prompt
+### 6.4 与「取消」或「被拒」提示词的交互
 
-`cancel()` clears `pendingUsers` and closes the turn; a rejected prompt splices its entry out. Both are
-unchanged: the signature affects only how a surviving entry is *found*, never when entries are dropped.
-A prompt whose send failed therefore still cannot claim a later message.
+`cancel()` 会清空 `pendingUsers` 并关闭该轮；被拒的提示词会把自身条目摘除。二者都不变：
+签名只影响一个存活条目**如何被找到**，从不影响条目何时被丢弃。因此发送失败的提示词
+仍然不可能认领后来的消息。
 
-## 7. Edges and failures
+## 7. 边界与失败
 
-| Case | Behavior |
+| 情况 | 行为 |
 |---|---|
-| `attachment.read` missing | `syncRemoteAttachment` returns `{ kind: 'unsupported' }`; the card keeps its placeholder. Unchanged. |
-| Remote object pruned (content-addressed store) | `{ kind: 'missing' }` at debug level; no throw. |
-| Byte-length mismatch | Throws `LocalError` today. That aborts the projection of the event — see §11. |
-| Two identical pictures sent in a row | Both pair, in order, because each entry is consumed on match. |
-| A remote message with no locally-forwarded counterpart | Falls through to append (unchanged). |
-| The same reference appears in two events | The second call short-circuits as `present` (R2). |
-| An event carries a reference whose `attachmentId` is not `sha256:` | Ignored at debug (existing guard). |
+| 缺少 `attachment.read` | `syncRemoteAttachment` 返回 `{ kind: 'unsupported' }`；卡片保留占位符。不变。 |
+| 远端对象被裁剪（内容寻址库） | `{ kind: 'missing' }`，debug 级别；不抛错。 |
+| 字节长度不符 | 今天会抛 `LocalError`，从而中断该事件的投影——见 §11。 |
+| 连续发送两张相同的图片 | 两次都配对，按顺序，因为每个条目匹配后被消耗。 |
+| 远端消息没有对应的本地已转发条目 | 落到追加路径（不变）。 |
+| 同一引用出现在两个事件里 | 第二次调用以 `present` 短路（R2）。 |
+| 事件携带的 `attachmentId` 不是 `sha256:` | 在 debug 级别忽略（既有守卫）。 |
 
-## 8. Quality attributes
+## 8. 质量属性
 
-- **Latency.** The added syncs are bounded by one round trip per new reference, and only for turns that
-  produce images/files. Present objects cost nothing.
-- **Storage.** Content-addressed and idempotent, so a repeated replay converges to one object.
-- **Blast radius.** One gate, one identity function, one struct field. `publishVerbatim`,
-  `attachment.read`, and the forward path are unchanged.
+- **延迟。** 新增的同步被「每个新引用一次往返」界定，且只对产出图片/文件的轮次发生。
+  已存在的对象零成本。
+- **存储。** 内容寻址且幂等，重复回放收敛到同一个对象。
+- **影响面。** 一道门禁、一个身份函数、一个结构体字段。`publishVerbatim`、`attachment.read`
+  与转发路径均不变。
 
-## 9. Dependencies and assumptions
+## 9. 依赖与假设
 
-- Assumes the remote store keeps objects referenced by its own recent log. A pruned object degrades to
-  a placeholder, not an error (existing behavior).
-- Assumes `attachment.read` returns base64 within the agent's response bound.
-- Assumes `ImageAttachmentRef`/`FileAttachmentRef` keep `attachmentId` as `sha256:<64 hex>`.
-- Assumes `tool/result.data.content` is an array of blocks. A different shape degrades to "no parts
-  found", which is today's behavior for that event.
+- 假设远端库保留其自身近期日志所引用的对象。被裁剪的对象降级为占位符而非错误（现有行为）。
+- 假设 `attachment.read` 返回的 base64 在 agent 响应上限之内。
+- 假设 `ImageAttachmentRef`/`FileAttachmentRef` 的 `attachmentId` 保持 `sha256:<64 hex>` 形状。
+- 假设 `tool/result.data.content` 是块数组。形状不同则退化为「找不到部分」，
+  这对该事件而言就是今天的现行为。
 
-## 10. Verification
+## 10. 验证
 
-**Unit and package tests**
+**单元与包级测试**
 
-- `packages/local-plugin/test/mirror-attachments.test.ts` — a `tool/result` carrying an image ref
-  triggers exactly one `attachment.read`; a second pass triggers none; a `user/message` with a file ref
-  behaves as today (no regression); an event type added to the Set but with an unknown payload shape
-  degrades without throwing.
-- The same file — `attachment.read` absent → no call, no error; `attachment/not-found` → no throw.
-- `packages/local-plugin/test/mirror-pairing.test.ts` (new) — an image-only prompt yields ONE node
-  (assert the local session's `user/message` count, not just "no error"); a file-only prompt the same;
-  text+image pairs as today; two consecutive images pair in order; an unmatched remote message still
-  appends.
-- `packages/testkit/src/fake-host.ts` — serve `attachment.read` for image and file refs.
+- `packages/local-plugin/test/mirror-attachments.test.ts` —— 携带图片引用的 `tool/result`
+  恰好触发一次 `attachment.read`；第二次处理一次也不触发；带文件引用的 `user/message`
+  行为与今天一致（无回归）；某个被加入 Set 但载荷形状未知的事件类型降级而不抛错。
+- 同一文件 —— `attachment.read` 缺席 → 不调用、不报错；`attachment/not-found` → 不抛错。
+- `packages/local-plugin/test/mirror-pairing.test.ts`（新增）—— 纯图片提示词只产出**一条**节点
+  （断言本地会话的 `user/message` 条数，而不只是「没报错」）；纯文件提示词同理；
+  文本 + 图片与今天一致地配对；连续两张图片按顺序配对；未匹配的远端消息仍然追加。
+- `packages/testkit/src/fake-host.ts` —— 为图片与文件引用提供 `attachment.read`。
 
-**Acceptance**
+**验收**
 
-1. *Given* a mirrored Session; *when* the remote runs `read_image` on a PNG; *then* the tool card shows
-   the picture and the local store holds an object under the remote's `attachmentId`.
-2. *Given* the same Session; *when* the same turn is replayed after a restart; *then* no second transfer
-   occurs and the picture still renders.
-3. *Given* a mirrored Session; *when* the user sends one image with no text; *then* exactly one message
-   node exists and the remote log holds one `user/message`.
-4. *Given* the same; *when* the user sends `text + image`; *then* behavior is unchanged from today.
-5. *Given* a remote agent without `attachment.read`; *when* a `read_image` result replays; *then* the
-   card shows its placeholder and the log carries only a debug line.
+1. *给定*一个镜像会话；*当*远端对一个 PNG 运行 `read_image`；*则*工具卡片显示图片，
+   且本地库在远端 `attachmentId` 下持有相应对象。
+2. *给定*同一会话；*当*同一轮在重启后被回放；*则*不发生第二次传输，图片仍然渲染。
+3. *给定*一个镜像会话；*当*用户不带文字发送一张图片；*则*恰好存在一条消息节点，
+   且远端日志中只有一条 `user/message`。
+4. *给定*同上；*当*用户发送 `文本 + 图片`；*则*行为与今天一致。
+5. *给定*一个不支持 `attachment.read` 的远端 agent；*当*某个 `read_image` 结果被回放；
+   *则*卡片显示占位符，日志里只有一条 debug 记录。
 
-## 11. Accepted judgement calls
+## 11. 已接受的取舍
 
-- **The signature is content-derived, not id-derived.** The remote echo does not preserve a local id,
-  so an identity has to be reconstructed from what is visible. Recorded in §6.2, including why the
-  empty-text guard cannot simply be deleted.
-- **A byte-length mismatch throws and aborts that event's projection.** Preserving today's behavior:
-  a corrupt transfer is a real fault, and the existing `#noteSkipped` path records the hole visibly
-  rather than replaying bytes that do not match their digest. This spec does not soften it.
-- **No transfer size cap is introduced here.** `docs/specs/` has no precedent for one at this layer,
-  and the forward path's 9 MiB bound is about the 12 MiB *request body*, which does not apply to a
-  response. A pathological object is the remote store's problem.
-- **`assistant/message` is included in the bearing set** even though nothing produces an assistant
-  image reference today. The cost is one `Array.isArray` check per event; the alternative is a third
-  silent omission.
+- **签名由内容推导，而不是由 id 推导。** 远端回显不保留本地 id，所以身份只能从可见内容重建。
+  记录于 §6.2，含「为什么空文本守卫不能简单删掉」。
+- **字节长度不符会抛错并中断该事件的投影。** 保持今天的行为：一次损坏的传输是真实故障，
+  既有的 `#noteSkipped` 路径会把缺口可见地记录下来，而不是回放与摘要不符的字节。本 spec 不放宽它。
+- **此处不引入传输体积上限。** `docs/specs/` 在这一层没有先例，而转发侧的 9 MiB 约束
+  针对的是 12 MiB 的**请求体**，不适用于响应。病态对象是远端库的问题。
+- **`assistant/message` 也被纳入承载集合**，尽管今天没有任何东西产出助手图片引用。
+  代价是每个事件一次 `Array.isArray` 检查；替代方案是第三次静默遗漏。
 
-## 12. Implementation slices
+## 12. 实现切片
 
-| # | Content | Verification |
+| # | 内容 | 验证 |
 |---|---|---|
-| 0 | This specification | Document self-check |
-| 1 | Mirror: generalize `#syncEventAttachments` to the bearing set + per-type content extraction | `mirror-attachments.test.ts` |
-| 2 | Mirror: `attachmentSignature`, the `PendingUser` field, the matcher, the forward-side assignment | `mirror-pairing.test.ts` |
-| 3 | Testkit: `attachment.read` for image and file | existing suites go green |
-| 4 | Documentation: `docs/remote-workspace-mechanism.md` §5.2/§5.4 attachment notes, CHANGELOG under Unreleased | Document self-check |
+| 0 | 本文档 | 文档自检 |
+| 1 | 镜像：把 `#syncEventAttachments` 泛化到承载集合 + 按类型取内容 | `mirror-attachments.test.ts` |
+| 2 | 镜像：`attachmentSignature`、`PendingUser` 新字段、匹配器、转发侧赋值 | `mirror-pairing.test.ts` |
+| 3 | Testkit：图片与文件的 `attachment.read` | 既有测试套件转绿 |
+| 4 | 文档：`docs/remote-workspace-mechanism.md` §5.2/§5.4 附件说明、CHANGELOG 的 Unreleased 条目 | 文档自检 |
 
-Slices 1 and 2 are independent and may land in either order; both are self-contained in
-`packages/local-plugin`. Each slice ends with `pnpm typecheck`; the finished change requires
-`pnpm install && pnpm typecheck && pnpm test && pnpm build`.
+切片 1 与 2 互相独立，可按任意顺序落地；两者都自包含在 `packages/local-plugin` 内。
+每片以 `pnpm typecheck` 收尾；整体完成需要
+`pnpm install && pnpm typecheck && pnpm test && pnpm build`。

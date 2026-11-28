@@ -1,12 +1,11 @@
-# Editing or removing a queued message must reach the remote queue
+# 编辑或删除排队中的消息，必须抵达远端队列
 
-Status: approved design. Implementation follows the slices in §12.
+状态：设计已定稿。实现按 §12 的切片推进。
 
-## 1. Background and goal
+## 1. 背景与目标
 
-A mirrored Session keeps its own pending-input queue, and the user sees that queue in the composer. The
-DSH client lets them act on it: the `QueueDock` row offers **edit**, **remove**, and (while running)
-**steer**, all of which go through one Remote method:
+镜像会话维护着自己的待发队列，用户在输入框里能看到它。DSH 客户端允许用户对它动手：
+`QueueDock` 的行内提供**编辑**、**删除**以及（运行中时）**转为 steer**，全部走同一个 Remote 方法：
 
 ```ts
 // dsh-api-session-controller/src/client/sessions/session.ts
@@ -15,7 +14,7 @@ async updateQueue(itemId: MessageId, action: QueueAction) {
 }
 ```
 
-On the Host, `updateQueue` locates the item by identity in the **live Agent's inbox**:
+在主机侧，`updateQueue` 按身份在**活的 Agent 收件箱**里查找该项：
 
 ```ts
 // dsh-api-session-controller/src/commands.ts
@@ -29,7 +28,7 @@ if (located === undefined) {
 }
 ```
 
-For a mirrored Session that Agent is the mirror façade, whose inbox is a **local array**:
+对镜像会话而言，那个 Agent 是镜像门面，它的收件箱是一个**本地数组**：
 
 ```ts
 // packages/local-plugin/src/mirror/service.ts
@@ -40,137 +39,129 @@ function createMirrorInbox(session: Session): MirrorInbox {
 }
 ```
 
-and the façade reaches it while the remote is running:
+而门面在远端运行时会这样处理：
 
 ```ts
 followup(message) {
   if (this.#runtime.running) {
     this.inbox.splice('next-turn', this.inbox.nextTurn.length, 0, [message])
-    return                      // stays local until turn/end
+    return                      // 留在本地，直到 turn/end
   }
   this.#mirror.prompt(this.#runtime, message, 'queue')
 }
 ```
 
-So there is a real window — from the moment the user queues a follow-up during a running turn until
-`turn/end` flushes it — in which the item exists **only** in the local array. Three things follow:
+于是存在一个真实的窗口——从用户在运行中的轮次里排入一条后续消息，到 `turn/end` 把它冲出去为止——
+在此期间该项**只**存在于本地数组里。由此产生三个后果：
 
-1. `updateQueue` **succeeds locally** (the item is in `MirrorInbox`), rewriting or removing the local
-   entry and appending a local `agent/inbox/spliced`. The remote never learns.
-2. On `turn/end` the facade flushes `inbox.nextTurn[0]` **only** — so an edited item is not the one that
-   was edited as far as the remote is concerned, and a removed item may already have been sent if the
-   flush raced the removal.
-3. Worst case: the user "removes" a queued message and the remote runs it anyway, because the flush
-   captured the entry before the removal landed.
+1. `updateQueue` 在本地**成功**（项确实在 `MirrorInbox` 里），改写或删除了本地条目并追加一条本地
+   `agent/inbox/spliced`。远端毫不知情。
+2. `turn/end` 时门面**只**冲出 `inbox.nextTurn[0]`——所以对远端来说，被编辑的那条并不是它以为
+   被编辑的那条；而被删除的项如果与冲出过程竞态，可能已经被发出去了。
+3. 最坏情况：用户「删除」了一条排队消息，远端却照跑不误，因为冲出逻辑在删除落地之前就捕获了该条目。
 
-Goal: editing, removing, and steering a queued message behaves the same on a mirrored Session as on a
-local one — the message the remote eventually receives is the one the user left in the queue.
+目标：在镜像会话上编辑、删除、转 steer 排队消息的行为，与本地会话一致——
+远端最终收到的，是用户留在队列里的那条。
 
-Success signals:
+成功信号：
 
-1. Removing a queued item means the remote never receives it.
-2. Editing a queued item means the remote receives the edited text.
-3. Steering a queued item into the running turn reaches the remote turn.
-4. A local (non-mirrored) Session is unaffected.
+1. 删除一条排队项，意味着远端永远不会收到它。
+2. 编辑一条排队项，意味着远端收到的是编辑后的文本。
+3. 把一条排队项转为 steer，能进入正在运行的远端轮次。
+4. 本地（非镜像）会话不受影响。
 
-## 2. Scope and non-goals
+## 2. 范围与非目标
 
-In scope: the `updateQueue` seam for a mirrored Session, the ordering rule against the flush, and the
-refusals for the cases the mirror cannot honour.
+范围内：镜像会话的 `updateQueue` 接缝、与冲出之间的顺序规则，以及镜像无法履行时的拒绝。
 
-Out of scope:
+范围外：
 
-- Editing a message that has **already been sent** to the remote (it is committed history, not pending
-  input). The `session/queue-item-not-found` answer is correct for that, and §7 records it.
-- The remote's own queue UI. A remote Web UI user editing the same item is the remote's business; the
-  two clients observe the same durable splices through the log.
-- Reworking `MirrorInbox` into a remote-backed queue with live replication. §4 rejects it.
-- Changing the client. `QueueDock` calls a Remote whose shape does not change.
+- 编辑**已经发往**远端的消息（那已是提交的历史，不是待发输入）。对此回答
+  `session/queue-item-not-found` 是正确的，§7 记录这一点。
+- 远端自己的队列界面。远端 Web UI 用户编辑同一项是远端的事；两个客户端都通过日志观察同一批持久化 splice。
+- 把 `MirrorInbox` 改造成带实时复制的远端后端队列。§4 否决了它。
+- 改动客户端。`QueueDock` 调用的 Remote 形状不变。
 
-## 3. Users and journeys
+## 3. 用户与场景
 
-1. **Fix a typo in a queued follow-up.** A user queues a second message during a long turn, then edits
-   it before the turn ends. The remote must receive the edited text.
-2. **Withdraw a mistaken queued message.** A user removes a queued item. The remote must never run it.
-3. **Steer instead of queue.** A user promotes a queued item into the running turn.
+1. **修正排队后续消息里的错字。** 用户在长轮次中排入第二条消息，在轮次结束前修改它。
+   远端必须收到编辑后的文本。
+2. **撤回一条排错的消息。** 用户删除一条排队项。远端绝不能运行它。
+3. **从排队改为 steer。** 用户把一条排队项提升进正在运行的轮次。
 
-## 4. Decision
+## 4. 决策
 
-**Adopt: interpose `updateQueue` on the Host, apply the mutation to the mirror inbox, and make the
-flush re-read the inbox at send time.**
+**采用：在主机侧插桩 `updateQueue`，把变更应用到镜像收件箱，并让冲出逻辑在发送时重新读取收件箱。**
 
-The second half is the load-bearing part. Interposing `updateQueue` alone would still leave the
-`turn/end` flush able to send an entry captured before the mutation; the ordering has to be fixed in
-the flush, not in the writer.
+后半句是承重的部分。只插桩 `updateQueue`，仍然会留下「`turn/end` 冲出早于变更捕获的条目」这个问题；
+顺序必须在冲出逻辑里修，而不是在写入方。
 
-| Rejected alternative | Why it fails |
+| 被否决的方案 | 为什么不行 |
 |---|---|
-| A. Replicate the local inbox to the remote on every splice (`session.updateQueue` forwarded per mutation) | The remote has no pending item to mutate: nothing was sent yet, so `updateQueue` there answers `session/queue-item-not-found`. The entry has to be created remotely to be editable, which means sending it early — losing the "queued, not yet delivered" semantics a queue exists for. |
-| B. Send the item immediately on queue and let the remote hold it | The remote's own queue then diverges from the local composer's: the local row would need to mirror the remote's `agent/inbox/spliced` events, which the mirror currently drops as noise (`isMirrorNoise` filters `agent/inbox/spliced`). Two queues, no single owner. |
-| C. Let the local mutation stand and drop the item at flush | Silently discards a message the user edited. |
-| D. Forward `updateQueue` verbatim to the remote | Same failure as A: the item is not there. The error would surface as `session/queue-item-not-found`, which reads as "your message already went", the opposite of the truth. |
+| A. 每次 splice 都向远端复制本地收件箱（逐次转发 `session.updateQueue`） | 远端没有任何待办项可供变更：什么都还没发过去，所以那边的 `updateQueue` 会答 `session/queue-item-not-found`。要让条目能在远端被编辑，它就得先被创建，也就是提前发送——队列存在的意义（「已排队、尚未投递」）就没了。 |
+| B. 入队时立即发送，由远端持有 | 远端自己的队列随即与本地输入框分叉：本地那一行需要去镜像远端的 `agent/inbox/spliced` 事件，而镜像目前把这些事件当噪声丢弃（`isMirrorNoise` 过滤 `agent/inbox/spliced`）。两个队列，没有单一所有者。 |
+| C. 允许本地变更成立，冲出时丢弃该项 | 静默丢掉一条用户编辑过的消息。 |
+| D. 把 `updateQueue` 原样转发给远端 | 与 A 相同的失败：项不在那里。错误会以 `session/queue-item-not-found` 浮现，读起来像「你的消息已经发出去了」，与事实相反。 |
 
-### Why not mirror the remote inbox into the local one
+### 为什么不把远端收件箱镜像到本地
 
-`isMirrorNoise` deliberately drops the remote's `agent/inbox/spliced` events, and
-`docs/specs/2026-11-26-remote-catalog-bridge.md` records the reason: the remote inbox describes
-*pending input on the remote*, and replaying a splice locally would let a remote-only change rewrite
-what the local composer shows. Keeping the local queue local is the same principle. This spec does not
-reverse it; it fixes what the local queue does when it eventually drains.
+`isMirrorNoise` 刻意丢弃远端的 `agent/inbox/spliced` 事件，
+`docs/specs/2026-11-26-remote-catalog-bridge.md` 记录了理由：远端收件箱描述的是
+*远端的待发输入*，把 splice 在本地回放会让一个只属于远端的变化改写本地输入框显示的内容。
+让本地队列保持本地是同一条原则。本 spec 不推翻它；它修的是本地队列最终排出时的行为。
 
-## 5. Requirements and acceptance
+## 5. 需求与验收
 
-Acceptance is stated as Given/When/Then in §10.
+验收以 Given/When/Then 形式列在 §10。
 
-- **R1** `updateQueue({action:'remove'})` on a pending mirrored item means the remote never receives it.
-- **R2** `updateQueue({action:'edit'})` means the remote receives the edited content.
-- **R3** `updateQueue({action:'steer'})` on a running mirror delivers the item as a steer.
-- **R4** An item that is not pending anywhere answers `session/queue-item-not-found` (unchanged shape).
-- **R5** The `turn/end` flush sends the item that is in the inbox **at that moment**, never a stale copy.
-- **R6** A local Session's `updateQueue` is unchanged.
-- **R7** A mutation racing the flush resolves deterministically: either the flush already took the item
-  (and the mutation answers `not-found`) or the mutation wins and the flush sends the new content.
+- **R1** 对一条待发的镜像项调用 `updateQueue({action:'remove'})`，意味着远端永远不会收到它。
+- **R2** `updateQueue({action:'edit'})` 意味着远端收到编辑后的内容。
+- **R3** 在运行中的镜像上 `updateQueue({action:'steer'})`，会把该项作为 steer 投递。
+- **R4** 任何地方都不再待发的项，回答 `session/queue-item-not-found`（形状不变）。
+- **R5** `turn/end` 的冲出发送**当时**位于收件箱里的那一项，绝不是陈旧副本。
+- **R6** 本地会话的 `updateQueue` 不变。
+- **R7** 变更与冲出竞态时结果确定：或者冲出已经取走该项（于是变更回答 `not-found`），
+  或者变更生效、冲出发送新内容。
 
-## 6. Design
+## 6. 设计
 
-### 6.1 The seam
+### 6.1 接缝
 
-`updateQueue` is a Remote on `sessionController`, not on the Agent. The client calls
-`remote.session.updateQueue`, which the Gateway resolves per call against the live `sessionController`
-instance — so the interposition point is that instance, following the pattern in `remote/files.ts` and
-`remote/terminal-controller.ts`.
+`updateQueue` 是 `sessionController` 上的 Remote，不在 Agent 上。客户端调用
+`remote.session.updateQueue`，网关按调用针对活的 `sessionController` 实例解析——
+所以插桩点就是该实例，沿用 `remote/files.ts` 与 `remote/terminal-controller.ts` 的模式。
 
 ```ts
 REQUIRED_SESSION_CONTROLLER_METHODS = ['updateQueue'] as const   // patch-contract.ts
 ```
 
-### 6.2 Routing and mutation
+### 6.2 路由与变更
 
 ```ts
 sessionController.updateQueue = (request) => {
   const runtime = mirrors.runtimeForLocalSession(request.sessionId)
   if (runtime === undefined) return original.updateQueue(request)
-  return applyMirrorQueueMutation(runtime, request)   // below
+  return applyMirrorQueueMutation(runtime, request)   // 见下
 }
 ```
 
-`applyMirrorQueueMutation` mirrors what the stock method does, against `MirrorInbox`:
+`applyMirrorQueueMutation` 针对 `MirrorInbox` 复刻原生方法的行为：
 
-| action | local effect | remote effect |
+| 动作 | 本地效果 | 远端效果 |
 |---|---|---|
-| `remove` | `inbox.remove(id)` | none — the item never became remote state |
-| `edit` | `inbox.replace(id, editedMessage)` | none, for a not-yet-sent item |
-| `steer` | `inbox.remove(id)`, then deliver as steer | `prompt(runtime, edited, 'steer')` |
+| `remove` | `inbox.remove(id)` | 无——该项从未成为远端状态 |
+| `edit` | `inbox.replace(id, editedMessage)` | 对尚未发送的项无 |
+| `steer` | `inbox.remove(id)`，再作为 steer 投递 | `prompt(runtime, edited, 'steer')` |
 
-`edit` accepts text only, matching the stock rule (`QUEUE_EDIT_NON_TEXT`); the mirror must apply the
-same validation **before** mutating, so a rejected edit leaves the queue untouched.
+`edit` 只接受文本，与原生规则一致（`QUEUE_EDIT_NON_TEXT`）；镜像必须在变更**之前**应用同样的校验，
+这样一次被拒的编辑不会动到队列。
 
-The local `agent/inbox/spliced` append is already emitted by `MirrorInbox` itself, so the composer's
-projection updates without a second write. **No new local event is invented.**
+本地 `agent/inbox/spliced` 的追加由 `MirrorInbox` 自己完成，所以输入框的投影无需第二次写入。
+**不发明任何新的本地事件。**
 
-### 6.3 The flush must re-read (R5, R7)
+### 6.3 冲出必须重新读取（R5、R7）
 
-Today:
+今天的实现：
 
 ```ts
 } else if (runtime.agent.inbox.hasPending) {
@@ -182,101 +173,95 @@ Today:
 }
 ```
 
-`next` is the array element, read once. That is already "re-read at flush time" — the entry is whatever
-the array holds when the turn ends — so R5 holds **provided** `remove`/`replace` mutate the same array
-in place, which `MirrorInbox` does. The requirement is therefore mostly a test obligation, not a code
-change; §12 pins it because the obvious "optimization" (capture the item when it is queued) would break
-it.
+`next` 是数组元素，只读一次。这已经等于「在冲出时重新读取」——条目就是轮次结束时数组里的东西——
+所以只要 `remove`/`replace` 原地修改同一个数组（`MirrorInbox` 正是如此），R5 就成立。
+因此该需求主要是测试义务而非代码改动；§12 把它钉住，是因为那个显而易见的「优化」
+（入队时就捕获条目）会破坏它。
 
-The one real hazard is interleaving: `applyMirrorQueueMutation` is synchronous (array only), while
-`turn/end` handling arrives on the event stream. Because both run on the same JS turn queue and neither
-awaits between the read and the splice, R7's determinism follows from there being no await between
-`hasPending` and `remove`. §12 keeps it that way with a test that mutates from the event handler.
+真正的风险在交错：`applyMirrorQueueMutation` 是同步的（只动数组），而 `turn/end` 的处理
+来自事件流。二者跑在同一条 JS 轮次队列上，且在读取与 splice 之间没有 await，
+所以 R7 的确定性由此而来：`hasPending` 与 `remove` 之间不得存在 await。
+§12 用一条「在事件处理器内触发变更」的测试守住这一点。
 
-### 6.4 Steering
+### 6.4 Steer
 
-`action.kind === 'steer'` is only valid for a `next-turn` item while the Agent is `running` (the stock
-guard). The mirror's `status` follows `runtime.running`, which follows remote `turn/start`/`turn/end`,
-so the same guard applies. On success the mirror calls its existing steer path, which routes through
-`#sendPrompt(..., 'steer')` — the same call `RemoteMirrorAgent.steer` makes, so there is one delivery
-path, not two.
+`action.kind === 'steer'` 只对 `next-turn` 项、且 Agent 处于 `running` 时有效（原生守卫）。
+镜像的 `status` 跟随 `runtime.running`，而后者跟随远端 `turn/start`/`turn/end`，所以同一个守卫适用。
+成功时镜像调用它既有的 steer 路径，经由 `#sendPrompt(..., 'steer')`——
+也就是 `RemoteMirrorAgent.steer` 走的同一个调用，因此只有一条投递路径，不是两条。
 
-### 6.5 What the remote sees
+### 6.5 远端看到什么
 
-Nothing. That is the point: the item becomes remote state exactly once, when the flush delivers it, with
-whatever content it then holds. §7 covers the case where the user edits *after* that.
+什么也看不到。这正是重点：只有当冲出投递它时，该项才成为远端状态，
+带着它当时持有的内容。用户在**那之后**再编辑的情形由 §7 覆盖。
 
-## 7. Edges and failures
+## 7. 边界与失败
 
-| Case | Behavior |
+| 情况 | 行为 |
 |---|---|
-| The item is no longer pending | `session/queue-item-not-found` (R4). Reachable when the flush already took it. |
-| Edit content is empty or non-text | The stock code; the mirror applies the same two errors before mutating. |
-| `steer` while not running | `session/steer-unavailable`, same as stock. |
-| `steer` on a `next-step` item | Refused, as stock does. |
-| Host disconnected | The mutation applies locally and the flush fails at delivery, which already surfaces through `#reportPromptError`'s notice (1.1.4). |
-| Remote cancel (`turn/end` reason `aborted`) | `inbox.clear()` — unchanged; a queued item is dropped with the turn, matching stock cancellation. |
-| A second client edits the same remote item | Not observable from here: the item is not remote state until sent. Recorded in §11. |
-| The user removes an item that the flush just took | Answers `not-found`; the message is already in flight. Honest, and the notice path reports a delivery failure if it did not land. |
+| 该项已不再待发 | `session/queue-item-not-found`（R4）。冲出已经取走它时可触发。 |
+| 编辑内容为空或非文本 | 原生代码的行为；镜像在变更前应用同样两个错误。 |
+| 未运行时 steer | `session/steer-unavailable`，与原生一致。 |
+| 对 `next-step` 项 steer | 拒绝，与原生一致。 |
+| 主机断开 | 变更在本地生效，投递在冲出时失败——已通过 `#reportPromptError` 的通知路径浮现（1.1.4）。 |
+| 远端取消（`turn/end` 原因 `aborted`） | `inbox.clear()`——不变；排队项随轮次一起丢弃，与原生取消一致。 |
+| 另一个客户端编辑同一条远端项 | 从这里观察不到：该项在发出前不是远端状态。记录于 §11。 |
+| 用户删除了冲出刚好取走的项 | 回答 `not-found`；消息已在飞行途中。这是诚实的，若未送达，通知路径会上报投递失败。 |
 
-## 8. Quality attributes
+## 8. 质量属性
 
-- **Latency.** Purely local; no round trip added to the queue UI.
-- **Consistency.** One owner per item: local until sent, remote after. No moment where both hold a copy.
-- **Blast radius.** One interposed method plus one shared delivery path. `MirrorInbox`, the flush, and
-  the prompt path keep their present contracts.
+- **延迟。** 纯本地；队列 UI 不增加往返。
+- **一致性。** 每项一个所有者：发送前属本地，发送后属远端。不存在二者同时持有副本的时刻。
+- **影响面。** 一个被插桩的方法，加上一条共享投递路径。`MirrorInbox`、冲出逻辑与提示词路径
+  保持现有契约。
 
-## 9. Dependencies and assumptions
+## 9. 依赖与假设
 
-- Assumes `sessionController.updateQueue` keeps its request shape (`sessionId`, `itemId`, `action`).
-- Assumes `MirrorInbox` keeps mutating its arrays in place (which the flush relies on).
-- Assumes `QueueAction`'s variants stay `edit | remove | steer`; a new variant must be answered here or
-  refused explicitly.
-- Assumes the client's `QueueDock` continues to read the projection, so the local `agent/inbox/spliced`
-  is what refreshes it.
+- 假设 `sessionController.updateQueue` 保持其请求形状（`sessionId`、`itemId`、`action`）。
+- 假设 `MirrorInbox` 继续原地修改其数组（冲出逻辑依赖这一点）。
+- 假设 `QueueAction` 的变体仍是 `edit | remove | steer`；新增变体必须在此作答或被显式拒绝。
+- 假设客户端的 `QueueDock` 继续读取投影，因此刷新它的是本地 `agent/inbox/spliced`。
 
-## 10. Verification
+## 10. 验证
 
-**Unit and package tests**
+**单元与包级测试**
 
-- `packages/local-plugin/test/remote-queue.test.ts` (new):
-  - remove a queued item → the flush sends nothing, and the local projection shows the removal;
-  - edit a queued item → the flush sends the **edited** text (assert the forwarded prompt body);
-  - steer a queued item while running → one steer call with the item's content, and the inbox empties;
-  - edit with non-text content → `session/attachment-invalid`, inbox unchanged;
-  - remove after the flush took the item → `session/queue-item-not-found`;
-  - a non-mirrored Session → the original method is called (assert identity, not behavior);
-  - mutate from inside the event handler that ends the turn → deterministic outcome per R7.
-- `packages/local-plugin/test/mirror-robustness.test.ts` — the existing flush ordering tests stay green.
+- `packages/local-plugin/test/remote-queue.test.ts`（新增）：
+  - 删除一条排队项 → 冲出什么都不发，且本地投影显示删除；
+  - 编辑一条排队项 → 冲出发送**编辑后**的文本（断言转发出去的提示词体）；
+  - 运行中 steer → 一次带该项内容的 steer 调用，且收件箱清空；
+  - 用非文本内容编辑 → `session/attachment-invalid`，收件箱不变；
+  - 在冲出已取走该项后再删除 → `session/queue-item-not-found`；
+  - 非镜像会话 → 调用原方法（断言是同一性，而非行为）；
+  - 在结束轮次的事件处理器内部触发变更 → 结果符合 R7 的确定性。
+- `packages/local-plugin/test/mirror-robustness.test.ts` —— 既有的冲出顺序测试保持转绿。
 
-**Acceptance**
+**验收**
 
-1. *Given* a mirrored Session mid-turn; *when* the user queues a follow-up and removes it before the
-   turn ends; *then* the remote log contains no `user/message` for it.
-2. *Given* the same; *when* the user edits the queued text and the turn ends; *then* the remote
-   receives the edited text and the local transcript shows one bubble with it.
-3. *Given* the same; *when* the user steers instead; *then* the running remote turn receives it as
-   steering and nothing is queued.
-4. *Given* a local Session; *then* edit/remove/steer behave exactly as before.
+1. *给定*一个轮次进行中的镜像会话；*当*用户排入一条后续消息并在轮次结束前删除它；
+   *则*远端日志中没有它的 `user/message`。
+2. *给定*同上；*当*用户编辑排队文本且轮次结束；*则*远端收到编辑后的文本，
+   本地会话记录显示一个带该文本的气泡。
+3. *给定*同上；*当*用户改为 steer；*则*正在运行的远端轮次把它作为 steer 收到，队列中没有残留。
+4. *给定*一个本地会话；*则*编辑/删除/steer 的行为与之前完全一致。
 
-## 11. Accepted judgement calls
+## 11. 已接受的取舍
 
-- **No remote replication of the queue.** §4's alternatives A and B record why the local queue stays
-  local; the cost is that another client cannot see or mutate an unsent item. That matches a local
-  Session, where the queue is also process-local until delivered.
-- **`edit` is text-only, like stock.** Adding attachment editing would need a richer action and a
-  re-upload path; out of scope and not requested by the client today.
-- **Removal racing a flush answers `not-found`.** The truthful answer for an item that left the queue.
+- **队列不做远端复制。** §4 的方案 A、B 记录了本地队列为何保持本地；代价是另一个客户端
+  看不到也改不了一条尚未发送的项。这与本地会话一致——那里的队列同样在投递前只属于本进程。
+- **`edit` 只接受文本，与原生一致。** 支持附件编辑需要更丰富的 action 和一条重传路径；
+  超出范围，且客户端今天也没有这项需求。
+- **删除与冲出竞态时回答 `not-found`。** 对一个已经离开队列的项，这是诚实的回答。
 
-## 12. Implementation slices
+## 12. 实现切片
 
-| # | Content | Verification |
+| # | 内容 | 验证 |
 |---|---|---|
-| 0 | This specification | Document self-check |
-| 1 | Mirror: `runtimeForLocalSession` accessor + `applyMirrorQueueMutation` sharing the existing delivery path | `remote-queue.test.ts` |
-| 2 | Local plugin: interpose `updateQueue` on `sessionController`, `REQUIRED_SESSION_CONTROLLER_METHODS`, the `ctx.inject` block | `remote-queue.test.ts` |
-| 3 | Testkit: a `sessionController` double exposing `updateQueue` | existing suites go green |
-| 4 | Documentation: `docs/remote-workspace-mechanism.md` §5.3 (the façade table gains a row), CHANGELOG under Unreleased | Document self-check |
+| 0 | 本文档 | 文档自检 |
+| 1 | 镜像：`runtimeForLocalSession` 访问器 + `applyMirrorQueueMutation`，复用既有投递路径 | `remote-queue.test.ts` |
+| 2 | 本地插件：在 `sessionController` 上插桩 `updateQueue`、`REQUIRED_SESSION_CONTROLLER_METHODS`、`ctx.inject` 块 | `remote-queue.test.ts` |
+| 3 | Testkit：暴露 `updateQueue` 的 `sessionController` 替身 | 既有测试套件转绿 |
+| 4 | 文档：`docs/remote-workspace-mechanism.md` §5.3（门面表格增加一行）、CHANGELOG 的 Unreleased 条目 | 文档自检 |
 
-Slice 1 → 2 is ordered by dependency. Each slice ends with `pnpm typecheck`; the finished change
-requires `pnpm install && pnpm typecheck && pnpm test && pnpm build`.
+切片 1 → 2 按依赖排序。每片以 `pnpm typecheck` 收尾；整体完成需要
+`pnpm install && pnpm typecheck && pnpm test && pnpm build`。
