@@ -400,6 +400,12 @@ alone for a non-empty prompt. The remote may legitimately re-encode an image dur
 (normalization chooses the media type) or sanitize a display name, and one drifted part must not turn
 an ordinary `text + image` prompt into the duplicate bubble this matching exists to remove.
 
+A bare attachment prompt has no text to fall back on, so a third tier compares the **ordered kinds**
+of the non-text parts (`image`/`file`, media type and name excluded). Re-encoding hits it the same way
+— the returned media type may differ — and without this tier one image becomes two bubbles. The kind
+tier requires an identical kind sequence, so an image still cannot claim a file, and the empty-text
+guard from the paragraph above still keeps an empty queue from claiming the first empty message.
+
 #### Attachments, and why a receipt cannot be forwarded
 
 A local prompt's attachments are uploaded to this Host's `fileUploads` service the moment the user
@@ -871,7 +877,9 @@ reports the same code and sentence whether the refusal came from this machine or
 the first prompt, so there is nothing to rename there and the local write is correct. `#materializeBlankOnce`
 then hands the title over once the Session exists — after creation, before the first prompt is forwarded —
 so the name the user typed survives into the conversation. That hand-off is best effort: a refused title
-must not cost the user the message that created the Session.
+must not cost the user the message that created the Session. It is not silent either: the failure queues
+a `mirrorRenameFailed` notice, because what the refused rename lost is the *pin*, and the sidebar name
+will drift back once the remote auto-titles the Session.
 
 **An agent without `session.rename` keeps the pre-fix behaviour** and logs it at debug. Unlike archive,
 this fallback is not a refusal: an archived remote without a way back cannot run a model step, while a
@@ -950,7 +958,9 @@ because an empty menu would assert "this project has no files" — false, and li
 local `@` rewrite in `#resolveTextReferences` decides by **ownership first, spelling second**: a
 reference inside the Session's own remote workspace came from the remote menu and travels as text on
 every client, while only what the workspace does not claim is offered to this disk (`C:\…` and `\\…`
-anywhere, `/…` off Windows). Spelling alone cannot decide it — on a POSIX client the remote path and a
+anywhere, `/…` off Windows). An *ungrouped* Session — whose anchor no workspace covers — falls back to
+that Session's own remote root instead, because the menu it came from searched exactly that directory.
+Spelling alone cannot decide it — on a POSIX client the remote path and a
 local one are the same shape, which is why a spelling-only rule refused the remote candidate as
 "unreadable" exactly where the menu had just started working (§5.4's "Why a picked file is not always
 an attachment" is the reason that rewrite exists at all).

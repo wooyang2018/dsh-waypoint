@@ -232,7 +232,7 @@ function attachmentShape(content: readonly unknown[]): string
 |---|---|
 | 缺少 `attachment.read` | `syncRemoteAttachment` 返回 `{ kind: 'unsupported' }`；卡片保留占位符。不变。 |
 | 远端对象被裁剪（内容寻址库） | `{ kind: 'missing' }`，debug 级别；不抛错。 |
-| 字节长度不符 | 今天会抛 `LocalError`，从而中断该事件的投影——见 §11。 |
+| 字节长度不符 | 抛 `LocalError`，被 `#syncEventAttachments` 的逐引用 catch 降级为一条警告；事件照常投影，该附件在本地不可用（§11）。 |
 | 连续发送两张相同的图片 | 两次都配对，按顺序，因为每个条目匹配后被消耗。 |
 | 远端消息没有对应的本地已转发条目 | 落到追加路径（不变）。 |
 | 同一引用出现在两个事件里 | 第二次调用以 `present` 短路（R2）。 |
@@ -282,8 +282,11 @@ function attachmentShape(content: readonly unknown[]): string
 
 - **签名由内容推导，而不是由 id 推导。** 远端回显不保留本地 id，所以身份只能从可见内容重建。
   记录于 §6.2，含「为什么空文本守卫不能简单删掉」。
-- **字节长度不符会抛错并中断该事件的投影。** 保持今天的行为：一次损坏的传输是真实故障，
-  既有的 `#noteSkipped` 路径会把缺口可见地记录下来，而不是回放与摘要不符的字节。本 spec 不放宽它。
+- **字节长度不符只让那一个附件失效，不会中断事件的投影。** 校验本身会抛 `LocalError`，而
+  `#syncEventAttachments` 既有的逐引用 catch 把它降级为一条点名附件与主机的警告，事件照常
+  投影。§7 初稿写的「中断投影 + `#noteSkipped` 记录缺口」与实现不符：`#noteSkipped` 记的是被
+  跳过的**事件**，与附件无关；而且为一幅图丢掉整条消息本来就是更差的方向。也不回放与摘要
+  不符的字节，对象从未落盘。
 - **此处不引入传输体积上限。** `docs/specs/` 在这一层没有先例，而转发侧的 9 MiB 约束
   针对的是 12 MiB 的**请求体**，不适用于响应。病态对象是远端库的问题。
 - **`assistant/message` 也被纳入承载集合**，尽管今天没有任何东西产出助手图片引用。

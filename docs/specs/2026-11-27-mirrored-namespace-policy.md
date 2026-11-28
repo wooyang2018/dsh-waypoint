@@ -80,6 +80,9 @@ pin/fork 策略，以及一个「设置形状」的例外。
 | `terminals` | 混合 | 已由 `remote/terminal-controller.ts` 适配 | — |
 | `workspaceFiles`、`fs`、`subprocess`、`sandbox`、`workspaceChanges` | 混合 | 已适配 | — |
 
+表里的命名空间用概念名书写；线上 Typert 命名空间是单数 `job`（`job/list`、`job/follow`、
+`job/kill`），`MIRRORED_METHOD_POLICY` 的键用的是线上名。
+
 ## 5. 需求与验收
 
 验收以 Given/When/Then 形式列在 §10。

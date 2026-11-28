@@ -149,9 +149,10 @@ export interface FileReferenceCandidate {
 ```
 
 该形状本就与主机无关且 JSON 安全，线上可以原样携带；适配器不做映射。路径是远端拼写，
-这对提示词路径来说正是对的：镜像已经通过 `#promptContent` 的 `file` 部分转发远端绝对路径，
-而文本里的 `@<远端路径>` 在远端主机上依然有效——与 `#resolveTextReferences` 存在的
-那个本地路径场景不同。
+而镜像正是以**文本**形式转发它：`@<远端路径>` 留在提示词文本里，由远端主机解析
+（`#isRemoteMenuPath` 把落在该会话远端工作区里的路径排除出 `file` 部分）。本地绝对路径
+才是另一条路——`#resolveTextReferences` 读本机磁盘、把引用换成字节。初稿把两者的方向写反了，
+实现时按归属判据改正，见 §7 与 `docs/remote-workspace-mechanism.md` §6.1。
 
 **值得明确写出来，是因为二者在输入框里看起来一模一样。** 用户从远端菜单选出的路径，
 **绝不能**被 `#resolveTextReferences` 改写（后者解析的是 `@` 前缀的**本地**绝对路径，读的是本地磁盘）。
@@ -203,8 +204,9 @@ Linux / macOS 客户端上，菜单给出的 POSIX 路径被当成本地文件�
 ## 9. 依赖与假设
 
 - 假设远端组合挂载了 `dsh-file-reference` 与某个 provider。`dsh-web-app` 的 bundle 挂载
-  `dsh-file-reference-local`；没有 provider 的主机会由该服务返回 `undefined`/空，
-  而能力门禁检测不到这种情况——见 §11。
+  `dsh-file-reference-local`。能力门禁检测不到「没有 provider」：它报告的是编译期能力，不是
+  运行期组合。因此这条路由在每次查询时自己发现这件事，抛 `request/invalid`，本地记一条点名
+  主机的警告并委托原实现（§7）——比返回空更能说明问题，见 §11。
 - 假设 `FileReferenceCandidate` 保持 `{ path, kind }`。
 - 假设远端 Agent 活跃。冷会话没有 Agent 可传，所以 §6.1 的路由接受会话 id，由远端自行解析
   （`ctx.agents.get`）——冷远端会像远端 UI 一样作答，也就是「没有候选项」。
@@ -244,8 +246,10 @@ Linux / macOS 客户端上，菜单给出的 POSIX 路径被当成本地文件�
   暂存附件能覆盖该场景。POSIX 客户端没有这个限制，但反过来的模糊仍在：一个本机文件恰好位于
   远端工作区同名的绝对路径下时，按归属判据会被当作远端路径转发。这是刻意的取舍——会话自己的
   工作区是更强的归属声明，而另一种选择是把本机字节用远端名字上传。
-- **主机没有引用 provider 与工程为空无法区分**，因为能力是编译期的、不是运行期的。
-  要缩小这个差距需要在每次菜单查询时多一次往返探测，不值得。
+- **主机没有引用 provider 与一个真的空工程，在菜单上已经可以区分。** 远端把「没有 provider」
+  答成 `request/invalid`，本地于是记一条点名主机的警告并显示本地列表；而一个空工程得到的是
+  远端自己的空菜单。区分它们不需要额外往返——复用那次查询本身，代价只是失败从静默变成一行
+  可见的日志。
 - **草稿态镜像（远端会话还不存在）仍然列出本地文件。** §6.1 的路由以远端会话 id 寻址，而草稿没有；
   打一个菜单不应该顺手把远端会话创建出来（`remote/catalog.ts` 对 `/` 菜单已记录同一条规则）。
   这里**不能**照搬 `/` 菜单那套「用 `agentPreset` + `cwd` 问远端、但不创建会话」的做法：命令目录
@@ -263,7 +267,7 @@ Linux / macOS 客户端上，菜单给出的 POSIX 路径被当成本地文件�
 | 1 | 协议：`file.references` 能力、`POST /file-references` 路由、守卫、客户端方法 | `pnpm -F @dsh-waypoint/protocol test` |
 | 2 | 远端 agent：路由接入 `ctx.fileReferences.list` | `packages/remote-agent/test/file-references.test.ts` |
 | 3 | 本地插件：`remote/file-references.ts` 适配器、`REQUIRED_FILE_REFERENCE_METHODS`、`ctx.inject` 块 | `remote-file-references.test.ts` |
-| 4 | 镜像：`#resolveTextReferences` 的平台门禁 | `mirror-prompt-*` 补充用例 |
+| 4 | 镜像：`#resolveTextReferences` 的归属判据 | `mirror-prompt-*` 补充用例 |
 | 5 | Testkit + 文档：`docs/protocol.md` 路由表、`docs/remote-workspace-mechanism.md` §6.1、CHANGELOG 的 Unreleased 条目 | 文档自检 |
 
 切片 1 → 2 → 3 按依赖排序。切片 4 与 1–3 无关；若 §7 的坑已经在咬人，它可以先落地。

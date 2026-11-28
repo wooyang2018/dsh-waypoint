@@ -153,7 +153,7 @@ sessionController.updateQueue = (request) => {
 
 | 动作 | 本地效果 | 远端效果 |
 |---|---|---|
-| `remove` | `inbox.remove(id)` | 无——该项从未成为远端状态 |
+| `remove` | `inbox.remove(id)`，并回收该项绑定的暂存上传（§11） | 无——该项从未成为远端状态 |
 | `edit` | `inbox.replace(id, editedMessage)` | 对尚未发送的项无 |
 | `steer` | `inbox.remove(id)`，再作为 steer 投递 | `prompt(runtime, edited, 'steer')` |
 

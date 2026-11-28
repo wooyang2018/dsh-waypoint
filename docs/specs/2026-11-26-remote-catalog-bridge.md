@@ -205,6 +205,12 @@ type SubmitAttachment =
 `sourceEventSeqs`。镜像同样必须把 `command/done` 的 `sourceEventSeq` 经 `remoteToLocalSeq` 重映射，
 并在目标未知时丢弃该字段——否则命令节点会引用一个无关的本地事件。
 
+**执行返回值携带的 `sourceEventSeq` 原样透传，这是刻意的。** `/commands/execute` 的响应里
+`result.sourceEventSeq` 同样是远端编号；适配器既不映射也不丢弃。此刻本地通常还没有它对应的
+映射（`command/done` 尚未回放），猜一个本地 seq 只会把命令节点指向无关的事件；而聊天侧的
+命令节点由**回放后的事件**渲染，节点引用的序号已经由 `commandDoneData` 重映射过。返回值里的
+这个字段因此只属于远端编号空间，不是本地 seq。§11 记录该取舍。
+
 ### 6.6 契约检查
 
 `remote/patch-contract.ts` 增加 `REQUIRED_COMMAND_METHODS = ['list', 'execute']` 与
@@ -290,6 +296,10 @@ type SubmitAttachment =
 - 菜单通过 `commands/change` 自愈。若复用其他特性的事件名被否决，省掉这一步的代价是：
   在会话中途远端安装插件后需要刷新页面。
 - 命令附件与提示词路径共用内联上限；流式上传路由是另一项独立工作。
+- **`/commands/execute` 的返回值透传远端序号。** §6.5 只要求回放的事件重映射
+  （`command/done.sourceEventSeq`），因为命令节点由回放后的事件渲染；返回值里的同一个字段
+  在本地没有按本地 seq 消费它的读者，而此时通常也还没有映射可查。映射一个不存在的目标只能
+  靠猜，丢弃又会抹掉「这条命令指向远端哪个事件」的信息，所以保留原值并在 §6.5 写明它的编号空间。
 
 ## 12. 实现切片
 
