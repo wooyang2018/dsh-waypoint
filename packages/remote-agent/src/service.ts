@@ -160,6 +160,41 @@ interface PendingQuestion {
   readonly settled: () => boolean
 }
 
+/** Selection advertised when the host lists no model at all. */
+export const FALLBACK_CATALOG_DEFAULT = { provider: 'deepseek-official', model: 'deepseek-flash' } as const
+
+/**
+ * The selection a catalog should advertise as its default.
+ *
+ * Only a route this host actually lists may be advertised. `agentDefaultModel`
+ * is composed independently of the `llm-pi-ai.providers` map, so a profile
+ * written on another machine can name a provider id this host does not define —
+ * a provider overlay that mints a different UUID per machine leaves the default
+ * pointing at the other machine's route. Reporting that id is not harmless:
+ * every consumer compares the advertised default against the groups, so an
+ * unroutable default reads as "no model is selected", and the client has to
+ * repair it on every refresh.
+ *
+ * @param groups - the groups this host can actually route to.
+ * @param current - the deployment default, when the profile named one.
+ * @returns a selection one of `groups` owns.
+ */
+export function catalogDefaultSelection(
+  groups: readonly RemoteModelGroup[],
+  current: { provider?: unknown; model?: unknown } | undefined,
+): { provider: string; model: string } {
+  if (typeof current?.provider === 'string' && typeof current.model === 'string') {
+    const group = groups.find(item => item.id === current.provider)
+    if (group !== undefined && group.models.some(model => model.id === current.model)) {
+      return { provider: current.provider, model: current.model }
+    }
+  }
+  const first = groups[0]
+  const model = first?.models[0]
+  if (first !== undefined && model !== undefined) return { provider: first.id, model: model.id }
+  return { ...FALLBACK_CATALOG_DEFAULT }
+}
+
 /** Service returned by the plugin and consumed by the HTTP adapter. */
 export class RemoteAgentService {
   readonly ctx: Context
@@ -1178,7 +1213,7 @@ export class RemoteAgentService {
       }>
     } | undefined
     const fallback = (): ModelCatalogResult => ({
-      default: { provider: 'deepseek-official', model: 'deepseek-flash' },
+      default: { ...FALLBACK_CATALOG_DEFAULT },
       routableProviders: [],
       groups: [],
       failures: [],
@@ -1244,25 +1279,25 @@ export class RemoteAgentService {
     }
   }
 
-  /** Deployment default when known, otherwise the first routable model. */
+  /**
+   * Deployment default when it is routable here, otherwise the first routable
+   * model. {@link catalogDefaultSelection} owns the rule.
+   */
   #defaultSelectionForCatalog(
     groups: readonly RemoteModelGroup[],
   ): { provider: string; model: string } {
+    let current: { provider?: unknown; model?: unknown } | undefined
     try {
       const defaults = this.ctx.get('agentDefaultModel') as
         | { currentSelection?: () => { provider?: unknown; model?: unknown } }
         | undefined
-      const current = defaults?.currentSelection?.()
-      if (typeof current?.provider === 'string' && typeof current.model === 'string') {
-        return { provider: current.provider, model: current.model }
-      }
+      current = defaults?.currentSelection?.()
     } catch {
-      // Fall through to the first routable model.
+      // An unavailable default-model service is not a reason to advertise
+      // nothing: the first routable model is still a truthful answer.
+      current = undefined
     }
-    const first = groups[0]
-    const model = first?.models[0]
-    if (first !== undefined && model !== undefined) return { provider: first.id, model: model.id }
-    return { provider: 'deepseek-official', model: 'deepseek-flash' }
+    return catalogDefaultSelection(groups, current)
   }
 
   /** Publish the final state and wait for it to reach disk. */

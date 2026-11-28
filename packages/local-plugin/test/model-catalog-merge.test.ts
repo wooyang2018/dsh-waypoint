@@ -189,7 +189,7 @@ describe('installed merge commit path', () => {
    * Returns the *wrapped* resolver so the commit path is what gets called.
    * @param options - `catalogFails` simulates an unreachable remote catalog.
    */
-  function harness(options: { catalogFails?: boolean } = {}) {
+  function harness(options: { catalogFails?: boolean; catalog?: ModelCatalogResult } = {}) {
     let listener: (() => void) | undefined
     const store = {
       state: {
@@ -233,7 +233,7 @@ describe('installed merge commit path', () => {
       sessionMirror: async () => ({ hostId: 'h1', hostLabel: 'native1', remoteSessionId: 'r1' }),
       modelCatalog: async () => {
         if (options.catalogFails === true) throw new Error('host unreachable')
-        return catalog()
+        return options.catalog ?? catalog()
       },
       setSessionModel: async (input: { provider: string; model: string }) => {
         sent.push({ provider: input.provider, model: input.model })
@@ -369,5 +369,48 @@ describe('installed merge commit path', () => {
     assert.equal(result.ok, false, 'a local pick must not be accepted for a mirror')
     assert.equal(h.committed.length, 0, 'it must not reach the Host selectModel either')
     assert.equal(h.sent.length, 0, 'and it must not be forwarded to the remote')
+  })
+
+  it('falls back to the first listed model when the catalog default is unroutable', async () => {
+    // An agent that predates the default-routability check reports its deployment
+    // default verbatim, which can name a provider its own catalog no longer
+    // lists: a provider overlay that mints a different UUID per machine leaves
+    // the default pointing at the other machine's route. Keeping `next.current`
+    // would leave the seat on a provider no offered group owns, and the Host's
+    // directory re-asserts that on every refresh, so the seat never settles.
+    const h = harness({
+      catalog: {
+        ...catalog(),
+        default: { provider: 'tt-switch-gone', model: 'deepseek-v4.1-flash' },
+      },
+    })
+    installModelCatalogMerge(h.ctx as never, h.api as never)
+    h.resolver.directoryFor()
+    await new Promise(resolve => { setTimeout(resolve, 50) })
+
+    assert.deepEqual(h.store.getSnapshot().current, {
+      provider: 'remote:deepseek-official',
+      model: 'deepseek-flash',
+    }, 'the seat must name a model one of the offered groups owns')
+    assert.deepEqual(h.store.getSnapshot().groups.map(group => group.id), ['remote:deepseek-official'])
+  })
+
+  it('falls back to the first listed model when the default model is not under its provider', async () => {
+    // The provider is listed but the model it names is gone, which is what a
+    // catalog looks like after the host drops one model from the same route.
+    const h = harness({
+      catalog: {
+        ...catalog(),
+        default: { provider: 'deepseek-official', model: 'deepseek-removed' },
+      },
+    })
+    installModelCatalogMerge(h.ctx as never, h.api as never)
+    h.resolver.directoryFor()
+    await new Promise(resolve => { setTimeout(resolve, 50) })
+
+    assert.deepEqual(h.store.getSnapshot().current, {
+      provider: 'remote:deepseek-official',
+      model: 'deepseek-flash',
+    }, 'an unlisted model on a listed provider must not be advertised')
   })
 })

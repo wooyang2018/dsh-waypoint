@@ -236,6 +236,28 @@ function remoteDefault(
 }
 
 /**
+ * The first listed selection, used when no catalog default is routable.
+ *
+ * An agent that predates the default-routability check reports its deployment
+ * default verbatim, which can name a provider its own catalog no longer lists —
+ * a provider overlay that mints a different UUID per machine leaves the default
+ * pointing at the other machine's route. Every earlier candidate is then null and
+ * the merge keeps the Host's local selection: a provider no offered group owns,
+ * which the Host's directory re-asserts on every refresh, so the seat can never
+ * settle on a model. Naming the first row instead keeps `current` inside
+ * `groups`.
+ *
+ * @param groups - the groups about to be offered.
+ * @returns the first selection they list, or null when they list none.
+ */
+function firstListed(groups: readonly ProviderGroup[]): DirectoryState['current'] {
+  const group = groups[0]
+  const model = group?.models[0]
+  if (group === undefined || model === undefined) return null
+  return { provider: group.id, model: model.id }
+}
+
+/**
  * Whether two group lists would render the same sections.
  *
  * Compared by value, not identity: `withRemoteGroups` always builds a fresh
@@ -339,6 +361,11 @@ export function installModelCatalogMerge(ctx: Context, api: HostsApi): void {
           ?? (catalog === null ? remembered : null)
           ?? pickStillOffered(next.current, groups)
           ?? (catalog === null ? null : remoteDefault(groups, catalog))
+          // Nothing the catalog named is listable — its default can point at a
+          // route the remote no longer defines. Keeping `next.current` would
+          // leave the seat on a provider no group owns, which the Host's
+          // directory re-asserts on every refresh. An empty list stays empty.
+          ?? firstListed(groups)
         const withChoice = intended === null || intended === next.current
           ? next
           : { ...next, current: intended }

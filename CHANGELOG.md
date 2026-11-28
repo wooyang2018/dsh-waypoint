@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A mirrored Session's model seat no longer gets stuck on a model the remote cannot run.** The
+  remote catalog advertised `agentDefaultModel` verbatim, and that value is composed independently of
+  the `llm-pi-ai.providers` map: a provider overlay that mints a different UUID per machine leaves the
+  default pointing at another machine's route. Every consumer compares the advertised default against
+  the offered groups, so an unroutable default read as "no model is selected" — the Host's directory
+  wrote it back on each refresh, the merge's fallback candidates all resolved to null, and the Remote
+  section never stayed visible. The catalog now advertises a default only when one of its own groups
+  lists it, falling back to the first routable model; the client applies the same rule so hosts still
+  running an older agent recover without being re-provisioned.
+
 ## 1.1.4
 
 ### Added
