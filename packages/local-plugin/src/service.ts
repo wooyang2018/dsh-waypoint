@@ -31,6 +31,10 @@ import {
   type ModelCatalogResult,
   type PromptDeliveryMode,
   type RemoteWorkspace,
+  type RemoteGoalRequest,
+  type RemoteGoalResult,
+  type RemoteJobFollowFrame,
+  type RemoteJobListFrame,
   type SessionSnapshot,
   type SessionStreamFrame,
   type WebUrlResult,
@@ -1028,6 +1032,84 @@ export class RemoteHostsService {
     const client = this.#requireClient(id)
     try {
       return await client.answerQuestion(questionId, outcome)
+    } catch (error) {
+      throw this.#remoteFailure(id, error)
+    }
+  }
+
+  /**
+   * Perform one goal operation on a remote Session's owning host.
+   *
+   * The forwarded operation is the whole mechanism: the remote appends
+   * `goal/change` into its own log, and the mirror replays it. Nothing is written
+   * locally, so there is no second writer and no state to reconcile.
+   * @param id - host id.
+   * @param sessionId - remote Session owning the goal.
+   * @param request - operation and its fields.
+   * @returns the remote's answer.
+   */
+  async goalOperation(id: string, sessionId: string, request: RemoteGoalRequest): Promise<RemoteGoalResult> {
+    const client = this.#requireClient(id)
+    try {
+      return await client.goalOperation(sessionId, request)
+    } catch (error) {
+      throw this.#remoteFailure(id, error)
+    }
+  }
+
+  /**
+   * Save one remote Session tree's Team mode on its owning host.
+   * @param id - host id.
+   * @param sessionId - remote Session whose tree receives the selection.
+   * @param enabled - requested mode.
+   * @returns the mode the remote committed.
+   */
+  async setTeamMode(id: string, sessionId: string, enabled: boolean): Promise<{ enabled: boolean }> {
+    const client = this.#requireClient(id)
+    try {
+      return await client.setTeamMode(sessionId, enabled)
+    } catch (error) {
+      throw this.#remoteFailure(id, error)
+    }
+  }
+
+  /**
+   * Follow one remote Session's job roster.
+   *
+   * A stream rather than a snapshot because the remote panel's roster is a
+   * stream; the owning host coalesces its own lifecycle commits, and this side
+   * has no business re-deriving them.
+   * @param id - host id.
+   * @param sessionId - remote Session whose jobs to list.
+   * @param signal - consumer cancellation.
+   */
+  async *followJobs(id: string, sessionId: string, signal: AbortSignal): AsyncGenerator<RemoteJobListFrame> {
+    const client = this.#requireClient(id)
+    try {
+      yield* client.followJobs(sessionId, signal)
+    } catch (error) {
+      throw this.#remoteFailure(id, error)
+    }
+  }
+
+  /**
+   * Follow one remote job's retained output and settlement.
+   * @param id - host id.
+   * @param sessionId - remote Session the job belongs to.
+   * @param jobId - id in the remote registry.
+   * @param from - absolute byte offset to resume from.
+   * @param signal - consumer cancellation.
+   */
+  async *followJobOutput(
+    id: string,
+    sessionId: string,
+    jobId: string,
+    from: number | undefined,
+    signal: AbortSignal,
+  ): AsyncGenerator<RemoteJobFollowFrame> {
+    const client = this.#requireClient(id)
+    try {
+      yield* client.followJobOutput(sessionId, jobId, from, signal)
     } catch (error) {
       throw this.#remoteFailure(id, error)
     }

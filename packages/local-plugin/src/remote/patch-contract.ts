@@ -135,6 +135,82 @@ export const REQUIRED_WORKING_DIRECTORY_METHODS = ['ensure', 'get', 'set'] as co
  */
 export const REQUIRED_FILE_REFERENCE_METHODS = ['list'] as const
 
+/**
+ * The `goals` methods the forwarding adapter replaces.
+ *
+ * Every method that appends a `goal/change` event is listed, including the pair
+ * `create`/`remoteExportCreate`: the first is what the local `/goal` command
+ * calls, the second is what the Wire endpoint `goals/create` resolves, and a
+ * release that renames only one of them would leave the other writing into the
+ * local projection. `get` is absent on purpose — a read of the replayed goal is
+ * already correct and must stay untouched.
+ */
+export const REQUIRED_GOAL_METHODS = [
+  'create',
+  'remoteExportCreate',
+  'edit',
+  'pause',
+  'resume',
+  'complete',
+  'clear',
+  'block',
+] as const
+
+/**
+ * The `jobController` methods the roster forwarding replaces.
+ *
+ * `list` and `follow` are the two streams a panel reads; `kill` is replaced so it
+ * can refuse instead of cancelling a job this process does not own. All three are
+ * listed because the adapter owns the namespace's whole write/read surface for a
+ * mirrored Session, and a rename must report "job routing is off".
+ */
+export const REQUIRED_JOB_CONTROLLER_METHODS = ['list', 'follow', 'kill'] as const
+
+/**
+ * The `agentTeams` method the Team-mode forwarding replaces.
+ *
+ * `setEnabled` is the only Team operation the browser can call, and it is the one
+ * that appends `team/mode` into the Session log.
+ */
+export const REQUIRED_AGENT_TEAM_METHODS = ['setEnabled'] as const
+
+/**
+ * The `subagents` methods refused for a mirrored Session.
+ *
+ * Both act on a child Session's live process state, which the mirror can read but
+ * does not own. `list` and the catalog reads are absent: they answer from the
+ * mirrored projection and are already correct.
+ */
+export const REQUIRED_SUBAGENT_METHODS = ['prompt', 'interruptByUser'] as const
+
+/**
+ * The `messageFeedback` writes refused for a mirrored Session.
+ *
+ * `list` is absent because reading the local log answers honestly ("no feedback
+ * recorded here"); only the two mutations would write an event the remote never
+ * sees.
+ */
+export const REQUIRED_MESSAGE_FEEDBACK_METHODS = ['put', 'delete'] as const
+
+/**
+ * The `sessionToolResults` method answered with an empty stream.
+ *
+ * The trajectory inspector's live tool values exist only in the process that ran
+ * the tool. Ending the stream without a frame is the contract's own way of
+ * saying "no more live values", which is exactly the fact.
+ */
+export const REQUIRED_TOOL_RESULT_METHODS = ['watch'] as const
+
+/**
+ * The `sessionController` methods the mirror refuses.
+ *
+ * Named for the method rather than the service: another line of work owns the
+ * broader `sessionController` surface, and only `fork` is this adapter's. Fork
+ * is structural — it cuts a child Session out of the local replay — so it must be
+ * refused on a mirror rather than patched into something it cannot be.
+ */
+export const REQUIRED_SESSION_FORK_METHODS = ['fork'] as const
+
 /** One expected method the service did not offer. */
 export interface MissingPatchMethod {
   readonly method: string
