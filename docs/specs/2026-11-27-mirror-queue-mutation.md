@@ -1,6 +1,6 @@
 # 编辑或删除排队中的消息，必须抵达远端队列
 
-状态：设计已定稿。实现按 §12 的切片推进。
+状态：已实现（§12 记录了切片；发布说明见 CHANGELOG 的 `Unreleased` 一节）。
 
 ## 1. 背景与目标
 
@@ -252,6 +252,15 @@ sessionController.updateQueue = (request) => {
 - **`edit` 只接受文本，与原生一致。** 支持附件编辑需要更丰富的 action 和一条重传路径；
   超出范围，且客户端今天也没有这项需求。
 - **删除与冲出竞态时回答 `not-found`。** 对一个已经离开队列的项，这是诚实的回答。
+- **拒绝是结构化构造的，不是 `RemoteError` 实例。** `@deepseek-ai/dsh-typert-protocol` 不是本插件的依赖，
+  而「不新增运行时依赖」的约束把它排除在外；实现设置 `code`、`details` 与 `isDSHRemoteError: true`
+  （`remoteErrorOf` 记录的结构契约），让状态码能穿过网关。若某个版本的网关只认真正的实例，
+  这些拒绝会退回 `gateway/internal`，与今天 `remote-path.ts` 处的行为一致，没有回归。
+- **删除排队项不会顺带收回已暂存的上传。** 原生命令会调 `fileUploads.retirePrompt`；本 spec 的
+  §6.2 只列了 `inbox.remove(id)`，而 §2 禁止发明行为，所以暂存附件留到正常清理时才消失。
+  这是一处刻意的省略，而不是遗漏。
+- **`runtimeForLocalSession` 也返回已停止的运行时。** 停止结束的是远端流，不是本地队列，而一次后续
+  提示词会让运行时复活，所以那个 inbox 仍然是该队列项的归属。没有新增 `stopped` 过滤。
 
 ## 12. 实现切片
 

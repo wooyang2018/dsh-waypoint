@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- **Queue edits and deletes on a mirrored Session are answered by the mirror.** A follow-up typed while
+  a turn runs waits in the mirror's own inbox until `turn/end`, and the composer's edit, delete and
+  steer reach it through `sessionController.updateQueue`; that call went to the Host's command, which
+  is written for a local Agent's queue, so a mirrored Session depended on the stock method resolving
+  the façade by accident — and on the flush continuing to re-read the array it edited. The mirror now
+  answers the call itself with the native refusals and a single delivery path, and the `turn/end`
+  flush reads the queue as it sends, so the remote receives the message the user left queued.
+
 - **A mirrored Session now shows the images its remote tool results carry, and an attachment-only
   prompt no longer becomes two bubbles.** Reverse attachment synchronization was gated on
   `event.type === 'user/message'`, so the `ImageAttachmentRef` a remote `read_image` leaves in a
